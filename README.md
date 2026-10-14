@@ -43,6 +43,51 @@ curl -s localhost:8080/healthz
 curl -s -H 'Authorization: Bearer secret' localhost:8080/v1/info
 ```
 
+`.env` sets `COMPOSE_PROFILES=echo`, so `docker compose up` stays on this stack.
+
+## Docker (Ollama, x86)
+
+Local dev for the Ollama backend. CPU is the default. The app image is the same one as echo; `BACKEND=ollama` selects the backend.
+
+```bash
+docker compose --profile ollama up --build
+```
+
+That command replaces the echo profile. It starts:
+
+| Service | Role |
+|---|---|
+| `ollama` | `ollama/ollama:0.40.4` on port 11434. Model files persist in the `ollama-models` volume (`/root/.ollama`). |
+| `ollama-init` | One-shot. Pulls `moondream`, then `OLLAMA_MODEL` if it is not `moondream`, then `OLLAMA_EXTRA_MODEL` if set. Exits when the pulls finish. |
+| `autofill-ollama` | Autofill on port 8080 with `BACKEND=ollama`, `OLLAMA_HOST=http://ollama:11434`, and `OLLAMA_MODEL` (default `moondream`). |
+
+```bash
+OLLAMA_MODEL=moondream docker compose --profile ollama up --build
+# optional second model (see verified tags below)
+OLLAMA_EXTRA_MODEL=qwen2.5vl:3b docker compose --profile ollama up --build
+```
+
+NVIDIA GPU (still the Ollama profile; this file only adds `gpus: all`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ollama up --build
+```
+
+Do not enable the `echo` and `ollama` profiles together; both publish port 8080.
+
+The Python `ollama` backend is still a placeholder, so this stack's `/healthz` is 200 while `/v1/info` and `/v1/suggest` return 503 `backend_unavailable`. `OLLAMA_HOST` and `OLLAMA_MODEL` are set for that backend; the process does not read them yet.
+
+### Ollama library tags
+
+Checked against the Ollama library on 2026-10-14:
+
+| Tag | In the library |
+|---|---|
+| `moondream`, `moondream:latest`, `moondream:1.8b` | Yes. `moondream` is the default pull. |
+| `qwen2-vl`, `qwen2-vl:2b` | No. `https://ollama.com/library/qwen2-vl` is 404. |
+| `qwen2.5vl:2b` | No. |
+| `qwen2.5vl:3b`, `qwen2.5vl:7b`, `qwen2.5vl:32b`, `qwen2.5vl:72b` | Yes. `qwen2.5vl:3b` is the smallest official Qwen vision tag. It is not Qwen2-VL-2B. |
+
 ## Jetson (JetPack 5 / L4T r35)
 
 `Dockerfile.jetson` is based on `dustynv/ollama:r35.4.1` (dusty-nv's Jetson
@@ -100,8 +145,9 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `BACKEND_TIMEOUT_S` | `25` | Backend call limit; exceeded → 504. |
 | `ECHO_MODE` | `ok` | Echo only: `ok`, `error` (503), `malformed` (200 with invalid JSON body), `slow` (hangs → 504 after `BACKEND_TIMEOUT_S`). |
 | `ECHO_DELAY_MS` | `0` | Echo only: delay before answering. |
-| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Set in the Jetson image. Not read by the placeholder `ollama` backend yet. |
-| `OLLAMA_MODEL` | `moondream` | Set in the Jetson image. Not read by the placeholder `ollama` backend yet. |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Jetson image uses the loopback default. The x86 Ollama profile sets `http://ollama:11434`. Not read by the placeholder `ollama` backend yet. |
+| `OLLAMA_MODEL` | `moondream` | Model name passed to the process. Default pull tag in the Ollama profile. Not read by the placeholder backend yet. |
+| `OLLAMA_EXTRA_MODEL` | *(unset)* | Ollama profile only. Extra library tag for `ollama-init` to pull, for example `qwen2.5vl:3b`. |
 
 `ECHO_*` are read on every request. Example: `ECHO_MODE=slow BACKEND_TIMEOUT_S=2 uvicorn app.main:app --port 8080`.
 
