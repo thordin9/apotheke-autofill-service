@@ -44,9 +44,19 @@ jobs:
           docker compose config | grep -q 'BACKEND: echo'
           got="$(docker compose --profile ollama config --services | sort | tr '\n' ' ')"
           test "$got" = "autofill-ollama ollama ollama-init "
-          docker compose --profile ollama config | grep -q 'BACKEND: ollama'
-          docker compose --profile ollama config | grep -q 'OLLAMA_HOST: http://ollama:11434'
-          docker compose --profile ollama config | grep -q 'OLLAMA_MODEL: moondream'
+          docker compose --profile ollama config --format json > /tmp/compose-ollama.json
+          python3 - << 'PY'
+          import json
+          d = json.load(open("/tmp/compose-ollama.json"))
+          af = d["services"]["autofill-ollama"]["environment"]
+          assert af["BACKEND"] == "ollama", af
+          assert af["OLLAMA_URL"] == "http://ollama:11434", af
+          assert "OLLAMA_HOST" not in af, af
+          assert af["OLLAMA_MODEL"] == "moondream", af
+          init = d["services"]["ollama-init"]["environment"]
+          assert init["OLLAMA_HOST"] == "http://ollama:11434", init
+          assert "OLLAMA_URL" not in init, init
+          PY
 
       - name: Build echo image (x86)
         run: docker build -t apotheke-autofill:echo .

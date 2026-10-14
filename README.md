@@ -59,7 +59,7 @@ That command replaces the echo profile. It starts:
 |---|---|
 | `ollama` | `ollama/ollama:0.40.4` on port 11434. Model files persist in the `ollama-models` volume (`/root/.ollama`). |
 | `ollama-init` | One-shot. Pulls `moondream`, then `OLLAMA_MODEL` if it is not `moondream`, then `OLLAMA_EXTRA_MODEL` if set. Exits when the pulls finish. |
-| `autofill-ollama` | Autofill on port 8080 with `BACKEND=ollama`, `OLLAMA_HOST=http://ollama:11434`, and `OLLAMA_MODEL` (default `moondream`). |
+| `autofill-ollama` | Autofill on port 8080 with `BACKEND=ollama`, `OLLAMA_URL=http://ollama:11434`, and `OLLAMA_MODEL` (default `moondream`). |
 
 ```bash
 OLLAMA_MODEL=moondream docker compose --profile ollama up --build
@@ -75,7 +75,7 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ollama 
 
 Do not enable the `echo` and `ollama` profiles together; both publish port 8080.
 
-The Python `ollama` backend is still a placeholder, so this stack's `/healthz` is 200 while `/v1/info` and `/v1/suggest` return 503 `backend_unavailable`. `OLLAMA_HOST` and `OLLAMA_MODEL` are set for that backend; the process does not read them yet.
+The app reads `OLLAMA_URL` and `OLLAMA_MODEL`. `OLLAMA_HOST` is only the Ollama server bind address and the `ollama` CLI: the server image defaults it to `0.0.0.0:11434`, and `ollama-init` plus the healthcheck set it so `ollama pull` and `ollama list` reach that server. This branch still ships the placeholder backend, so `/healthz` is 200 while `/v1/info` and `/v1/suggest` return 503 until `feat/ollama-backend` is in the image.
 
 ### Ollama library tags
 
@@ -92,7 +92,8 @@ Checked against the Ollama library on 2026-10-14:
 
 `Dockerfile.jetson` is based on `dustynv/ollama:r35.4.1` (dusty-nv's Jetson
 container, not the stock `ollama/ollama` image) and sets `BACKEND=ollama` plus
-`OLLAMA_MODEL=moondream` and `OLLAMA_HOST=http://127.0.0.1:11434`.
+`OLLAMA_MODEL=moondream` and `OLLAMA_URL=http://127.0.0.1:11434` (Ollama on the
+device, not a Compose service named `ollama`).
 
 That base is Ubuntu 20.04 with glibc 2.31. `python3` is 3.8.10, `python3.9` is
 3.9.5, `python` is 2.7, and neither `pip` nor `pip3` is installed. This service
@@ -102,16 +103,16 @@ that only needs glibc 2.17 and already includes pip) and then installs
 publishes Ubuntu 20.04 arm64 packages, which is why the image does not
 `apt-get install python3.11`.
 
-The `ollama` backend is still a placeholder: the process starts and `/healthz`
-is 200, but `/v1/info` and `/v1/suggest` return 503 `backend_unavailable`.
-`OLLAMA_HOST` and `OLLAMA_MODEL` are set for the device; the app does not read
-them yet.
+The `ollama` backend on this branch is still a placeholder: the process starts
+and `/healthz` is 200, but `/v1/info` and `/v1/suggest` return 503
+`backend_unavailable`. The image sets `OLLAMA_URL` and `OLLAMA_MODEL`, which is
+what that backend reads.
 
 ```bash
 docker build -f Dockerfile.jetson -t apotheke-autofill:jetson .
 docker run --runtime nvidia --network host \
   -e BACKEND=ollama \
-  -e OLLAMA_HOST=http://127.0.0.1:11434 \
+  -e OLLAMA_URL=http://127.0.0.1:11434 \
   -e OLLAMA_MODEL=moondream \
   -e AUTOFILL_TOKEN= \
   apotheke-autofill:jetson
@@ -145,8 +146,9 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `BACKEND_TIMEOUT_S` | `25` | Backend call limit; exceeded → 504. |
 | `ECHO_MODE` | `ok` | Echo only: `ok`, `error` (503), `malformed` (200 with invalid JSON body), `slow` (hangs → 504 after `BACKEND_TIMEOUT_S`). |
 | `ECHO_DELAY_MS` | `0` | Echo only: delay before answering. |
-| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Jetson image uses the loopback default. The x86 Ollama profile sets `http://ollama:11434`. Not read by the placeholder `ollama` backend yet. |
-| `OLLAMA_MODEL` | `moondream` | Model name passed to the process. Default pull tag in the Ollama profile. Not read by the placeholder backend yet. |
+| `OLLAMA_URL` | `http://ollama:11434` | Base URL the app reads. The x86 Ollama profile sets `http://ollama:11434`. The Jetson image sets `http://127.0.0.1:11434`. |
+| `OLLAMA_HOST` | `0.0.0.0:11434` on the server image | Ollama server bind address, and the address the `ollama` CLI uses. Not read by the app. |
+| `OLLAMA_MODEL` | `moondream` | Model the app requests. Also the default tag `ollama-init` pulls. |
 | `OLLAMA_EXTRA_MODEL` | *(unset)* | Ollama profile only. Extra library tag for `ollama-init` to pull, for example `qwen2.5vl:3b`. |
 
 `ECHO_*` are read on every request. Example: `ECHO_MODE=slow BACKEND_TIMEOUT_S=2 uvicorn app.main:app --port 8080`.

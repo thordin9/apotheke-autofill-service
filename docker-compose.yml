@@ -78,7 +78,8 @@ services:
       - "${PORT:-8080}:8080"
     environment:
       BACKEND: ollama
-      OLLAMA_HOST: http://ollama:11434
+      # The app reads OLLAMA_URL. OLLAMA_HOST is the server/CLI variable.
+      OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-moondream}
       AUTOFILL_TOKEN: "${AUTOFILL_TOKEN:-}"
       # Vision models on CPU often exceed the app's 25s default.

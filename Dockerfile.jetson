@@ -15,7 +15,7 @@
 # Run (on device):
 #   docker run --runtime nvidia --network host \
 #     -e BACKEND=ollama \
-#     -e OLLAMA_HOST=http://127.0.0.1:11434 \
+#     -e OLLAMA_URL=http://127.0.0.1:11434 \
 #     -e OLLAMA_MODEL=moondream \
 #     -e AUTOFILL_TOKEN= \
 #     apotheke-autofill:jetson
@@ -32,7 +32,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     BACKEND=ollama \
     PORT=8080 \
-    OLLAMA_HOST=http://127.0.0.1:11434 \
+    OLLAMA_URL=http://127.0.0.1:11434 \
     OLLAMA_MODEL=moondream \
     PATH=/opt/python/bin:${PATH}
 
