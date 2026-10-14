@@ -60,7 +60,7 @@ paths:
                 image:
                   type: string
                   contentMediaType: application/octet-stream
-                  description: JPEG, PNG or WebP (HEIC/HEIF optional per backend). Type is detected from magic bytes.
+                  description: JPEG, PNG or WebP; clients SHOULD send JPEG at ~1024px long edge. HEIC/HEIF only with optional pillow-heif, else 415. Type is detected from magic bytes.
                 context:
                   type: string
                   contentMediaType: application/json
@@ -87,7 +87,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: Required only when the server sets AUTOFILL_TOKEN.
+      description: Service-wide middleware. Required on every route except /healthz when the server sets AUTOFILL_TOKEN; missing/wrong token -> 401.
   schemas:
     Capability:
       type: string
@@ -147,7 +147,7 @@ components:
         WWW-Authenticate: {schema: {type: string}}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     TooLarge:
-      description: Image exceeds max_image_bytes
+      description: Image exceeds MAX_IMAGE_BYTES (default 10 MiB), advertised as max_image_bytes
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     UnsupportedType:
       description: Image bytes are not a supported format
