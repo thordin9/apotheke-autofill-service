@@ -26,18 +26,31 @@ on:
 jobs:
   jetson-image:
     runs-on: ubuntu-latest
+    # A failed manual build must not block merging.
     continue-on-error: true
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
+      - name: Hosted runners do not build this image
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          echo "Not pulling dustynv/ollama:r35.4.1 on a GitHub-hosted runner."
+          echo "The base is about 5.8 GB compressed and about 16 GB unpacked."
+          echo "Under QEMU that build does not reliably finish (disk and time)."
+          echo "Re-run this workflow with workflow_dispatch on a larger runner,"
+          echo "or build Dockerfile.jetson on the Jetson."
+
       - name: Set up QEMU
+        if: github.event_name == 'workflow_dispatch'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
+        if: github.event_name == 'workflow_dispatch'
         uses: docker/setup-buildx-action@v3
 
       - name: Build Jetson image (arm64, no push)
+        if: github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v6
         with:
           context: .

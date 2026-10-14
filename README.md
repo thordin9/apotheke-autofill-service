@@ -83,9 +83,10 @@ docker run --runtime nvidia --network host \
 GitHub Actions does not treat the arm64 build as required. The base is about
 5.8 GB compressed (~16 GB unpacked); under QEMU that build does not reliably
 finish on GitHub-hosted runners (disk and time). `.github/workflows/jetson.yml`
-runs on `workflow_dispatch` and when `Dockerfile.jetson` or
-`requirements-jetson.txt` changes, with `continue-on-error: true`. Build it on
-the Xavier when the hosted job does not finish.
+starts on `workflow_dispatch` and when `Dockerfile.jetson` or
+`requirements-jetson.txt` changes. Path-triggered runs only record that reason.
+`workflow_dispatch` attempts the arm64 build and is `continue-on-error`, so a
+failure does not block merging. Build on the Xavier for a result you can run.
 
 ## Configuration (environment variables)
 
