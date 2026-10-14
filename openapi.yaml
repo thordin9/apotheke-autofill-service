@@ -1,0 +1,160 @@
+openapi: 3.1.0
+info:
+  title: Apotheke Autofill Service
+  version: "1"
+  description: |
+    Suggests item field values (name, category, tags, description) from a photo.
+    Any backend must implement this contract. See docs/api-v1.md.
+    Clients MUST treat any non-200 response or unparsable body as "no suggestions"
+    and MUST ignore unknown fields. Version bumps within v1 are additive only.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8080
+security:
+  - {}
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Liveness probe (never requires auth, never calls the backend)
+      security: []
+      responses:
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /v1/info:
+    get:
+      operationId: getInfo
+      summary: Service and backend description; used by Apotheke "test connection"
+      responses:
+        "200":
+          description: Service info
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Info"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "503": {$ref: "#/components/responses/BackendUnavailable"}
+  /v1/suggest:
+    post:
+      operationId: suggest
+      summary: Suggest field values for one image
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  contentMediaType: application/octet-stream
+                  description: JPEG, PNG or WebP; clients SHOULD send JPEG at ~1024px long edge. HEIC/HEIF only with optional pillow-heif, else 415. Type is detected from magic bytes.
+                context:
+                  type: string
+                  contentMediaType: application/json
+                  description: JSON-encoded Context object.
+            encoding:
+              image:
+                contentType: image/jpeg, image/png, image/webp, image/heic, image/heif, application/octet-stream
+              context:
+                contentType: application/json, text/plain
+      responses:
+        "200":
+          description: Suggestions (every field optional; may be `{}`)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Suggestion"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedType"}
+        "503": {$ref: "#/components/responses/BackendUnavailable"}
+        "504": {$ref: "#/components/responses/BackendTimeout"}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Service-wide middleware. Required on every route except /healthz when the server sets AUTOFILL_TOKEN; missing/wrong token -> 401.
+  schemas:
+    Capability:
+      type: string
+      enum: [name, tags, category, description]
+    Info:
+      type: object
+      required: [name, version, capabilities]
+      properties:
+        name: {type: string, examples: [moondream-jetson]}
+        version: {type: string, const: "1"}
+        capabilities:
+          type: array
+          uniqueItems: true
+          items: {$ref: "#/components/schemas/Capability"}
+        backend: {type: string, examples: [echo, ollama]}
+        max_image_bytes: {type: integer, minimum: 1}
+    Context:
+      type: object
+      properties:
+        categories: {type: array, items: {type: string}}
+        tags: {type: array, items: {type: string}}
+        locale: {type: string, examples: [en, de-DE]}
+    Scored:
+      type: object
+      required: [value]
+      properties:
+        value: {type: string}
+        confidence: {type: number, minimum: 0, maximum: 1}
+    Suggestion:
+      type: object
+      properties:
+        name: {$ref: "#/components/schemas/Scored"}
+        category: {$ref: "#/components/schemas/Scored"}
+        description: {$ref: "#/components/schemas/Scored"}
+        tags:
+          type: array
+          items: {$ref: "#/components/schemas/Scored"}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, unauthorized, payload_too_large, unsupported_media_type, backend_unavailable, backend_timeout, backend_error]
+            message: {type: string}
+  responses:
+    BadRequest:
+      description: Missing image, empty image, or invalid context JSON
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    Unauthorized:
+      description: AUTOFILL_TOKEN is set and the bearer token is missing or wrong
+      headers:
+        WWW-Authenticate: {schema: {type: string}}
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    TooLarge:
+      description: Image exceeds MAX_IMAGE_BYTES (default 10 MiB), advertised as max_image_bytes
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    UnsupportedType:
+      description: Image bytes are not a supported format
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    BackendUnavailable:
+      description: Backend not implemented, not ready, or failed
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    BackendTimeout:
+      description: Backend exceeded BACKEND_TIMEOUT_S
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
