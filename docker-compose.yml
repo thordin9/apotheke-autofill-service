@@ -1,0 +1,23 @@
+# Local / CI stack for the echo backend (no GPU required).
+services:
+  autofill:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: apotheke-autofill:echo
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      BACKEND: echo
+      # Optional bearer token; leave empty to disable auth.
+      AUTOFILL_TOKEN: "${AUTOFILL_TOKEN:-}"
+      # QA failure-mode switches (echo only): ok|error|malformed|slow
+      ECHO_MODE: "${ECHO_MODE:-ok}"
+      ECHO_DELAY_MS: "${ECHO_DELAY_MS:-0}"
+    healthcheck:
+      # /healthz stays open when AUTOFILL_TOKEN is set; /v1/info does not.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

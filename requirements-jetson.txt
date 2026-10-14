@@ -1,0 +1,17 @@
+# Deps for the Jetson image (Dockerfile.jetson), installed with CPython 3.11.
+#
+# dustynv/ollama:r35.4.1 does not have a usable interpreter for this service:
+#   python -> Python 2.7
+#   python3 -> Python 3.8.10
+#   python3.9 -> Python 3.9.5
+#   pip / pip3 are not installed
+# pyproject.toml requires Python >=3.11, and app code uses runtime `X | Y`
+# (PEP 604), which is a syntax error before 3.10. These pins are the current
+# releases that still install on 3.11 and publish aarch64 wheels (pydantic-core
+# cp311 manylinux_2_17). Do not relax the upper bounds onto a release that
+# drops 3.11 without re-checking.
+fastapi>=0.115.14,<0.144
+uvicorn[standard]>=0.34,<0.55
+python-multipart>=0.0.18,<0.0.33
+pydantic>=2.10,<2.15
+httpx>=0.27.2,<0.29

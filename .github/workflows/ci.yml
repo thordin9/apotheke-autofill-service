@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Unit and contract tests
+        env:
+          BACKEND: echo
+        run: pytest -q
+
+  image:
+    runs-on: ubuntu-latest
+    needs: lint-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build echo image (x86)
+        run: docker build -t apotheke-autofill:echo .
+
+      - name: Smoke test echo image
+        run: |
+          set -euo pipefail
+          docker rm -f autofill-smoke >/dev/null 2>&1 || true
+          docker run -d --name autofill-smoke -p 8080:8080 \
+            -e BACKEND=echo \
+            -e AUTOFILL_TOKEN=ci-token \
+            apotheke-autofill:echo
+          cleanup() { docker logs autofill-smoke || true; docker rm -f autofill-smoke >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8080/healthz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
+
+          # Token is set: /healthz stays open, /v1/info does not.
+          curl -sf http://127.0.0.1:8080/healthz | grep -q '"status":"ok"'
+          info_code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/v1/info)
+          test "$info_code" = "401"
+
+          python3 -c 'open("/tmp/smoke.jpg","wb").write(b"\xff\xd8\xff\xe0"+b"\x00"*64)'
+          curl -sf -H 'Authorization: Bearer ci-token' \
+            -F 'image=@/tmp/smoke.jpg;type=image/jpeg' \
+            -F 'context={"categories":["Tools"],"tags":["bosch"],"locale":"en"}' \
+            http://127.0.0.1:8080/v1/suggest > /tmp/suggest.json
+          python3 -c 'import json; body=json.load(open("/tmp/suggest.json")); assert body["category"]["value"]=="Tools"'
