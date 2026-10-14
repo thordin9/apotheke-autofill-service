@@ -43,6 +43,7 @@ token shows up as `401` here.
 | `capabilities` | yes | Subset of `name`, `tags`, `category`, `description` |
 | `backend` | no | Adapter id (`echo`, `ollama`, …) |
 | `max_image_bytes` | no | Upload limit; clients may skip the call for larger images |
+| `ready` | no | `false` while the backend is still loading its model (e.g. Ollama warm-up); `/v1/suggest` then answers `503` with `Retry-After`. Absent or `true` means ready. |
 
 ### `POST /v1/suggest`
 `multipart/form-data`:
@@ -77,7 +78,8 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 | 401 | `unauthorized` | token required and missing/wrong (`WWW-Authenticate: Bearer`) |
 | 413 | `payload_too_large` | image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760); advertised as `max_image_bytes` in `/v1/info` |
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
-| 503 | `backend_unavailable` / `backend_error` | backend not implemented, not ready, or failed |
+| 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, or busy (queue full). Warming-up and busy responses carry `Retry-After: <seconds>` |
+| 503 | `backend_error` | backend answered but its output was unusable (e.g. model returned invalid/empty JSON, upstream HTTP error) |
 | 504 | `backend_timeout` | backend exceeded `BACKEND_TIMEOUT_S` (default 25 s) |
 
 Check order: auth → missing image → size → type → context → backend.
