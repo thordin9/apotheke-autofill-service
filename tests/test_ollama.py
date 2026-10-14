@@ -21,6 +21,7 @@ def fake():
 def oclient(make_client, fake):
     def _make(**env):
         env.setdefault("OLLAMA_URL", fake.url)
+        env.setdefault("OLLAMA_WARMUP", "0")
         return make_client(BACKEND="ollama", **env)
 
     return _make
@@ -125,3 +126,83 @@ def test_clamps_via_http(oclient, fake):
 def test_prompt_without_context_has_defaults():
     p = build_prompt({})
     assert "locale 'en'" in p and "Existing" not in p
+
+
+def _wait(cond, timeout=5.0):
+    import time
+
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_warmup_ready_false_then_true(oclient, fake):
+    fake.warm_delay = 0.5
+    c = oclient(OLLAMA_WARMUP="1", OLLAMA_RETRY_AFTER_S="7")
+    with c:  # runs lifespan -> background warm-up
+        info = assert_contract(c.get("/v1/info"), "/v1/info")
+        assert info["ready"] is False and info["backend"] == "ollama"
+        r = post_image(c)
+        assert r.status_code == 503 and r.headers["Retry-After"] == "7"
+        assert "warming up" in assert_contract(r, "/v1/suggest", "post")["error"]["message"]
+        assert _wait(lambda: c.get("/v1/info").json()["ready"])
+        assert post_image(c).status_code == 200
+    warm = [b for p, b in fake.requests if p == "/api/generate"]
+    assert warm and warm[0]["model"] == "moondream"
+
+
+def test_warmup_retries_until_ollama_answers(oclient, fake):
+    fake.warm_status = 500
+    c = oclient(OLLAMA_WARMUP="1")
+    assert c.get("/v1/info").json()["ready"] is False  # lazily started without lifespan
+    assert _wait(lambda: sum(p == "/api/generate" for p, _ in fake.requests) >= 1)
+    fake.warm_status = 200
+    assert _wait(lambda: c.get("/v1/info").json()["ready"], timeout=8)
+
+
+def test_warmup_disabled_is_ready(oclient):
+    assert oclient().get("/v1/info").json()["ready"] is True
+
+
+def test_queue_full_returns_503_retry_after(oclient, fake):
+    import threading
+
+    c = oclient(OLLAMA_RETRY_AFTER_S="3")
+    backend = c.app.state.backend
+    fake.release.clear()  # hold the in-flight request inside fake Ollama
+    results: dict[str, int] = {}
+
+    def go(key):
+        results[key] = post_image(c).status_code
+
+    a = threading.Thread(target=go, args=("a",))
+    a.start()
+    assert _wait(lambda: len(fake.chats()) == 1)
+    b = threading.Thread(target=go, args=("b",))
+    b.start()
+    assert _wait(lambda: backend._waiting == 1)
+    r = post_image(c)
+    assert r.status_code == 503 and r.headers["Retry-After"] == "3"
+    body = assert_contract(r, "/v1/suggest", "post")
+    assert body["error"]["code"] == "backend_unavailable" and "busy" in body["error"]["message"]
+    fake.release.set()
+    a.join(10)
+    b.join(10)
+    assert results == {"a": 200, "b": 200}
+    assert len(fake.chats()) == 2
+
+
+def test_queue_size_zero_rejects_second(oclient, fake):
+    import threading
+
+    c = oclient(OLLAMA_QUEUE_SIZE="0")
+    fake.release.clear()
+    t = threading.Thread(target=lambda: post_image(c))
+    t.start()
+    assert _wait(lambda: len(fake.chats()) == 1)
+    assert post_image(c).status_code == 503
+    fake.release.set()
+    t.join(10)

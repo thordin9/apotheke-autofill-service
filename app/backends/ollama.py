@@ -4,14 +4,22 @@ Suggestion as strict JSON, then validates and clamps the answer.
 Env (read when the backend is created):
   OLLAMA_URL    default http://ollama:11434
   OLLAMA_MODEL  default moondream (qwen2-vl-2b style tags also work)
+  OLLAMA_WARMUP          1 (default) loads the model in the background at startup;
+                         /v1/info reports ready:false and /v1/suggest answers 503
+                         with Retry-After until it has loaded. 0 skips warm-up.
+  OLLAMA_QUEUE_SIZE      requests allowed to wait behind the one in flight (default 1)
+  OLLAMA_RETRY_AFTER_S   Retry-After seconds on 503 busy/warming (default 5)
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 import re
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -128,18 +136,69 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    try:
+        return int(raw) if raw else default
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+class Busy(BackendUnavailable):
+    def __init__(self, message: str, retry_after: int):
+        super().__init__(message)
+        self.headers = {"Retry-After": str(retry_after)}
+
+
 class OllamaBackend(Backend):
     id = "ollama"
 
     def __init__(self, url: str | None = None, model: str | None = None):
         self.url = (url or os.environ.get("OLLAMA_URL") or DEFAULT_URL).rstrip("/")
         self.model = model or os.environ.get("OLLAMA_MODEL", "").strip() or DEFAULT_MODEL
+        self.queue_size = max(0, _env_int("OLLAMA_QUEUE_SIZE", 1))
+        self.retry_after = max(1, _env_int("OLLAMA_RETRY_AFTER_S", 5))
+        self.warmup_enabled = os.environ.get("OLLAMA_WARMUP", "1").strip() not in ("0", "false")
+        self.ready = not self.warmup_enabled
+        self.warmup_error: str | None = None
+        self._warm_thread: threading.Thread | None = None
+        self._start_lock = threading.Lock()
+        self._in_flight = 0
+        self._waiting = 0
+
+    # -- warm-up (thread, so it is independent of any event loop) ----------
+    def start(self) -> None:
+        with self._start_lock:
+            if self.ready or self._warm_thread is not None:
+                return
+            self._warm_thread = threading.Thread(target=self._warm, daemon=True)
+            self._warm_thread.start()
+
+    def _warm(self) -> None:
+        delay = 1.0
+        payload = {"model": self.model, "prompt": "", "stream": False, "keep_alive": "30m"}
+        while True:
+            try:
+                r = httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
+                if r.status_code < 400:
+                    self.ready, self.warmup_error = True, None
+                    return
+                self.warmup_error = f"HTTP {r.status_code}"
+            except httpx.HTTPError as exc:
+                self.warmup_error = str(exc) or type(exc).__name__
+            time.sleep(delay)
+            delay = min(delay * 2, 30.0)
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self.url, timeout=get_settings().backend_timeout_s)
 
     async def info(self) -> dict[str, Any]:
-        return {"name": f"ollama-{self.model}", "capabilities": list(CAPABILITIES)}
+        self.start()
+        return {
+            "name": f"ollama-{self.model}",
+            "capabilities": list(CAPABILITIES),
+            "ready": self.ready,
+        }
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -180,4 +239,21 @@ class OllamaBackend(Backend):
         return clamp(extract_json(content), context)
 
     async def suggest(self, image_bytes: bytes, mime: str, context: dict[str, Any]) -> Any:
-        return await self.generate(image_bytes, context)
+        self.start()
+        if not self.ready:
+            raise Busy(f"model '{self.model}' is warming up", self.retry_after)
+        # One request in flight, up to queue_size waiting; the rest get 503.
+        # Plain counters + polling keep this independent of the event loop.
+        if self._in_flight and self._waiting >= self.queue_size:
+            raise Busy("backend busy, queue full", self.retry_after)
+        self._waiting += 1
+        try:
+            while self._in_flight:
+                await asyncio.sleep(0.02)
+        finally:
+            self._waiting -= 1
+        self._in_flight += 1
+        try:
+            return await self.generate(image_bytes, context)
+        finally:
+            self._in_flight -= 1

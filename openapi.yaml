@@ -104,6 +104,9 @@ components:
           items: {$ref: "#/components/schemas/Capability"}
         backend: {type: string, examples: [echo, ollama]}
         max_image_bytes: {type: integer, minimum: 1}
+        ready:
+          type: boolean
+          description: false while the backend is still loading its model (suggest answers 503 + Retry-After)
     Context:
       type: object
       properties:
@@ -153,7 +156,9 @@ components:
       description: Image bytes are not a supported format
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     BackendUnavailable:
-      description: Backend not implemented, not ready, or failed
+      description: Backend not implemented, not ready, busy (queue full), or failed
+      headers:
+        Retry-After: {schema: {type: integer}, description: Sent when not ready or busy}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     BackendTimeout:
       description: Backend exceeded BACKEND_TIMEOUT_S
