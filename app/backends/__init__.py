@@ -4,11 +4,12 @@ from collections.abc import Callable
 
 from .base import Backend, BackendUnavailable
 from .echo import EchoBackend
+from .ollama import OllamaBackend
 from .placeholder import NotImplementedBackend
 
 REGISTRY: dict[str, Callable[[], Backend]] = {
     "echo": EchoBackend,
-    "ollama": lambda: NotImplementedBackend("ollama"),
+    "ollama": OllamaBackend,
     "clip": lambda: NotImplementedBackend("clip"),
 }
 

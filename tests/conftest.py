@@ -25,6 +25,11 @@ _ENV = [
     "BACKEND_TIMEOUT_S",
     "ECHO_MODE",
     "ECHO_DELAY_MS",
+    "OLLAMA_URL",
+    "OLLAMA_MODEL",
+    "OLLAMA_QUEUE_SIZE",
+    "OLLAMA_RETRY_AFTER_S",
+    "OLLAMA_WARMUP",
 ]
 
 

@@ -62,7 +62,8 @@ def create_app() -> FastAPI:
         except TimeoutError:
             raise ApiError(504, "backend_timeout", "backend timed out") from None
         except BackendUnavailable as exc:
-            raise ApiError(503, "backend_unavailable", str(exc)) from None
+            code = getattr(exc, "code", "backend_unavailable")
+            raise ApiError(503, code, str(exc), getattr(exc, "headers", None)) from None
 
     @app.get("/healthz")
     async def healthz():
