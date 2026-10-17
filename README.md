@@ -101,7 +101,7 @@ named `ollama`).
 ### Default model on the Jetson: `qwen2.5vl-jetson:3b`
 
 On 9 product photos at 1024 px (what Apotheke sends), Qwen2.5-VL 3B picked the
-right category on 9/9 against Moondream's 5/9, at about 13.5 s per photo
+right category on 9/9 against Moondream's 4/9 through the service, at about 13.5 s per photo
 against 4.3 s. Measurements are in [docs/benchmarks.md](docs/benchmarks.md).
 
 Stock `qwen2.5vl:3b` does not fit a Xavier NX: at load Ollama reserves room for

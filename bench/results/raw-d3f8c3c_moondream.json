@@ -1,0 +1,310 @@
+[
+ {
+  "photo": "cordless_drill.jpg",
+  "image_bytes": 103778,
+  "secs": 16.38,
+  "done_reason": "stop",
+  "eval_count": 26,
+  "prompt_eval_count": 914,
+  "load_s": 11.35,
+  "prompt_eval_s": 1.76,
+  "tok_per_s": 32.9,
+  "parsed": [
+   {
+    "name": {
+     "value": "drill",
+     "confidence": 0.67
+    },
+    "category": {
+     "value": "Electronics",
+     "confidence": 0.67
+    },
+    "tags": [
+     {
+      "value": "clothes"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"drill\", \"category\": \"Electronics\", \"tags\":[\"clothes\"],\"confidence\": 0.67}"
+ },
+ {
+  "photo": "desk_lamp.jpg",
+  "image_bytes": 27632,
+  "secs": 4.0,
+  "done_reason": "stop",
+  "eval_count": 26,
+  "prompt_eval_count": 914,
+  "load_s": 0.14,
+  "prompt_eval_s": 1.7,
+  "tok_per_s": 33.2,
+  "parsed": [
+   {
+    "name": {
+     "value": "table lamp",
+     "confidence": 0.67
+    },
+    "category": {
+     "value": "Electronics",
+     "confidence": 0.67
+    },
+    "tags": [
+     {
+      "value": "shades"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"table lamp\", \"category\": \"electronics\", \"tags\":[\"shades\"],\"confidence\": 0.67}"
+ },
+ {
+  "photo": "hammer.jpg",
+  "image_bytes": 37086,
+  "secs": 5.18,
+  "done_reason": "stop",
+  "eval_count": 47,
+  "prompt_eval_count": 914,
+  "load_s": 0.13,
+  "prompt_eval_s": 1.69,
+  "tok_per_s": 32.3,
+  "parsed": [
+   {
+    "name": {
+     "value": "hammer",
+     "confidence": 0.67
+    },
+    "category": {
+     "value": "Tools",
+     "confidence": 0.67
+    },
+    "tags": [
+     {
+      "value": "electronics"
+     },
+     {
+      "value": "clothes"
+     },
+     {
+      "value": "books"
+     },
+     {
+      "value": "kitchen"
+     },
+     {
+      "value": "furniture"
+     },
+     {
+      "value": "shoes"
+     },
+     {
+      "value": "other"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"hammer\", \"category\": \"Tools\", \"tags\":[\"electronics\", \"clothes\", \"books\", \"kitchen\", \"furniture\", \"shoes\", \"other\"],\"confidence\": 0.67}"
+ },
+ {
+  "photo": "headphones.jpg",
+  "image_bytes": 92642,
+  "secs": 4.09,
+  "done_reason": "stop",
+  "eval_count": 31,
+  "prompt_eval_count": 914,
+  "load_s": 0.14,
+  "prompt_eval_s": 1.7,
+  "tok_per_s": 32.8,
+  "parsed": [
+   {
+    "name": {
+     "value": "bose headphones",
+     "confidence": 0.67
+    },
+    "category": {
+     "value": "Electronics",
+     "confidence": 0.67
+    },
+    "tags": [
+     {
+      "value": "shoe"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"bose headphones\", \"category\": \"electronics\", \"tags\":[\"shoe\"],\"confidence\": 0.67,\"description\": \"\"}"
+ },
+ {
+  "photo": "kitchen_knife.jpg",
+  "image_bytes": 29513,
+  "secs": 3.73,
+  "done_reason": "stop",
+  "eval_count": 25,
+  "prompt_eval_count": 914,
+  "load_s": 0.13,
+  "prompt_eval_s": 1.7,
+  "tok_per_s": 33.3,
+  "parsed": [
+   {
+    "name": {
+     "value": "Knife",
+     "confidence": 0.67
+    },
+    "category": {
+     "value": "Kitchen",
+     "confidence": 0.67
+    }
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"Knife\", \"category\": \"Kitchen\", \"tags\":[\"...\"],\"confidence\": 0.67}"
+ },
+ {
+  "photo": "laptop.jpg",
+  "image_bytes": 145348,
+  "secs": 4.38,
+  "done_reason": "stop",
+  "eval_count": 35,
+  "prompt_eval_count": 914,
+  "load_s": 0.13,
+  "prompt_eval_s": 1.7,
+  "tok_per_s": 32.5,
+  "parsed": [
+   {
+    "name": {
+     "value": "smom",
+     "confidence": 0.67
+    },
+    "category": {
+     "value": "Electronics",
+     "confidence": 0.67
+    },
+    "tags": [
+     {
+      "value": "books"
+     },
+     {
+      "value": "shoes"
+     },
+     {
+      "value": "other"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"smom\", \"category\":\"electronics\", \"tags\":[\"books\", \"shoes\", \"other\"],\"confidence\":0.67,\"description\": \"\"}"
+ },
+ {
+  "photo": "paperback_book.jpg",
+  "image_bytes": 168011,
+  "secs": 3.61,
+  "done_reason": "stop",
+  "eval_count": 23,
+  "prompt_eval_count": 914,
+  "load_s": 0.15,
+  "prompt_eval_s": 1.7,
+  "tok_per_s": 33.5,
+  "parsed": [
+   {
+    "name": {
+     "value": "book",
+     "confidence": 0.67
+    },
+    "category": {
+     "value": "Books",
+     "confidence": 0.67
+    },
+    "tags": [
+     {
+      "value": "books"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"book\", \"category\": \"books\", \"tags\":[\"books\"],\"confidence\": 0.67}"
+ },
+ {
+  "photo": "sneakers.jpg",
+  "image_bytes": 100562,
+  "secs": 4.94,
+  "done_reason": "stop",
+  "eval_count": 47,
+  "prompt_eval_count": 914,
+  "load_s": 0.13,
+  "prompt_eval_s": 1.69,
+  "tok_per_s": 32.4,
+  "parsed": [
+   {
+    "name": {
+     "value": "reebok",
+     "confidence": 0.67
+    },
+    "category": {
+     "value": "Clothing",
+     "confidence": 0.67
+    },
+    "tags": [
+     {
+      "value": "electronics"
+     },
+     {
+      "value": "shoe"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"reebok\", \"category\": \"clothing\", \"tags\":[\"electronics\", \"shoe\", \"shoe\", \"shoe\", \"shoe\"],\"confidence\": 0.67,\"description\": \"\"}"
+ },
+ {
+  "photo": "t-shirt.jpg",
+  "image_bytes": 156366,
+  "secs": 17.32,
+  "done_reason": "length",
+  "eval_count": 256,
+  "prompt_eval_count": 914,
+  "load_s": 0.14,
+  "prompt_eval_s": 1.69,
+  "tok_per_s": 30.1,
+  "parsed": [
+   {
+    "name": {
+     "value": "i edit wikipedia"
+    },
+    "category": {
+     "value": "Books"
+    },
+    "tags": [
+     {
+      "value": "books"
+     },
+     {
+      "value": "editing"
+     },
+     {
+      "value": "wiki"
+     },
+     {
+      "value": "wikipedia"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\"name\":\"i edit wikipedia\", \"category\": \"Books\", \"tags\":[\"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \"books\", \"editing\", \"wiki\", \"wikipedia\", \""
+ }
+]

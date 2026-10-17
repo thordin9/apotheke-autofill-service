@@ -1,0 +1,380 @@
+[
+ {
+  "photo": "cordless_drill.jpg",
+  "image_bytes": 103778,
+  "secs": 29.2,
+  "done_reason": "stop",
+  "eval_count": 63,
+  "prompt_eval_count": 793,
+  "load_s": 14.73,
+  "prompt_eval_s": 8.42,
+  "tok_per_s": 15.9,
+  "parsed": [
+   {
+    "name": {
+     "value": "drill",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Tools",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "a blue cordless drill with a battery pack",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "blue"
+     },
+     {
+      "value": "electric"
+     },
+     {
+      "value": "power"
+     },
+     {
+      "value": "handy"
+     },
+     {
+      "value": "tool"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"drill\",\n  \"category\": \"Tools\",\n  \"tags\": [\"blue\", \"electric\", \"power\", \"handy\", \"tool\"],\n  \"description\": \"a blue cordless drill with a battery pack\",\n  \"confidence\": 0.95\n}"
+ },
+ {
+  "photo": "desk_lamp.jpg",
+  "image_bytes": 27632,
+  "secs": 13.19,
+  "done_reason": "stop",
+  "eval_count": 57,
+  "prompt_eval_count": 777,
+  "load_s": 0.54,
+  "prompt_eval_s": 2.37,
+  "tok_per_s": 16.1,
+  "parsed": [
+   {
+    "name": {
+     "value": "blue light",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Lighting",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "a blue light fixture with a long arm",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "transparent"
+     },
+     {
+      "value": "blue"
+     },
+     {
+      "value": "industrial"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"blue light\",\n  \"category\": \"Lighting\",\n  \"tags\": [\"transparent\", \"blue\", \"industrial\"],\n  \"description\": \"a blue light fixture with a long arm\",\n  \"confidence\": 0.95\n}"
+ },
+ {
+  "photo": "hammer.jpg",
+  "image_bytes": 37086,
+  "secs": 13.66,
+  "done_reason": "stop",
+  "eval_count": 58,
+  "prompt_eval_count": 806,
+  "load_s": 0.46,
+  "prompt_eval_s": 2.36,
+  "tok_per_s": 16.2,
+  "parsed": [
+   {
+    "name": {
+     "value": "hammer",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Tools",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "A hammer with a metal head and an orange handle.",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "metal"
+     },
+     {
+      "value": "orange"
+     },
+     {
+      "value": "unbranded"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"hammer\",\n  \"category\": \"Tools\",\n  \"tags\": [\"metal\", \"orange\", \"unbranded\"],\n  \"description\": \"A hammer with a metal head and an orange handle.\",\n  \"confidence\": 0.95\n}"
+ },
+ {
+  "photo": "headphones.jpg",
+  "image_bytes": 92642,
+  "secs": 13.42,
+  "done_reason": "stop",
+  "eval_count": 59,
+  "prompt_eval_count": 786,
+  "load_s": 0.4,
+  "prompt_eval_s": 2.36,
+  "tok_per_s": 16.0,
+  "parsed": [
+   {
+    "name": {
+     "value": "headphones",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Electronics",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "a pair of black Bose headphones with a carrying case",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "black"
+     },
+     {
+      "value": "headphones"
+     },
+     {
+      "value": "bose"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"headphones\",\n  \"category\": \"Electronics\",\n  \"tags\": [\"black\", \"headphones\", \"bose\"],\n  \"description\": \"a pair of black Bose headphones with a carrying case\",\n  \"confidence\": 0.95\n}"
+ },
+ {
+  "photo": "kitchen_knife.jpg",
+  "image_bytes": 29513,
+  "secs": 12.79,
+  "done_reason": "stop",
+  "eval_count": 60,
+  "prompt_eval_count": 769,
+  "load_s": 0.37,
+  "prompt_eval_s": 2.33,
+  "tok_per_s": 16.2,
+  "parsed": [
+   {
+    "name": {
+     "value": "knife",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Kitchen",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "a set of kitchen knives with black handles and stainless steel blades",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "metal"
+     },
+     {
+      "value": "black"
+     },
+     {
+      "value": "gerlach"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"knife\",\n  \"category\": \"Kitchen\",\n  \"tags\": [\"metal\", \"black\", \"gerlach\"],\n  \"description\": \"a set of kitchen knives with black handles and stainless steel blades\",\n  \"confidence\": 0.95\n}"
+ },
+ {
+  "photo": "laptop.jpg",
+  "image_bytes": 145348,
+  "secs": 13.7,
+  "done_reason": "stop",
+  "eval_count": 65,
+  "prompt_eval_count": 801,
+  "load_s": 0.37,
+  "prompt_eval_s": 2.37,
+  "tok_per_s": 16.1,
+  "parsed": [
+   {
+    "name": {
+     "value": "laptop",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Electronics",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "a black ibm thinkpad laptop with a web page open on the screen",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "black"
+     },
+     {
+      "value": "ibm"
+     },
+     {
+      "value": "thinkpad"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"laptop\",\n  \"category\": \"Electronics\",\n  \"tags\": [\"black\", \"ibm\", \"thinkpad\"],\n  \"description\": \"a black ibm thinkpad laptop with a web page open on the screen\",\n  \"confidence\": 0.95\n}"
+ },
+ {
+  "photo": "paperback_book.jpg",
+  "image_bytes": 168011,
+  "secs": 13.79,
+  "done_reason": "stop",
+  "eval_count": 55,
+  "prompt_eval_count": 786,
+  "load_s": 0.38,
+  "prompt_eval_s": 2.35,
+  "tok_per_s": 14.0,
+  "parsed": [
+   {
+    "name": {
+     "value": "book",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Books",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "A stack of unbound white paper sheets.",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "paper"
+     },
+     {
+      "value": "white"
+     },
+     {
+      "value": "unbound"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"book\",\n  \"category\": \"Books\",\n  \"tags\": [\"paper\", \"white\", \"unbound\"],\n  \"description\": \"A stack of unbound white paper sheets.\",\n  \"confidence\": 0.95\n}"
+ },
+ {
+  "photo": "sneakers.jpg",
+  "image_bytes": 100562,
+  "secs": 13.96,
+  "done_reason": "stop",
+  "eval_count": 67,
+  "prompt_eval_count": 786,
+  "load_s": 0.36,
+  "prompt_eval_s": 2.34,
+  "tok_per_s": 16.1,
+  "parsed": [
+   {
+    "name": {
+     "value": "sneaker",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Shoes",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "A white and red sneaker with a Reebok logo.",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "leather"
+     },
+     {
+      "value": "white"
+     },
+     {
+      "value": "red"
+     },
+     {
+      "value": "reebok"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"sneaker\",\n  \"category\": \"Shoes\",\n  \"tags\": [\"leather\", \"white\", \"red\", \"reebok\"],\n  \"description\": \"A white and red sneaker with a Reebok logo.\",\n  \"confidence\": 0.95\n}"
+ },
+ {
+  "photo": "t-shirt.jpg",
+  "image_bytes": 156366,
+  "secs": 13.16,
+  "done_reason": "stop",
+  "eval_count": 58,
+  "prompt_eval_count": 802,
+  "load_s": 0.36,
+  "prompt_eval_s": 2.36,
+  "tok_per_s": 16.2,
+  "parsed": [
+   {
+    "name": {
+     "value": "T-shirt",
+     "confidence": 0.95
+    },
+    "category": {
+     "value": "Clothing",
+     "confidence": 0.95
+    },
+    "description": {
+     "value": "A black heather T-shirt with white text.",
+     "confidence": 0.95
+    },
+    "tags": [
+     {
+      "value": "heather"
+     },
+     {
+      "value": "black"
+     },
+     {
+      "value": "text"
+     }
+    ]
+   },
+   "json"
+  ],
+  "error": null,
+  "raw": "{\n  \"name\": \"T-shirt\",\n  \"category\": \"Clothing\",\n  \"tags\": [\"heather\", \"black\", \"text\"],\n  \"description\": \"A black heather T-shirt with white text.\",\n  \"confidence\": 0.95\n}"
+ }
+]
