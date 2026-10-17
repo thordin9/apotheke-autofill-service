@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import collections
 import json
 import logging
 import math
@@ -65,6 +66,8 @@ DEFAULT_LOAD_S = 15.0
 DEFAULT_GENERATE_S = 15.0
 # A load_duration below this is a model that was already in memory.
 MIN_LOAD_S = 0.5
+# How many recent generation times the admission checks look at.
+RECENT_WINDOW = 5
 
 MAX_TAGS = 10
 MAX_NAME = 120
@@ -97,7 +100,9 @@ def build_prompt(context: dict[str, Any]) -> str:
         parts.append("category (exactly one of: " + ", ".join(cats) + "),")
     else:
         parts.append("category (one general word),")
-    tag_part = "tags (up to 5 short lowercase words: material, colour"
+    # Tags are described in neutral words only: Qwen copied listed examples
+    # ("material", "colour") back as tags.
+    tag_part = "tags (up to 5 short lowercase tags for the item"
     if tags:
         tag_part += "; prefer: " + ", ".join(tags)
     parts += [
@@ -430,6 +435,51 @@ def _name_agreeing_with(
     return out
 
 
+# Words from the prompt itself; a tag that is only one of these says nothing.
+PROMPT_WORDS = frozenset(
+    {
+        "material",
+        "colour",
+        "color",
+        "brand",
+        "tag",
+        "tags",
+        "category",
+        "name",
+        "description",
+        "item",
+        "object",
+    }
+)
+
+
+def clean_tags(tags: list[Any]) -> list[Any]:
+    """Keep prompt words out of tags: drop a tag that is only a prompt word
+    ("material"), turn "material: leather" into "leather" (a comma-separated
+    value such as "colour: white, red" becomes "white" and "red"), and drop
+    duplicates, keeping the first. Tags given as {"value", ...} keep their
+    other keys."""
+    out: list[Any] = []
+    seen: set[str] = set()
+    for t in tags:
+        value, rest = (t.get("value"), t) if isinstance(t, dict) else (t, None)
+        if not isinstance(value, str):
+            out.append(t)
+            continue
+        values = [value]
+        head, sep, tail = value.partition(":")
+        if sep and head.strip().casefold() in PROMPT_WORDS:
+            values = tail.split(",")
+        for v in values:
+            v = v.strip()
+            key = v.casefold()
+            if not v or key in PROMPT_WORDS or key in seen:
+                continue
+            seen.add(key)
+            out.append({**rest, "value": v} if rest is not None else v)
+    return out
+
+
 def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     raw = normalize(raw)
     # Moondream often answers flat with a single top-level confidence; it
@@ -465,7 +515,7 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     if isinstance(tags_raw, list):
         seen: set[str] = set()
         tags = []
-        for t in tags_raw:
+        for t in clean_tags(tags_raw):
             # New tags are allowed; existing ones keep the client's spelling.
             s = _scored(t, MAX_TAG, context.get("tags"))
             if s is None or s["value"].casefold() in seen:
@@ -652,6 +702,10 @@ class OllamaBackend(Backend):
         # Moving average of recent generation times (model load excluded),
         # used to refuse queued requests that could not finish in time.
         self._avg_s: float | None = None
+        # The last few generation times. Admission decisions use the slowest
+        # of them, not the average: one fast prompt-cache hit must not let in
+        # a request that then times out.
+        self._recent: collections.deque[float] = collections.deque(maxlen=RECENT_WINDOW)
         # Last observed model load time, for deciding whether a request that
         # finds the model unloaded can wait for the load.
         self._load_s: float | None = None
@@ -854,6 +908,17 @@ class OllamaBackend(Backend):
     def _record(self, seconds: float) -> None:
         seconds = max(0.0, seconds)
         self._avg_s = seconds if self._avg_s is None else 0.7 * self._avg_s + 0.3 * seconds
+        self._recent.append(seconds)
+
+    def _slow_generate_s(self) -> float:
+        """Slowest recent generation time (15 s until measured)."""
+        return max(self._recent) if self._recent else DEFAULT_GENERATE_S
+
+    def _load_estimate_s(self) -> float:
+        """Expected model load time: the last measured load, but never less
+        than DEFAULT_LOAD_S. Timed loads can come out short (a load already
+        under way, files in the page cache) while the next one is slow."""
+        return max(DEFAULT_LOAD_S, self._load_s or 0.0)
 
     def _record_load(self, seconds: float) -> None:
         if seconds >= MIN_LOAD_S:
@@ -861,11 +926,10 @@ class OllamaBackend(Backend):
 
     def _cold_wait_fits(self) -> bool:
         """Whether loading the model and then answering fits in 90% of
-        BACKEND_TIMEOUT_S, judging by the last load and recent generation
-        times (15 s each until measured)."""
-        load = self._load_s if self._load_s is not None else DEFAULT_LOAD_S
-        gen = self._avg_s if self._avg_s is not None else DEFAULT_GENERATE_S
-        return load + gen <= get_settings().backend_timeout_s * 0.9
+        BACKEND_TIMEOUT_S, judging by the load estimate (at least 15 s) and
+        the slowest recent generation (15 s until measured)."""
+        load = self._load_estimate_s()
+        return load + self._slow_generate_s() <= get_settings().backend_timeout_s * 0.9
 
     @staticmethod
     def _retry_fits(elapsed: float, load_s: float) -> bool:
@@ -892,14 +956,14 @@ class OllamaBackend(Backend):
                 f"model '{self.model}' is loading", max(self.retry_after, COLD_RETRY_AFTER_S)
             )
         # One request in flight, up to queue_size waiting; the rest get 503.
-        # A request is also refused when, judging by recent generation times,
-        # it would time out while waiting its turn.
+        # A request is also refused when, judging by the slowest recent
+        # generation time, it would time out while waiting its turn.
         # Plain counters + polling keep this independent of the event loop.
         if self._in_flight:
             if self._waiting >= self.queue_size:
                 raise Busy("backend busy, queue full", self._busy_retry_after())
             timeout = get_settings().backend_timeout_s
-            if self._avg_s is not None and (self._waiting + 2) * self._avg_s > timeout * 0.9:
+            if (self._waiting + 2) * self._slow_generate_s() > timeout * 0.9:
                 raise Busy(
                     "backend busy, a queued request would time out", self._busy_retry_after()
                 )
