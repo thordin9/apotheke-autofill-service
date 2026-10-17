@@ -86,8 +86,52 @@ def build_prompt(context: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _repair_truncated(text: str, start: int) -> dict[str, Any] | None:
+    """Close a JSON object cut off mid-way (e.g. by num_predict).
+
+    Tries, newest first, every point where a value had just ended, closing
+    the brackets still open there; a value cut mid-string is dropped.
+    """
+    stack: list[str] = []
+    cuts: list[tuple[int, str]] = []
+    in_str = esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if not stack or stack.pop() != ch or not stack:
+                return None  # mismatched, or a complete object raw_decode rejected
+            cuts.append((i + 1, "".join(reversed(stack))))
+        elif ch == ",":
+            cuts.append((i, "".join(reversed(stack))))
+    if not stack:
+        return None
+    candidates = [text[start:].rstrip().rstrip(",") + "".join(reversed(stack))]
+    candidates += [text[start:pos] + closers for pos, closers in reversed(cuts)]
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj:
+            return obj
+    return None
+
+
 def extract_json(text: str) -> dict[str, Any]:
-    """Find the first JSON object in model output (tolerates fences/prose)."""
+    """Find the first JSON object in model output (tolerates fences/prose and
+    an object truncated by the token cap)."""
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     decoder = json.JSONDecoder()
@@ -95,7 +139,9 @@ def extract_json(text: str) -> dict[str, Any]:
         try:
             obj, _ = decoder.raw_decode(text, m.start())
         except ValueError:
-            continue
+            # Only an object still open at the end of the text is repaired, so
+            # a nested object is never mistaken for the whole answer.
+            obj = _repair_truncated(text, m.start())
         if isinstance(obj, dict):
             return obj
     raise BackendError("model output was not a JSON object")
@@ -123,25 +169,70 @@ def _clip(s: str, limit: int) -> str:
     return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
 
 
+# Values small models copy from the prompt's schema instead of answering.
+PLACEHOLDERS = {"str", "string", "...", "…", "0..1", "n/a", "na", "none", "null", "unknown"}
+
+# Other keys small models use for our fields (Moondream often renames them).
+ALIASES = {
+    "name": ("item", "object", "product", "title", "label", "item_name", "product_name"),
+    "category": ("type", "kind", "class", "item_category"),
+    "description": ("caption", "summary", "details", "desc"),
+    "tags": ("keywords", "labels", "attributes"),
+}
+FIELDS = tuple(ALIASES)
+
+
+def _confidence(c: Any) -> float | None:
+    if isinstance(c, str):
+        try:
+            c = float(c.strip().rstrip("%")) / (100 if c.strip().endswith("%") else 1)
+        except ValueError:
+            return None
+    if isinstance(c, int | float) and not isinstance(c, bool) and c == c:  # not NaN
+        return min(1.0, max(0.0, float(c)))
+    return None
+
+
 def _scored(v: Any, limit: int, prefer: list[str] | None = None) -> dict[str, Any] | None:
     if isinstance(v, str):
         v = {"value": v}
     if not isinstance(v, dict) or not isinstance(v.get("value"), str):
         return None
     value = _clip(v["value"], limit)
-    if not value:
+    if not value or value.casefold() in PLACEHOLDERS:
         return None
     if prefer:
         exact = {p.casefold(): p for p in prefer}
         value = exact.get(value.casefold(), value)
     out: dict[str, Any] = {"value": value}
-    c = v.get("confidence")
-    if isinstance(c, int | float) and not isinstance(c, bool):
-        out["confidence"] = min(1.0, max(0.0, float(c)))
+    if (c := _confidence(v.get("confidence"))) is not None:
+        out["confidence"] = c
+    return out
+
+
+def normalize(raw: dict[str, Any]) -> dict[str, Any]:
+    """Map renamed keys onto ours and unwrap a single wrapper object."""
+    lowered = {str(k).strip().casefold(): v for k, v in raw.items()}
+    if not any(k in lowered for k in FIELDS) and len(lowered) == 1:
+        (inner,) = lowered.values()
+        if isinstance(inner, dict):
+            return normalize(inner)
+    out: dict[str, Any] = {}
+    for key, aliases in ALIASES.items():
+        for k in (key, *aliases):
+            if lowered.get(k) not in (None, "", [], {}):
+                out[key] = lowered[k]
+                break
+    tags = out.get("tags")
+    if isinstance(tags, str):
+        out["tags"] = [t for t in re.split(r"[,;]", tags) if t.strip()]
+    elif isinstance(tags, dict):
+        out["tags"] = [tags]
     return out
 
 
 def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    raw = normalize(raw)
     out: dict[str, Any] = {}
     for key, limit, prefer in (
         ("name", MAX_NAME, None),

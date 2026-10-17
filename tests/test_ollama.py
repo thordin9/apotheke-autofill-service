@@ -96,7 +96,7 @@ def test_context_in_prompt_and_exact_spelling(oclient, fake):
 
 @pytest.mark.parametrize(
     "content",
-    ["not json at all", "[1,2]", '{"name": 5}', "{broken", '{"tags": "x"}'],
+    ["not json at all", "[1,2]", '{"name": 5}', "{broken", '{"tags": []}', '{"name": "str"}'],
 )
 def test_malformed_model_output(oclient, fake, content):
     fake.chat_content = content
@@ -303,3 +303,65 @@ def test_queue_size_zero_rejects_second(oclient, fake):
     assert post_image(c).status_code == 503
     fake.release.set()
     t.join(10)
+
+
+# -- lenient parsing of what small models actually send ----------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"name":{"value":"Drill","confidence":0.8},"description":{"value":"A red dri',
+        '{"name":{"value":"Drill","confidence":0.8},"tags":[{"value":"red"},{"val',
+        '{"name":{"value":"Drill","confidence":0.8},"descr',
+        '{"name":{"value":"Drill","confidence":0.8},',
+    ],
+)
+def test_truncated_json_is_repaired(text):
+    assert extract_json(text)["name"] == {"value": "Drill", "confidence": 0.8}
+
+
+def test_truncated_json_keeps_complete_tags():
+    out = extract_json('{"name":"Drill","tags":[{"value":"red"},{"value":"bo')
+    assert out == {"name": "Drill", "tags": [{"value": "red"}]}
+
+
+def test_truncated_output_via_http(oclient, fake):
+    fake.chat_content = '{"name":{"value":"Cordless drill","confidence":0.8},"category":{"val'
+    body = assert_contract(post_image(oclient()), "/v1/suggest", "post")
+    assert body["name"]["value"] == "Cordless drill" and "category" not in body
+
+
+def test_flat_and_renamed_keys():
+    raw = {
+        "Object": "Coffee mug",
+        "type": "Kitchen",
+        "caption": "A white ceramic mug.",
+        "keywords": "white, ceramic; mug",
+    }
+    out = clamp(raw, {"categories": ["kitchen"]})
+    assert out["name"] == {"value": "Coffee mug"}
+    assert out["category"] == {"value": "kitchen"}
+    assert out["description"] == {"value": "A white ceramic mug."}
+    assert [t["value"] for t in out["tags"]] == ["white", "ceramic", "mug"]
+
+
+def test_canonical_key_wins_over_alias():
+    assert clamp({"title": "B", "name": "A"}, {})["name"] == {"value": "A"}
+
+
+def test_single_wrapper_object_is_unwrapped():
+    out = clamp({"item": {"name": "Lamp", "category": "Lighting"}}, {})
+    assert out == {"name": {"value": "Lamp"}, "category": {"value": "Lighting"}}
+
+
+def test_schema_placeholders_are_dropped():
+    raw = {"name": {"value": "str", "confidence": "0..1"}, "category": "string", "tags": ["..."]}
+    with pytest.raises(Exception, match="no usable fields"):
+        clamp(raw, {})
+
+
+@pytest.mark.parametrize(("c", "want"), [("0.7", 0.7), ("85%", 0.85), ("high", None), (2, 1.0)])
+def test_confidence_coercion(c, want):
+    out = clamp({"name": {"value": "x", "confidence": c}}, {})
+    assert out["name"].get("confidence") == want
