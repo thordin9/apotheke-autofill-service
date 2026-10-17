@@ -169,6 +169,14 @@ Board settings that go with it: `OLLAMA_MAX_LOADED_MODELS=1` and `OLLAMA_NUM_PAR
 user of the board's Ollama who loads a different model evicts Qwen, and the service then reloads it (see the cold check
 below).
 
+## Final deployment
+
+- Deployed on xavier12 on 2026-10-18 at `main` **7339211** (merge of PR #7; app code identical to e4e9033), image `apotheke-autofill:jetson-7339211`, model `qwen2.5vl-jetson:3b` with `OLLAMA_KEEP_ALIVE=-1`, `docker run --restart unless-stopped --env-file /opt/autofill/service.env`.
+- `BACKEND_TIMEOUT_S=25` until Apotheke v2.3 ships (keeps v2.2.0 clients on the fast-503 path), then raise it to 45.
+- verify.sh: healthz ok; info ready with avg_latency_ms; cold after `ollama stop` → 503 in 0.08 s (Retry-After 15); two at once → second 503 in 0.03 s (Retry-After 14).
+- Reboot test: container, Ollama (Qwen reloaded), dl-cap, GitHub runner and WireGuard reachability all came back; healthz ok, info ready, suggest 200.
+- Jetson hardware workflow (#4) on main 7339211, Moondream smoke: [run 39076265664](https://github.com/thordin9/apotheke-autofill-service/actions/runs/39076265664) — success, 16/16 ok, p50 2.89 s, p95 5.59 s, concurrent pair [200, 503].
+
 ## Service results
 
 ### Qwen 100-run (build 2252ef5, 1024 px photos)
