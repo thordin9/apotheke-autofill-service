@@ -40,6 +40,10 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `OLLAMA_WARMUP` | `1` | Ollama only: load the model in the background at startup. Until loaded, `/v1/info` has `"ready": false` and `/v1/suggest` returns 503 + `Retry-After`. `0` skips warm-up. |
 | `OLLAMA_QUEUE_SIZE` | `1` | Ollama only: requests allowed to wait behind the one in flight; more get 503 `backend_unavailable` + `Retry-After`. |
 | `OLLAMA_RETRY_AFTER_S` | `5` | Ollama only: `Retry-After` value for warming-up/busy 503s. |
+| `OLLAMA_NUM_PREDICT` | `256` | Ollama only: most tokens the model may generate per request. Caps runaway output (small models sometimes pad `format=json` answers with whitespace until the timeout). `0` removes the cap. |
+| `OLLAMA_TEMPERATURE` | `0` | Ollama only: sampling temperature. |
+| `OLLAMA_KEEP_ALIVE` | `30m` | Ollama only: how long Ollama keeps the model loaded after a request (duration, or seconds; `-1` = forever). |
+| `OLLAMA_JSON_FORMAT` | `1` | Ollama only: send `format: "json"` to constrain output to JSON. `0` lets the model answer freely; the service still extracts the first JSON object. |
 
 `ECHO_*` are read on every request. Example: `ECHO_MODE=slow BACKEND_TIMEOUT_S=2 uvicorn app.main:app --port 8080`.
 

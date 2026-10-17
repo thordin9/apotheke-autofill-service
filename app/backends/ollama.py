@@ -9,6 +9,13 @@ Env (read when the backend is created):
                          with Retry-After until it has loaded. 0 skips warm-up.
   OLLAMA_QUEUE_SIZE      requests allowed to wait behind the one in flight (default 1)
   OLLAMA_RETRY_AFTER_S   Retry-After seconds on 503 busy/warming (default 5)
+  OLLAMA_NUM_PREDICT     max tokens the model may generate per request (default 256;
+                         0 or less removes the cap). Stops runaway output, e.g. a
+                         small model padding format=json output with whitespace.
+  OLLAMA_TEMPERATURE     sampling temperature (default 0, deterministic)
+  OLLAMA_KEEP_ALIVE      how long Ollama keeps the model loaded after a request
+                         (default 30m; -1 keeps it loaded forever)
+  OLLAMA_JSON_FORMAT     1 (default) sends format=json; 0 lets the model answer freely
 """
 
 from __future__ import annotations
@@ -29,6 +36,8 @@ from .base import CAPABILITIES, Backend, BackendUnavailable
 
 DEFAULT_URL = "http://ollama:11434"
 DEFAULT_MODEL = "moondream"
+DEFAULT_NUM_PREDICT = 256
+DEFAULT_KEEP_ALIVE = "30m"
 
 MAX_TAGS = 10
 MAX_NAME = 120
@@ -144,6 +153,30 @@ def _env_int(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "no", "off")
+
+
+def _keep_alive(raw: str) -> str | int:
+    # Ollama takes a duration string ("30m") or a number of seconds (-1 = forever).
+    raw = raw.strip() or DEFAULT_KEEP_ALIVE
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
 class Busy(BackendUnavailable):
     def __init__(self, message: str, retry_after: int):
         super().__init__(message)
@@ -159,6 +192,10 @@ class OllamaBackend(Backend):
         self.queue_size = max(0, _env_int("OLLAMA_QUEUE_SIZE", 1))
         self.retry_after = max(1, _env_int("OLLAMA_RETRY_AFTER_S", 5))
         self.warmup_enabled = os.environ.get("OLLAMA_WARMUP", "1").strip() not in ("0", "false")
+        self.num_predict = _env_int("OLLAMA_NUM_PREDICT", DEFAULT_NUM_PREDICT)
+        self.temperature = _env_float("OLLAMA_TEMPERATURE", 0.0)
+        self.keep_alive = _keep_alive(os.environ.get("OLLAMA_KEEP_ALIVE", ""))
+        self.json_format = _env_flag("OLLAMA_JSON_FORMAT", True)
         self.ready = not self.warmup_enabled
         self.warmup_error: str | None = None
         self._warm_thread: threading.Thread | None = None
@@ -176,7 +213,12 @@ class OllamaBackend(Backend):
 
     def _warm(self) -> None:
         delay = 1.0
-        payload = {"model": self.model, "prompt": "", "stream": False, "keep_alive": "30m"}
+        payload = {
+            "model": self.model,
+            "prompt": "",
+            "stream": False,
+            "keep_alive": self.keep_alive,
+        }
         while True:
             try:
                 r = httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
@@ -218,12 +260,18 @@ class OllamaBackend(Backend):
             raise BackendError("ollama returned an unexpected body")
         return data
 
+    def options(self) -> dict[str, Any]:
+        opts: dict[str, Any] = {"temperature": self.temperature}
+        if self.num_predict > 0:
+            opts["num_predict"] = self.num_predict
+        return opts
+
     async def generate(self, image_bytes: bytes, context: dict[str, Any]) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "stream": False,
-            "format": "json",
-            "options": {"temperature": 0},
+            "keep_alive": self.keep_alive,
+            "options": self.options(),
             "messages": [
                 {
                     "role": "user",
@@ -232,6 +280,8 @@ class OllamaBackend(Backend):
                 }
             ],
         }
+        if self.json_format:
+            payload["format"] = "json"
         data = await self._post("/api/chat", payload)
         content = (data.get("message") or {}).get("content")
         if not isinstance(content, str):

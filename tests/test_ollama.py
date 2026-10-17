@@ -39,6 +39,33 @@ def test_happy_path(oclient, fake):
     assert base64.b64decode(req["messages"][0]["images"][0]) == JPEG
 
 
+def test_default_generation_options(oclient, fake):
+    assert post_image(oclient()).status_code == 200
+    req = fake.chats()[-1]
+    assert req["options"] == {"temperature": 0.0, "num_predict": 256}
+    assert req["keep_alive"] == "30m"
+    assert req["format"] == "json"
+
+
+def test_generation_options_from_env(oclient, fake):
+    c = oclient(
+        OLLAMA_NUM_PREDICT="96",
+        OLLAMA_TEMPERATURE="0.2",
+        OLLAMA_KEEP_ALIVE="-1",
+        OLLAMA_JSON_FORMAT="0",
+    )
+    assert post_image(c).status_code == 200
+    req = fake.chats()[-1]
+    assert req["options"] == {"temperature": 0.2, "num_predict": 96}
+    assert req["keep_alive"] == -1
+    assert "format" not in req
+
+
+def test_num_predict_zero_removes_cap(oclient, fake):
+    assert post_image(oclient(OLLAMA_NUM_PREDICT="0")).status_code == 200
+    assert "num_predict" not in fake.chats()[-1]["options"]
+
+
 def test_model_env(oclient, fake):
     r = post_image(oclient(OLLAMA_MODEL="qwen2-vl-2b"))
     assert r.status_code == 200
@@ -152,6 +179,7 @@ def test_warmup_ready_false_then_true(oclient, fake):
         assert post_image(c).status_code == 200
     warm = [b for p, b in fake.requests if p == "/api/generate"]
     assert warm and warm[0]["model"] == "moondream"
+    assert warm[0]["keep_alive"] == "30m"
 
 
 def test_warmup_retries_until_ollama_answers(oclient, fake):
