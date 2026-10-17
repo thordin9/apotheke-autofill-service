@@ -97,7 +97,9 @@ def build_prompt(context: dict[str, Any]) -> str:
         parts.append("category (exactly one of: " + ", ".join(cats) + "),")
     else:
         parts.append("category (one general word),")
-    tag_part = "tags (up to 5 short lowercase words: material, colour"
+    # Tags are described in neutral words only: Qwen copied listed examples
+    # ("material", "colour") back as tags.
+    tag_part = "tags (up to 5 short lowercase tags for the item"
     if tags:
         tag_part += "; prefer: " + ", ".join(tags)
     parts += [
@@ -430,6 +432,51 @@ def _name_agreeing_with(
     return out
 
 
+# Words from the prompt itself; a tag that is only one of these says nothing.
+PROMPT_WORDS = frozenset(
+    {
+        "material",
+        "colour",
+        "color",
+        "brand",
+        "tag",
+        "tags",
+        "category",
+        "name",
+        "description",
+        "item",
+        "object",
+    }
+)
+
+
+def clean_tags(tags: list[Any]) -> list[Any]:
+    """Keep prompt words out of tags: drop a tag that is only a prompt word
+    ("material"), turn "material: leather" into "leather" (a comma-separated
+    value such as "colour: white, red" becomes "white" and "red"), and drop
+    duplicates, keeping the first. Tags given as {"value", ...} keep their
+    other keys."""
+    out: list[Any] = []
+    seen: set[str] = set()
+    for t in tags:
+        value, rest = (t.get("value"), t) if isinstance(t, dict) else (t, None)
+        if not isinstance(value, str):
+            out.append(t)
+            continue
+        values = [value]
+        head, sep, tail = value.partition(":")
+        if sep and head.strip().casefold() in PROMPT_WORDS:
+            values = tail.split(",")
+        for v in values:
+            v = v.strip()
+            key = v.casefold()
+            if not v or key in PROMPT_WORDS or key in seen:
+                continue
+            seen.add(key)
+            out.append({**rest, "value": v} if rest is not None else v)
+    return out
+
+
 def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     raw = normalize(raw)
     # Moondream often answers flat with a single top-level confidence; it
@@ -465,7 +512,7 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     if isinstance(tags_raw, list):
         seen: set[str] = set()
         tags = []
-        for t in tags_raw:
+        for t in clean_tags(tags_raw):
             # New tags are allowed; existing ones keep the client's spelling.
             s = _scored(t, MAX_TAG, context.get("tags"))
             if s is None or s["value"].casefold() in seen:
