@@ -118,8 +118,9 @@ The Jetson image sets `BACKEND_TIMEOUT_S=45`. With Qwen a request takes about
 unloaded (Ollama restarted or evicted it) waits for the load and still answers
 within the limit (15 + 13.5 s fits in 90% of 45 s). One request queued behind
 another fits as well (2 × 13.5 s). The service decides from the last load time
-it measured and the moving average of recent requests (15 s each until
-measured): when loading plus answering would not fit, as with Qwen at the
+it measured (never assumed below 15 s) and the slowest of the last 5
+answers (15 s until measured), so one fast answer can't let in a request
+that then times out: when loading plus answering would not fit, as with Qwen at the
 generic 25 s default, it answers 503 with `Retry-After: 15` at once and reloads
 the model in the background. A request that would time out in the queue gets
 503 with a `Retry-After` based on recent request times. Clients should allow
@@ -177,7 +178,7 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `OLLAMA_MODEL` | `moondream` (`qwen2.5vl-jetson:3b` in the Jetson image) | Model the app requests, and the default tag `ollama-init` pulls. `qwen2.5vl:3b` (or another Ollama vision tag) is an option: better output, slower. Pull it first: `ollama pull <model>`. |
 | `OLLAMA_EXTRA_MODEL` | *(unset)* | Ollama profile only. Extra library tag for `ollama-init` to pull, for example `qwen2.5vl:3b`. |
 | `OLLAMA_WARMUP` | `1` | Ollama only: load the model in the background at startup. Until loaded, `/v1/info` has `"ready": false` and `/v1/suggest` returns 503 + `Retry-After`. `0` skips warm-up. |
-| `OLLAMA_QUEUE_SIZE` | `1` | Ollama only: requests allowed to wait behind the one in flight; more get 503 `backend_unavailable` + `Retry-After`. A request is also refused at once when, judging by recent request times, it would time out while queued. |
+| `OLLAMA_QUEUE_SIZE` | `1` | Ollama only: requests allowed to wait behind the one in flight; more get 503 `backend_unavailable` + `Retry-After`. A request is also refused at once when, judging by the slowest of the last 5 answers, it would time out while queued. |
 | `OLLAMA_RETRY_AFTER_S` | `5` | Ollama only: `Retry-After` value for warming-up/busy 503s. |
 | `OLLAMA_NUM_PREDICT` | `256` | Ollama only: most tokens the model may generate per request. Caps runaway output (small models sometimes pad `format=json` answers with whitespace until the timeout). `0` removes the cap. |
 | `OLLAMA_TEMPERATURE` | `0` | Ollama only: sampling temperature. |

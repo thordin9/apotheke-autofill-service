@@ -360,7 +360,9 @@ def test_warmup_disabled_is_ready(oclient):
 def test_queue_full_returns_503_retry_after(oclient, fake):
     import threading
 
-    c = oclient(OLLAMA_RETRY_AFTER_S="3")
+    # 60 s: with nothing measured yet (15 s assumed per answer) one queued
+    # request fits, so the queue limit is what refuses the third.
+    c = oclient(OLLAMA_RETRY_AFTER_S="3", BACKEND_TIMEOUT_S="60")
     backend = c.app.state.backend
     fake.release.clear()  # hold the in-flight request inside fake Ollama
     results: dict[str, int] = {}
@@ -753,23 +755,65 @@ def test_cold_model_waits_for_load_when_it_fits(oclient, fake):
 
 
 def test_cold_wait_uses_measured_load_and_generation_times(oclient, fake):
-    # 3 s timeout: the 15 s defaults do not fit, so the first cold request is
-    # refused. Once a 0.6 s load and a short answer were measured, they do.
-    c = oclient(BACKEND_TIMEOUT_S="3")
+    # 40 s timeout (limit 36 s): the 15 s + 15 s defaults fit, a measured
+    # 18 s load plus a slow 19 s answer does not.
+    c = oclient(BACKEND_TIMEOUT_S="40")
+    backend = c.app.state.backend
+    assert backend._cold_wait_fits()
+    backend._record_load(18.0)
+    backend._record(19.0)
+    assert not backend._cold_wait_fits()
+    fake.loaded = []
+    r = post_image(c)
+    assert r.status_code == 503 and "loading" in r.json()["error"]["message"]
+    assert fake.chats() == []
+
+
+def test_cold_check_assumes_at_least_15_s_load(oclient, fake):
+    # Board regression: a reload timed at 10 s plus 11.3 s average answer
+    # looked like it fit 0.9 x 25 s, and the cold request ran into a 504.
+    # The load estimate never drops below 15 s, and the slowest recent answer
+    # counts, not the average.
+    c = oclient(BACKEND_TIMEOUT_S="25")
+    backend = c.app.state.backend
+    backend._record_load(10.0)
+    for s_ in (13.5, 13.7, 5.9):
+        backend._record(s_)
+    assert backend._avg_s < 11.5 and backend._load_estimate_s() == 15.0
+    assert not backend._cold_wait_fits()
     fake.loaded = []
     assert post_image(c).status_code == 503
-    fake.loaded = ["moondream:latest"]
-    fake.load_duration_ns = 600_000_000
-    fake.chat_delay = 0.7
-    assert post_image(c).status_code == 200  # learns load 0.6 s, answer ~0.1 s
+    assert fake.chats() == []
+
+
+def test_queue_check_uses_slowest_recent_answer(oclient, fake):
+    # Board regression: one fast 5.9 s prompt-cache hit pulled the average
+    # to ~11.3 s, so 2 x avg (22.3 s) slipped under 0.9 x 25 s and the queued
+    # request was admitted and timed out. The slowest of the last answers
+    # (13.7 s) decides: 27.4 s > 22.5 s, so 503 at once.
+    c = oclient(BACKEND_TIMEOUT_S="25", OLLAMA_QUEUE_SIZE="1")
     backend = c.app.state.backend
-    assert backend._load_s == pytest.approx(0.6)
-    fake.loaded = []
-    fake.load_duration_ns = 0
-    fake.chat_delay = 0
-    chats = len(fake.chats())
-    assert post_image(c).status_code == 200
-    assert len(fake.chats()) == chats + 1
+    for s_ in (13.5, 13.7, 5.9):
+        backend._record(s_)
+    fake.release.clear()
+    results: list = []
+    t = _post_in_thread(c, results)
+    assert _wait(lambda: len(fake.chats()) == 1)
+    r = post_image(c)
+    assert r.status_code == 503 and "would time out" in r.json()["error"]["message"]
+    assert int(r.headers["Retry-After"]) >= 12
+    fake.release.set()
+    t.join(5)
+    assert results[0].status_code == 200
+
+
+def test_queue_check_forgets_old_slow_answers(oclient):
+    c = oclient(BACKEND_TIMEOUT_S="25")
+    backend = c.app.state.backend
+    backend._record(30.0)
+    for _ in range(5):
+        backend._record(4.0)
+    assert backend._slow_generate_s() == 4.0
 
 
 def test_warm_load_time_is_not_mistaken_for_a_load(oclient, fake):
