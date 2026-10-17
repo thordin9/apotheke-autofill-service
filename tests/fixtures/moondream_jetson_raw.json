@@ -1,0 +1,62 @@
+{
+ "source": "Moondream on the Jetson (apotheke-autofill:jetson, OLLAMA_NUM_PREDICT=256), raw /api/chat content per photo",
+ "context": {
+  "categories": [
+   "Tools",
+   "Electronics",
+   "Clothing",
+   "Books",
+   "Kitchen",
+   "Lighting",
+   "Shoes",
+   "Other"
+  ]
+ },
+ "outputs": [
+  {
+   "photo": "cordless_drill.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\": \"power drill\", \"confidence\": 0.61, \"category\": \"electronics\", \"tags\": [], \"description\": \"\"}"
+  },
+  {
+   "photo": "desk_lamp.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\":{\"value\": \"bulb\", \"confidence\": 0.64},\"category\":{\"value\": \"bulb\", \"confidence\": 0.63},\"tags\":[{\"value\": \"bulb\", \"confidence\": 0.65},{\"value\": \"bulb\", \"confidence\": 0.66}],\"description\": {\"value\": \"bulb\", \"confidence\": 0.67}}"
+  },
+  {
+   "photo": "hammer.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\":{\"value\":\"sculptor\", \"confidence\":0.65},\"category\":{\"value\":\"artists\", \"confidence\":0.64},\"tags\":[{\"value\":\"sculptor\", \"confidence\":0.66},{\"value\":\"artists\", \"confidence\":0.67},{\"value\":\"artists\", \"confidence\":0.68}],\"description\":{\"value\":\"artists\", \"confidence\":0.69}}"
+  },
+  {
+   "photo": "headphones.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\": \"bose\", \"confidence\": 0.61, \"category\": \"electronics\", \"tags\": [{\"value\": \"bose\", \"confidence\": 0.6}],\"description\": \"\"}"
+  },
+  {
+   "photo": "kitchen_knife.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\": \"Knives\", \"confidence\": 0.65, \"category\": \"kitchen\", \"tags\": [{\"value\": \"knives\", \"confidence\": 0.64},{\"value\": \"kitchen\", \"confidence\": 0.63}],\"description\": \"\"}"
+  },
+  {
+   "photo": "laptop.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\": \"smartphone\", \"confidence\": 0.64, \"category\": \"other\", \"tags\": [], \"description\": \"\"}"
+  },
+  {
+   "photo": "paperback_book.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\": \"books\", \"confidence\": 0.64, \"category\": \"books\", \"tags\": [{\"value\": \"books\", \"confidence\": 0.65}] }"
+  },
+  {
+   "photo": "sneakers.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\": \"reebok\", \"confidence\": 0.61, \"category\": \"clothes\", \"tags\": [{\"value\": \"reebok\", \"confidence\": 0.6}]}"
+  },
+  {
+   "photo": "t-shirt.jpg",
+   "done_reason": "stop",
+   "raw": "{\"name\": \"John\", \"confidence\": 0.64, \"category\": \"books\", \"tags\": [{\"value\": \"books\", \"confidence\": 0.65},{\"value\": \"books\", \"confidence\": 0.66}],\"description\": \"\"}"
+  }
+ ]
+}

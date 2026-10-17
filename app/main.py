@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -24,7 +25,16 @@ from .settings import get_settings
 def create_app() -> FastAPI:
     settings = get_settings()
     backend = create_backend(settings.backend)  # unknown BACKEND fails at startup
-    app = FastAPI(title="Apotheke Autofill Service", version="1", docs_url="/docs")
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if hasattr(backend, "start"):
+            backend.start()  # background warm-up; never blocks startup
+        yield
+
+    app = FastAPI(
+        title="Apotheke Autofill Service", version="1", docs_url="/docs", lifespan=lifespan
+    )
     app.state.backend = backend
 
     @app.middleware("http")
@@ -62,7 +72,8 @@ def create_app() -> FastAPI:
         except TimeoutError:
             raise ApiError(504, "backend_timeout", "backend timed out") from None
         except BackendUnavailable as exc:
-            raise ApiError(503, "backend_unavailable", str(exc)) from None
+            code = getattr(exc, "code", "backend_unavailable")
+            raise ApiError(503, code, str(exc), getattr(exc, "headers", None)) from None
 
     @app.get("/healthz")
     async def healthz():
@@ -72,13 +83,16 @@ def create_app() -> FastAPI:
     async def info():
         data = await call_backend(backend.info())
         caps = [c for c in data.get("capabilities", []) if c in CAPABILITIES]
-        return {
+        out = {
             "name": str(data.get("name", backend.id)),
             "version": "1",
             "capabilities": list(dict.fromkeys(caps)),
             "backend": backend.id,
             "max_image_bytes": get_settings().max_image_bytes,
         }
+        if isinstance(data.get("ready"), bool):
+            out["ready"] = data["ready"]
+        return out
 
     @app.post("/v1/suggest")
     async def suggest(request: Request):

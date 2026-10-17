@@ -143,7 +143,7 @@ def test_heic_accepted_with_pillow_heif(client, monkeypatch):
     assert_contract(r, "/v1/suggest", "post")
 
 
-@pytest.mark.parametrize("backend", ["ollama", "clip"])
+@pytest.mark.parametrize("backend", ["clip"])
 def test_503_placeholder_backends(make_client, backend):
     c = make_client(BACKEND=backend)
     assert c.get("/healthz").status_code == 200
