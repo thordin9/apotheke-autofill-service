@@ -111,12 +111,17 @@ on the board once; the steps are in [docs/benchmarks.md](docs/benchmarks.md).
 Moondream still works (`-e OLLAMA_MODEL=moondream`) and is about 3× faster but
 much less accurate.
 
-With Qwen a request takes about 13.5 s of the 25 s `BACKEND_TIMEOUT_S`, which
-leaves no room for loading the model (about 15 s) or for a request queued
-behind another. So when Ollama has unloaded the model, `/v1/suggest` answers
-503 with `Retry-After: 15` at once and reloads it, and a request that would
-time out in the queue gets 503 with a `Retry-After` based on recent request
-times. Apotheke's default 30 s timeout covers the 25 s service limit.
+The Jetson image sets `BACKEND_TIMEOUT_S=45`. With Qwen a request takes about
+13.5 s, and loading the model about 15 s, so a request that finds the model
+unloaded (Ollama restarted or evicted it) waits for the load and still answers
+within the limit (15 + 13.5 s fits in 90% of 45 s). One request queued behind
+another fits as well (2 × 13.5 s). The service decides from the last load time
+it measured and the moving average of recent requests (15 s each until
+measured): when loading plus answering would not fit, as with Qwen at the
+generic 25 s default, it answers 503 with `Retry-After: 15` at once and reloads
+the model in the background. A request that would time out in the queue gets
+503 with a `Retry-After` based on recent request times. Clients should allow
+the backend timeout plus 5 s, so 50 s for the Jetson (Apotheke's maximum is 60 s).
 
 That base is Ubuntu 20.04 with glibc 2.31. `python3` is 3.8.10, `python3.9` is
 3.9.5, `python` is 2.7, and neither `pip` nor `pip3` is installed. This service
@@ -162,7 +167,7 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `BACKEND` | `echo` | `echo`, `ollama`, `clip`. Unknown values fail at startup. |
 | `AUTOFILL_TOKEN` | *(unset)* | If set, every route except `/healthz` needs `Authorization: Bearer <token>` (else 401). |
 | `MAX_IMAGE_BYTES` | `10485760` (10 MiB) | Larger images get 413. |
-| `BACKEND_TIMEOUT_S` | `25` | Backend call limit; exceeded → 504. |
+| `BACKEND_TIMEOUT_S` | `25` (`45` in the Jetson image) | Backend call limit; exceeded → 504. Clients should time out 5 s later (30 s, or 50 s for the Jetson). |
 | `ECHO_MODE` | `ok` | Echo only: `ok`, `error` (503), `malformed` (200 with invalid JSON body), `slow` (hangs → 504 after `BACKEND_TIMEOUT_S`). |
 | `ECHO_DELAY_MS` | `0` | Echo only: delay before answering. When above 0, `/v1/info` reports it as `avg_latency_ms`, so clients can test progress estimates without a model. |
 | `OLLAMA_URL` | `http://ollama:11434` | Base URL the app reads. The x86 Ollama profile sets `http://ollama:11434`. The Jetson image sets `http://127.0.0.1:11434`. |

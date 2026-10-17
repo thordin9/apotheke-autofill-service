@@ -724,10 +724,11 @@ def test_info_ready_when_ps_is_unavailable(oclient, fake):
 
 
 def test_cold_model_gets_503_at_once_and_is_reloaded(oclient, fake):
-    # Qwen on the Jetson: 15 s load + 13.5 s answer > 25 s, so waiting would
-    # end in a 504. Answer 503 with Retry-After straight away instead.
+    # Nothing measured yet, so 15 s load + 15 s answer is assumed, which does
+    # not fit in 0.9 x 25 s: waiting would end in a 504. Answer 503 with
+    # Retry-After straight away instead.
     fake.loaded = []
-    c = oclient(OLLAMA_RETRY_AFTER_S="5")
+    c = oclient(BACKEND_TIMEOUT_S="25", OLLAMA_RETRY_AFTER_S="5")
     r = post_image(c)
     assert r.status_code == 503 and r.headers["Retry-After"] == "15"
     body = assert_contract(r, "/v1/suggest", "post")
@@ -737,6 +738,47 @@ def test_cold_model_gets_503_at_once_and_is_reloaded(oclient, fake):
     assert _wait(lambda: any(p == "/api/generate" for p, _ in fake.requests))
     fake.loaded = ["moondream:latest"]
     assert post_image(c).status_code == 200
+
+
+def test_cold_model_waits_for_load_when_it_fits(oclient, fake):
+    # Jetson: 45 s timeout, so the assumed 15 s load + 15 s answer fits in
+    # 40.5 s. The request goes straight to Ollama, which loads the model.
+    fake.loaded = []
+    fake.load_duration_ns = 300_000_000
+    c = oclient(BACKEND_TIMEOUT_S="45")
+    r = post_image(c)
+    assert r.status_code == 200
+    assert len(fake.chats()) == 1
+    assert not any(p == "/api/generate" for p, _ in fake.requests)
+
+
+def test_cold_wait_uses_measured_load_and_generation_times(oclient, fake):
+    # 3 s timeout: the 15 s defaults do not fit, so the first cold request is
+    # refused. Once a 0.6 s load and a short answer were measured, they do.
+    c = oclient(BACKEND_TIMEOUT_S="3")
+    fake.loaded = []
+    assert post_image(c).status_code == 503
+    fake.loaded = ["moondream:latest"]
+    fake.load_duration_ns = 600_000_000
+    fake.chat_delay = 0.7
+    assert post_image(c).status_code == 200  # learns load 0.6 s, answer ~0.1 s
+    backend = c.app.state.backend
+    assert backend._load_s == pytest.approx(0.6)
+    fake.loaded = []
+    fake.load_duration_ns = 0
+    fake.chat_delay = 0
+    chats = len(fake.chats())
+    assert post_image(c).status_code == 200
+    assert len(fake.chats()) == chats + 1
+
+
+def test_warm_load_time_is_not_mistaken_for_a_load(oclient, fake):
+    # Ollama reports a few ms of load_duration on a loaded model; that must
+    # not replace the load estimate.
+    fake.load_duration_ns = 5_000_000
+    c = oclient()
+    assert post_image(c).status_code == 200
+    assert c.app.state.backend._load_s is None
 
 
 def test_cold_check_tolerates_old_ollama(oclient, fake):

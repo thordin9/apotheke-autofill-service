@@ -10,7 +10,11 @@ Env (read when the backend is created):
   OLLAMA_QUEUE_SIZE      requests allowed to wait behind the one in flight (default 1)
   OLLAMA_RETRY_AFTER_S   Retry-After seconds on 503 busy/warming (default 5; busy
                          answers use the recent generation time if it is longer,
-                         and a model that Ollama unloaded gets at least 15)
+                         and a model that Ollama unloaded gets at least 15).
+                         A request that finds the model unloaded waits for the load
+                         when last load time + recent generation time (15 s each
+                         until measured) fit in 90% of BACKEND_TIMEOUT_S; otherwise
+                         it gets 503 at once and the model reloads in the background.
   OLLAMA_NUM_PREDICT     max tokens the model may generate per request (default 256;
                          0 or less removes the cap). Stops runaway output, e.g. a
                          small model padding format=json output with whitespace.
@@ -55,6 +59,12 @@ DEFAULT_MODEL = "moondream"
 DEFAULT_NUM_PREDICT = 256
 DEFAULT_KEEP_ALIVE = "30m"
 COLD_RETRY_AFTER_S = 15
+# Estimates for the cold-model check until the service has measured them:
+# Qwen2.5-VL 3B on a Xavier NX loads in about 15 s and answers in about 13.5 s.
+DEFAULT_LOAD_S = 15.0
+DEFAULT_GENERATE_S = 15.0
+# A load_duration below this is a model that was already in memory.
+MIN_LOAD_S = 0.5
 
 MAX_TAGS = 10
 MAX_NAME = 120
@@ -642,6 +652,9 @@ class OllamaBackend(Backend):
         # Moving average of recent generation times (model load excluded),
         # used to refuse queued requests that could not finish in time.
         self._avg_s: float | None = None
+        # Last observed model load time, for deciding whether a request that
+        # finds the model unloaded can wait for the load.
+        self._load_s: float | None = None
 
     # -- warm-up (thread, so it is independent of any event loop) ----------
     def start(self) -> None:
@@ -661,8 +674,10 @@ class OllamaBackend(Backend):
         }
         while True:
             try:
+                t0 = time.monotonic()
                 r = httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
                 if r.status_code < 400:
+                    self._record_load(time.monotonic() - t0)
                     self.ready, self.warmup_error = True, None
                     return
                 self.warmup_error = f"HTTP {r.status_code}"
@@ -727,7 +742,10 @@ class OllamaBackend(Backend):
             "keep_alive": self.keep_alive,
         }
         try:
-            httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
+            t0 = time.monotonic()
+            r = httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
+            if r.status_code < 400:
+                self._record_load(time.monotonic() - t0)
         except httpx.HTTPError as exc:
             log.warning("ollama model reload failed: %s", exc)
 
@@ -789,6 +807,7 @@ class OllamaBackend(Backend):
             )
         load = data.get("load_duration")
         load_s = load / 1e9 if isinstance(load, (int, float)) and load > 0 else 0.0
+        self._record_load(load_s)
         return content, load_s
 
     def _parse(self, content: str, context: dict[str, Any], attempt: str) -> dict[str, Any]:
@@ -836,6 +855,18 @@ class OllamaBackend(Backend):
         seconds = max(0.0, seconds)
         self._avg_s = seconds if self._avg_s is None else 0.7 * self._avg_s + 0.3 * seconds
 
+    def _record_load(self, seconds: float) -> None:
+        if seconds >= MIN_LOAD_S:
+            self._load_s = seconds
+
+    def _cold_wait_fits(self) -> bool:
+        """Whether loading the model and then answering fits in 90% of
+        BACKEND_TIMEOUT_S, judging by the last load and recent generation
+        times (15 s each until measured)."""
+        load = self._load_s if self._load_s is not None else DEFAULT_LOAD_S
+        gen = self._avg_s if self._avg_s is not None else DEFAULT_GENERATE_S
+        return load + gen <= get_settings().backend_timeout_s * 0.9
+
     @staticmethod
     def _retry_fits(elapsed: float, load_s: float) -> bool:
         """Retry when generating took at most 40% of the timeout. Model load
@@ -850,10 +881,12 @@ class OllamaBackend(Backend):
         self.start()
         if not self.ready:
             raise Busy(f"model '{self.model}' is warming up", self.retry_after)
-        if not self._in_flight and not await self._model_loaded():
-            # Ollama unloaded the model (restart, eviction, keep_alive). Loading
-            # plus answering may not fit BACKEND_TIMEOUT_S (Qwen on the Jetson:
-            # 15 s + 13.5 s > 25 s), so answer 503 at once and load it now.
+        if not self._in_flight and not self._cold_wait_fits() and not await self._model_loaded():
+            # Ollama unloaded the model (restart, eviction, keep_alive) and
+            # loading plus answering would not fit BACKEND_TIMEOUT_S (Qwen on
+            # the Jetson: 15 s + 13.5 s > 0.9 x 25 s), so answer 503 at once and
+            # load it now. When it fits (45 s), the request simply waits: the
+            # chat call makes Ollama load the model.
             self._reload()
             raise Busy(
                 f"model '{self.model}' is loading", max(self.retry_after, COLD_RETRY_AFTER_S)

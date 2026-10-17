@@ -21,6 +21,7 @@
 #     -e BACKEND=ollama \
 #     -e OLLAMA_URL=http://127.0.0.1:11434 \
 #     -e OLLAMA_MODEL=qwen2.5vl-jetson:3b \
+#     -e BACKEND_TIMEOUT_S=45 \
 #     -e AUTOFILL_TOKEN= \
 #     apotheke-autofill:jetson
 
@@ -39,6 +40,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OLLAMA_URL=http://127.0.0.1:11434 \
     OLLAMA_MODEL=qwen2.5vl-jetson:3b \
     OLLAMA_KEEP_ALIVE=-1 \
+    BACKEND_TIMEOUT_S=45 \
     PATH=/opt/python/bin:${PATH} \
     PIP_INDEX_URL=https://pypi.org/simple \
     PIP_EXTRA_INDEX_URL= \
