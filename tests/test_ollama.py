@@ -585,3 +585,23 @@ def test_top_level_confidence_fills_missing_ones():
     assert out["name"] == {"value": "power drill", "confidence": 0.61}
     assert out["category"] == {"value": "Tools", "confidence": 0.9}
     assert out["tags"] == [{"value": "red"}]
+
+
+@pytest.mark.parametrize("name", ["John", "Maria", "Nikos"])
+def test_lone_first_name_is_not_a_name(name):
+    out = clamp({"name": name, "category": "Books"}, {})
+    assert "name" not in out and out["category"] == {"value": "Books"}
+
+
+@pytest.mark.parametrize("name", ["Knives", "John Deere mower", "Jack", "Rose", "bose", "Lamp"])
+def test_object_names_are_kept(name):
+    assert clamp({"name": name}, {})["name"] == {"value": name}
+
+
+def test_description_echoing_name_or_category_is_dropped():
+    raw = {"name": "bulb", "category": {"value": "artists"}, "description": "Artists"}
+    assert "description" not in clamp(raw, {})
+    raw["description"] = {"value": "bulb", "confidence": 0.67}
+    assert "description" not in clamp(raw, {})
+    raw["description"] = "A frosted light bulb."
+    assert clamp(raw, {})["description"] == {"value": "A frosted light bulb."}

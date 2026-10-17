@@ -329,14 +329,34 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# Moondream sometimes "names" a photo of someone holding or wearing the item
+# after the person ("John"). A lone capitalised common first name is never an
+# object name; words that are also objects (Jack, Rose, Penny...) are left out.
+_FIRST_NAMES = """
+    john james michael david robert william richard thomas peter paul george daniel matthew
+    andrew christopher joseph kevin brian steven eric tom mike dave steve chris nick alex
+    sam ben tim dan jim joe tony anthony charles edward henry jacob ethan noah liam lucas
+    oliver leon mary maria anna sarah emma laura julia lisa linda susan jennifer elizabeth
+    emily olivia sophia sophie hannah jessica michelle anne jane alice helen kate karen
+    nancy chloe mia ella amelia charlotte hans klaus stefan markus andreas nikos giorgos
+    eleni dimitris yannis kostas
+"""
+FIRST_NAMES = frozenset(_FIRST_NAMES.split())
+
+
+def _is_person_name(value: str) -> bool:
+    return value.isalpha() and value.istitle() and value.casefold() in FIRST_NAMES
+
+
 def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     raw = normalize(raw)
     # Moondream often answers flat with a single top-level confidence; it
     # stands in for fields that carry none of their own.
     overall = _confidence(raw.get("confidence"))
     out: dict[str, Any] = {}
-    if (s := _scored(raw.get("name"), MAX_NAME, default_confidence=overall)) is not None:
-        out["name"] = s
+    name = _scored(raw.get("name"), MAX_NAME, default_confidence=overall)
+    if name is not None and not _is_person_name(name["value"]):
+        out["name"] = name
     # When the client lists its categories, the answer must be one of them.
     if (
         s := _scored(
@@ -349,9 +369,12 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         )
     ) is not None:
         out["category"] = s
+    # A description that only repeats the name or category ("bulb", "artists")
+    # says nothing; drop it.
+    echoes = {(_unwrap(raw.get(k))[0] or "").strip().casefold() for k in ("name", "category")}
     if (
         s := _scored(raw.get("description"), MAX_DESCRIPTION, default_confidence=overall)
-    ) is not None:
+    ) is not None and s["value"].casefold() not in echoes:
         out["description"] = s
     tags_raw = raw.get("tags")
     if isinstance(tags_raw, list):
