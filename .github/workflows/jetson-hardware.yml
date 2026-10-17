@@ -92,6 +92,9 @@ jobs:
             exit 1
           fi
           curl -fsS --max-time 10 "${OLLAMA_URL%/}/api/tags" -o "$OUT/ollama-tags.json"
+          # Remember which models the board's own service had loaded, so Clean
+          # up can put them back after the smoke test evicts them.
+          curl -fsS --max-time 10 "${OLLAMA_URL%/}/api/ps" -o "$RUNNER_TEMP/ollama-ps-before.json" || true
           python3 - "$OUT/ollama-tags.json" "$OLLAMA_MODEL" << 'PY'
           import json, sys
           names = [m.get("name", "") for m in json.load(open(sys.argv[1])).get("models", [])]
@@ -147,6 +150,7 @@ jobs:
             -e BACKEND=ollama \
             -e OLLAMA_URL -e OLLAMA_MODEL -e AUTOFILL_TOKEN \
             -e OLLAMA_LOG_RAW=1 \
+            -e OLLAMA_KEEP_ALIVE=5m \
             -e OLLAMA_QUEUE_SIZE=0 \
             -e BACKEND_TIMEOUT_S=25 \
             --entrypoint python3.11 \
@@ -210,5 +214,27 @@ jobs:
         if: always()
         run: |
           docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          # Give the memory back: unload the CI model and reload what the
+          # board's service had loaded before (kept resident, as it was).
+          python3 - "$RUNNER_TEMP/ollama-ps-before.json" "${OLLAMA_URL%/}" "$OLLAMA_MODEL" << 'PY' || true
+          import json, sys, urllib.request
+          path, url, ci_model = sys.argv[1:4]
+          def gen(model, keep_alive):
+              body = json.dumps({"model": model, "prompt": "", "stream": False, "keep_alive": keep_alive})
+              req = urllib.request.Request(url + "/api/generate", body.encode(), {"Content-Type": "application/json"})
+              urllib.request.urlopen(req, timeout=600).read()
+          try:
+              before = [m.get("name") or m.get("model") for m in json.load(open(path)).get("models") or []]
+          except (OSError, ValueError, AttributeError):
+              before = []
+          base = lambda n: n if ":" in n else n + ":latest"
+          if base(ci_model) not in {base(n) for n in before if n}:
+              gen(ci_model, 0)
+              print(f"unloaded {ci_model}")
+          for name in before:
+              if name and base(name) != base(ci_model):
+                  gen(name, -1)
+                  print(f"reloaded {name}")
+          PY
           # Only dangling images this workflow built; never other images on the board.
           docker image prune -f --filter "label=$CI_LABEL" || true

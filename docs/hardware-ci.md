@@ -69,3 +69,7 @@ python3 scripts/hardware_smoke.py report --results hardware-smoke.json
 
 Regenerate the fixture photos with `python scripts/make_hardware_fixtures.py`
 (needs Pillow).
+
+## Effect on the board's own service
+
+The smoke test loads Moondream into the board's Ollama, which can only hold one model, so the production model gets evicted while it runs. The CI container uses `OLLAMA_KEEP_ALIVE=5m` instead of the image's `-1`. The Clean up step unloads Moondream (unless it was already loaded before the run) and reloads the models that `/api/ps` listed before the run, with `keep_alive: -1`. Until that reload finishes, the live service answers 503 with `Retry-After`, and it would recover by itself anyway.
