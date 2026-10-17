@@ -8,7 +8,9 @@ Env (read when the backend is created):
                          /v1/info reports ready:false and /v1/suggest answers 503
                          with Retry-After until it has loaded. 0 skips warm-up.
   OLLAMA_QUEUE_SIZE      requests allowed to wait behind the one in flight (default 1)
-  OLLAMA_RETRY_AFTER_S   Retry-After seconds on 503 busy/warming (default 5)
+  OLLAMA_RETRY_AFTER_S   Retry-After seconds on 503 busy/warming (default 5; busy
+                         answers use the recent generation time if it is longer,
+                         and a model that Ollama unloaded gets at least 15)
   OLLAMA_NUM_PREDICT     max tokens the model may generate per request (default 256;
                          0 or less removes the cap). Stops runaway output, e.g. a
                          small model padding format=json output with whitespace.
@@ -34,6 +36,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -51,6 +54,7 @@ DEFAULT_URL = "http://ollama:11434"
 DEFAULT_MODEL = "moondream"
 DEFAULT_NUM_PREDICT = 256
 DEFAULT_KEEP_ALIVE = "30m"
+COLD_RETRY_AFTER_S = 15
 
 MAX_TAGS = 10
 MAX_NAME = 120
@@ -403,6 +407,10 @@ def _name_agreeing_with(
     # appears later in it ("...with a Reebok logo").
     if name is not None and _words(name["value"]) & _words(derived):
         return name
+    # A model that is sure of its name (Qwen answers 0.95) is trusted: its
+    # "book" for "a stack of unbound paper sheets" is the better name.
+    if name is not None and (name.get("confidence") or 0) >= TRUSTED_NAME_CONFIDENCE:
+        return name
     out: dict[str, Any] = {"value": _cap(derived)}
     conf = name.get("confidence") if name else overall
     if conf is not None:
@@ -469,6 +477,7 @@ PLAIN_PROMPT = "Describe the main object in this photo in one short sentence."
 TEXT_NAME_CONFIDENCE = 0.3
 TEXT_DESCRIPTION_CONFIDENCE = 0.4
 DERIVED_NAME_CONFIDENCE = 0.5
+TRUSTED_NAME_CONFIDENCE = 0.9
 MAX_NAME_WORDS = 4
 MAX_PHRASE_WORDS = 6
 
@@ -630,6 +639,9 @@ class OllamaBackend(Backend):
         self._start_lock = threading.Lock()
         self._in_flight = 0
         self._waiting = 0
+        # Moving average of recent generation times (model load excluded),
+        # used to refuse queued requests that could not finish in time.
+        self._avg_s: float | None = None
 
     # -- warm-up (thread, so it is independent of any event loop) ----------
     def start(self) -> None:
@@ -806,6 +818,7 @@ class OllamaBackend(Backend):
         elif self.format_mode == "json":
             fmt = "json"
         content, load_s = await self._chat(build_prompt(context), image_b64, fmt)
+        self._record(time.monotonic() - started - load_s)
         try:
             return self._parse(content, context, "json")
         except BackendError:
@@ -813,6 +826,10 @@ class OllamaBackend(Backend):
                 raise
         content, _ = await self._chat(PLAIN_PROMPT, image_b64, None)
         return self._parse(content, context, "plain")
+
+    def _record(self, seconds: float) -> None:
+        seconds = max(0.0, seconds)
+        self._avg_s = seconds if self._avg_s is None else 0.7 * self._avg_s + 0.3 * seconds
 
     @staticmethod
     def _retry_fits(elapsed: float, load_s: float) -> bool:
@@ -828,10 +845,26 @@ class OllamaBackend(Backend):
         self.start()
         if not self.ready:
             raise Busy(f"model '{self.model}' is warming up", self.retry_after)
+        if not self._in_flight and not await self._model_loaded():
+            # Ollama unloaded the model (restart, eviction, keep_alive). Loading
+            # plus answering may not fit BACKEND_TIMEOUT_S (Qwen on the Jetson:
+            # 15 s + 13.5 s > 25 s), so answer 503 at once and load it now.
+            self._reload()
+            raise Busy(
+                f"model '{self.model}' is loading", max(self.retry_after, COLD_RETRY_AFTER_S)
+            )
         # One request in flight, up to queue_size waiting; the rest get 503.
+        # A request is also refused when, judging by recent generation times,
+        # it would time out while waiting its turn.
         # Plain counters + polling keep this independent of the event loop.
-        if self._in_flight and self._waiting >= self.queue_size:
-            raise Busy("backend busy, queue full", self.retry_after)
+        if self._in_flight:
+            if self._waiting >= self.queue_size:
+                raise Busy("backend busy, queue full", self._busy_retry_after())
+            timeout = get_settings().backend_timeout_s
+            if self._avg_s is not None and (self._waiting + 2) * self._avg_s > timeout * 0.9:
+                raise Busy(
+                    "backend busy, a queued request would time out", self._busy_retry_after()
+                )
         self._waiting += 1
         try:
             while self._in_flight:
@@ -843,3 +876,8 @@ class OllamaBackend(Backend):
             return await self.generate(image_bytes, context)
         finally:
             self._in_flight -= 1
+
+    def _busy_retry_after(self) -> int:
+        if self._avg_s is None:
+            return self.retry_after
+        return max(self.retry_after, math.ceil(self._avg_s * (self._waiting + 1)))

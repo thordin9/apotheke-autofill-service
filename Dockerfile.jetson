@@ -20,7 +20,7 @@
 #   docker run --runtime nvidia --network host \
 #     -e BACKEND=ollama \
 #     -e OLLAMA_URL=http://127.0.0.1:11434 \
-#     -e OLLAMA_MODEL=moondream \
+#     -e OLLAMA_MODEL=qwen2.5vl-jetson:3b \
 #     -e AUTOFILL_TOKEN= \
 #     apotheke-autofill:jetson
 
@@ -37,7 +37,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     BACKEND=ollama \
     PORT=8080 \
     OLLAMA_URL=http://127.0.0.1:11434 \
-    OLLAMA_MODEL=moondream \
+    OLLAMA_MODEL=qwen2.5vl-jetson:3b \
     OLLAMA_KEEP_ALIVE=-1 \
     PATH=/opt/python/bin:${PATH} \
     PIP_INDEX_URL=https://pypi.org/simple \

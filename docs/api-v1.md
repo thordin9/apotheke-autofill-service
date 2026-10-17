@@ -78,7 +78,7 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 | 401 | `unauthorized` | token required and missing/wrong (`WWW-Authenticate: Bearer`) |
 | 413 | `payload_too_large` | image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760); advertised as `max_image_bytes` in `/v1/info` |
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
-| 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, or busy (queue full). Warming-up and busy responses carry `Retry-After: <seconds>` |
+| 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading and busy responses carry `Retry-After: <seconds>` |
 | 503 | `backend_error` | backend answered but its output was unusable (e.g. model returned invalid/empty JSON, upstream HTTP error) |
 | 504 | `backend_timeout` | backend exceeded `BACKEND_TIMEOUT_S` (default 25 s) |
 

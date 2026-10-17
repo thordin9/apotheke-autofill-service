@@ -91,9 +91,32 @@ Checked against the Ollama library on 2026-10-14:
 ## Jetson (JetPack 5 / L4T r35)
 
 `Dockerfile.jetson` is based on `dustynv/ollama:r35.4.1` (dusty-nv's Jetson
-container, not the stock `ollama/ollama` image) and sets `BACKEND=ollama` plus
-`OLLAMA_MODEL=moondream` and `OLLAMA_URL=http://127.0.0.1:11434` (Ollama on the
-device, not a Compose service named `ollama`).
+container, not the stock `ollama/ollama` image) and sets `BACKEND=ollama`,
+`OLLAMA_MODEL=qwen2.5vl-jetson:3b`, `OLLAMA_KEEP_ALIVE=-1` and
+`OLLAMA_URL=http://127.0.0.1:11434` (Ollama on the device, not a Compose service
+named `ollama`).
+
+### Default model on the Jetson: `qwen2.5vl-jetson:3b`
+
+On 9 product photos at 1024 px (what Apotheke sends), Qwen2.5-VL 3B picked the
+right category on 9/9 against Moondream's 5/9, at about 13.5 s per photo
+against 4.3 s. Measurements are in [docs/benchmarks.md](docs/benchmarks.md).
+
+Stock `qwen2.5vl:3b` does not fit a Xavier NX: at load Ollama reserves room for
+a 2-megapixel image, which without flash attention (unsupported on this GPU)
+needs a 7.3 GiB buffer, and falls back to the CPU. `qwen2.5vl-jetson:3b` is a
+local copy with the same weights whose GGUF caps images at about 0.5 MP
+(`qwen25vl.vision.max_pixels=501760`), with `num_ctx 4096`. It has to be created
+on the board once; the steps are in [docs/benchmarks.md](docs/benchmarks.md).
+Moondream still works (`-e OLLAMA_MODEL=moondream`) and is about 3× faster but
+much less accurate.
+
+With Qwen a request takes about 13.5 s of the 25 s `BACKEND_TIMEOUT_S`, which
+leaves no room for loading the model (about 15 s) or for a request queued
+behind another. So when Ollama has unloaded the model, `/v1/suggest` answers
+503 with `Retry-After: 15` at once and reloads it, and a request that would
+time out in the queue gets 503 with a `Retry-After` based on recent request
+times. Apotheke's default 30 s timeout covers the 25 s service limit.
 
 That base is Ubuntu 20.04 with glibc 2.31. `python3` is 3.8.10, `python3.9` is
 3.9.5, `python` is 2.7, and neither `pip` nor `pip3` is installed. This service
@@ -103,17 +126,13 @@ that only needs glibc 2.17 and already includes pip) and then installs
 publishes Ubuntu 20.04 arm64 packages, which is why the image does not
 `apt-get install python3.11`.
 
-The `ollama` backend on this branch is still a placeholder: the process starts
-and `/healthz` is 200, but `/v1/info` and `/v1/suggest` return 503
-`backend_unavailable`. The image sets `OLLAMA_URL` and `OLLAMA_MODEL`, which is
-what that backend reads.
 
 ```bash
 docker build -f Dockerfile.jetson -t apotheke-autofill:jetson .
 docker run --runtime nvidia --network host \
   -e BACKEND=ollama \
   -e OLLAMA_URL=http://127.0.0.1:11434 \
-  -e OLLAMA_MODEL=moondream \
+  -e OLLAMA_MODEL=qwen2.5vl-jetson:3b \
   -e AUTOFILL_TOKEN= \
   apotheke-autofill:jetson
 ```
@@ -148,10 +167,10 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `ECHO_DELAY_MS` | `0` | Echo only: delay before answering. |
 | `OLLAMA_URL` | `http://ollama:11434` | Base URL the app reads. The x86 Ollama profile sets `http://ollama:11434`. The Jetson image sets `http://127.0.0.1:11434`. |
 | `OLLAMA_HOST` | `0.0.0.0:11434` on the server image | Ollama server bind address, and the address the `ollama` CLI uses. Not read by the app. |
-| `OLLAMA_MODEL` | `moondream` | Model the app requests, and the default tag `ollama-init` pulls. `qwen2.5vl:3b` (or another Ollama vision tag) is an option: better output, slower. Pull it first: `ollama pull <model>`. |
+| `OLLAMA_MODEL` | `moondream` (`qwen2.5vl-jetson:3b` in the Jetson image) | Model the app requests, and the default tag `ollama-init` pulls. `qwen2.5vl:3b` (or another Ollama vision tag) is an option: better output, slower. Pull it first: `ollama pull <model>`. |
 | `OLLAMA_EXTRA_MODEL` | *(unset)* | Ollama profile only. Extra library tag for `ollama-init` to pull, for example `qwen2.5vl:3b`. |
 | `OLLAMA_WARMUP` | `1` | Ollama only: load the model in the background at startup. Until loaded, `/v1/info` has `"ready": false` and `/v1/suggest` returns 503 + `Retry-After`. `0` skips warm-up. |
-| `OLLAMA_QUEUE_SIZE` | `1` | Ollama only: requests allowed to wait behind the one in flight; more get 503 `backend_unavailable` + `Retry-After`. |
+| `OLLAMA_QUEUE_SIZE` | `1` | Ollama only: requests allowed to wait behind the one in flight; more get 503 `backend_unavailable` + `Retry-After`. A request is also refused at once when, judging by recent request times, it would time out while queued. |
 | `OLLAMA_RETRY_AFTER_S` | `5` | Ollama only: `Retry-After` value for warming-up/busy 503s. |
 | `OLLAMA_NUM_PREDICT` | `256` | Ollama only: most tokens the model may generate per request. Caps runaway output (small models sometimes pad `format=json` answers with whitespace until the timeout). `0` removes the cap. |
 | `OLLAMA_TEMPERATURE` | `0` | Ollama only: sampling temperature. |

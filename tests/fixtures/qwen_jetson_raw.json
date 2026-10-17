@@ -1,0 +1,63 @@
+{
+ "source": "qwen2.5vl-jetson:3b on the Jetson (Ollama 0.15.6, format=json, num_predict 256, 1024 px photos), raw /api/chat content per photo, Oct 18 2026",
+ "context": {
+  "categories": [
+   "Tools",
+   "Electronics",
+   "Clothing",
+   "Books",
+   "Kitchen",
+   "Furniture",
+   "Lighting",
+   "Shoes",
+   "Other"
+  ]
+ },
+ "outputs": [
+  {
+   "photo": "cordless_drill.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"drill\",\n  \"category\": \"Tools\",\n  \"tags\": [\"blue\", \"electric\", \"power\", \"handy\", \"tool\"],\n  \"description\": \"a blue cordless drill with a battery pack\",\n  \"confidence\": 0.95\n}"
+  },
+  {
+   "photo": "desk_lamp.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"blue light\",\n  \"category\": \"Lighting\",\n  \"tags\": [\"transparent\", \"blue\", \"industrial\"],\n  \"description\": \"a blue light fixture with a long arm\",\n  \"confidence\": 0.95\n}"
+  },
+  {
+   "photo": "hammer.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"hammer\",\n  \"category\": \"Tools\",\n  \"tags\": [\"metal\", \"orange\", \"unbranded\"],\n  \"description\": \"A hammer with a metal head and an orange handle.\",\n  \"confidence\": 0.95\n}"
+  },
+  {
+   "photo": "headphones.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"headphones\",\n  \"category\": \"Electronics\",\n  \"tags\": [\"black\", \"headphones\", \"bose\"],\n  \"description\": \"a pair of black Bose headphones with a carrying case\",\n  \"confidence\": 0.95\n}"
+  },
+  {
+   "photo": "kitchen_knife.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"knife\",\n  \"category\": \"Kitchen\",\n  \"tags\": [\"metal\", \"black\", \"gerlach\"],\n  \"description\": \"a set of kitchen knives with black handles and stainless steel blades\",\n  \"confidence\": 0.95\n}"
+  },
+  {
+   "photo": "laptop.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"laptop\",\n  \"category\": \"Electronics\",\n  \"tags\": [\"black\", \"ibm\", \"thinkpad\"],\n  \"description\": \"a black ibm thinkpad laptop with a web page open on the screen\",\n  \"confidence\": 0.95\n}"
+  },
+  {
+   "photo": "paperback_book.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"book\",\n  \"category\": \"Books\",\n  \"tags\": [\"paper\", \"white\", \"unbound\"],\n  \"description\": \"A stack of unbound white paper sheets.\",\n  \"confidence\": 0.95\n}"
+  },
+  {
+   "photo": "sneakers.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"sneaker\",\n  \"category\": \"Shoes\",\n  \"tags\": [\"leather\", \"white\", \"red\", \"reebok\"],\n  \"description\": \"A white and red sneaker with a Reebok logo.\",\n  \"confidence\": 0.95\n}"
+  },
+  {
+   "photo": "t-shirt.jpg",
+   "done_reason": "stop",
+   "raw": "{\n  \"name\": \"T-shirt\",\n  \"category\": \"Clothing\",\n  \"tags\": [\"heather\", \"black\", \"text\"],\n  \"description\": \"A black heather T-shirt with white text.\",\n  \"confidence\": 0.95\n}"
+  }
+ ]
+}

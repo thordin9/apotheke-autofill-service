@@ -86,6 +86,7 @@ def test_num_predict_zero_removes_cap(oclient, fake):
 
 
 def test_model_env(oclient, fake):
+    fake.loaded = ["qwen2-vl-2b:latest"]
     r = post_image(oclient(OLLAMA_MODEL="qwen2-vl-2b"))
     assert r.status_code == 200
     assert fake.chats()[-1]["model"] == "qwen2-vl-2b"
@@ -722,8 +723,64 @@ def test_info_ready_when_ps_is_unavailable(oclient, fake):
     assert oclient().get("/v1/info").json()["ready"] is True
 
 
-def test_suggest_still_works_while_model_reloads(oclient, fake):
+def test_cold_model_gets_503_at_once_and_is_reloaded(oclient, fake):
+    # Qwen on the Jetson: 15 s load + 13.5 s answer > 25 s, so waiting would
+    # end in a 504. Answer 503 with Retry-After straight away instead.
     fake.loaded = []
-    c = oclient()
-    assert c.get("/v1/info").json()["ready"] is False
-    assert post_image(c).status_code == 200  # Ollama loads it on demand
+    c = oclient(OLLAMA_RETRY_AFTER_S="5")
+    r = post_image(c)
+    assert r.status_code == 503 and r.headers["Retry-After"] == "15"
+    body = assert_contract(r, "/v1/suggest", "post")
+    assert body["error"]["code"] == "backend_unavailable"
+    assert "loading" in body["error"]["message"]
+    assert fake.chats() == []
+    assert _wait(lambda: any(p == "/api/generate" for p, _ in fake.requests))
+    fake.loaded = ["moondream:latest"]
+    assert post_image(c).status_code == 200
+
+
+def test_cold_check_tolerates_old_ollama(oclient, fake):
+    fake.loaded = None  # no /api/ps: assume loaded, as before
+    assert post_image(oclient()).status_code == 200
+
+
+def _post_in_thread(c, results):
+    import threading
+
+    t = threading.Thread(target=lambda: results.append(post_image(c)))
+    t.start()
+    return t
+
+
+def test_queued_request_refused_when_it_would_time_out(oclient, fake):
+    # Learned generation time 0.6 s, timeout 1 s: a queued request would need
+    # about 1.2 s, so it gets 503 + Retry-After at once instead of a 504.
+    fake.chat_delay = 0.6
+    c = oclient(BACKEND_TIMEOUT_S="1", OLLAMA_QUEUE_SIZE="1", OLLAMA_RETRY_AFTER_S="1")
+    assert post_image(c).status_code == 200  # learns the 0.6 s
+    fake.release.clear()
+    results: list = []
+    t = _post_in_thread(c, results)
+    assert _wait(lambda: len(fake.chats()) == 2)
+    r = post_image(c)
+    assert r.status_code == 503 and "would time out" in r.json()["error"]["message"]
+    assert int(r.headers["Retry-After"]) >= 1
+    fake.release.set()
+    t.join(5)
+    assert results[0].status_code == 200
+
+
+def test_queued_request_admitted_when_it_fits(oclient, fake):
+    fake.chat_delay = 0.1
+    c = oclient(BACKEND_TIMEOUT_S="5", OLLAMA_QUEUE_SIZE="1")
+    assert post_image(c).status_code == 200
+    fake.release.clear()
+    results: list = []
+    t1 = _post_in_thread(c, results)
+    assert _wait(lambda: len(fake.chats()) == 2)
+    t2 = _post_in_thread(c, results)
+    assert _wait(lambda: c.app.state.backend._waiting == 1)
+    fake.release.set()
+    t1.join(5)
+    t2.join(5)
+    assert [r.status_code for r in results] == [200, 200]
