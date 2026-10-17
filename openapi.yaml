@@ -107,6 +107,17 @@ components:
         ready:
           type: boolean
           description: false while the backend is still loading its model (suggest answers 503 + Retry-After)
+        avg_latency_ms:
+          type: integer
+          minimum: 0
+          examples: [4000, 13500]
+          description: |
+            Added in v1.1 (additive; version stays "1"). Optional; clients MUST
+            tolerate its absence.
+            Typical time in milliseconds for one /v1/suggest generation on the
+            loaded model (moving average of recent requests, model load time
+            excluded). Absent until the backend has a measurement. Meant for
+            estimated progress indicators; not a deadline or a guarantee.
     Context:
       type: object
       properties:

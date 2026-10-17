@@ -164,7 +164,7 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `MAX_IMAGE_BYTES` | `10485760` (10 MiB) | Larger images get 413. |
 | `BACKEND_TIMEOUT_S` | `25` | Backend call limit; exceeded → 504. |
 | `ECHO_MODE` | `ok` | Echo only: `ok`, `error` (503), `malformed` (200 with invalid JSON body), `slow` (hangs → 504 after `BACKEND_TIMEOUT_S`). |
-| `ECHO_DELAY_MS` | `0` | Echo only: delay before answering. |
+| `ECHO_DELAY_MS` | `0` | Echo only: delay before answering. When above 0, `/v1/info` reports it as `avg_latency_ms`, so clients can test progress estimates without a model. |
 | `OLLAMA_URL` | `http://ollama:11434` | Base URL the app reads. The x86 Ollama profile sets `http://ollama:11434`. The Jetson image sets `http://127.0.0.1:11434`. |
 | `OLLAMA_HOST` | `0.0.0.0:11434` on the server image | Ollama server bind address, and the address the `ollama` CLI uses. Not read by the app. |
 | `OLLAMA_MODEL` | `moondream` (`qwen2.5vl-jetson:3b` in the Jetson image) | Model the app requests, and the default tag `ollama-init` pulls. `qwen2.5vl:3b` (or another Ollama vision tag) is an option: better output, slower. Pull it first: `ollama pull <model>`. |
@@ -190,6 +190,12 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `clip` | Placeholder. Service starts and `/healthz` is 200, but `/v1/info` and `/v1/suggest` return **503** `backend_unavailable`. |
 
 Example: `BACKEND=ollama OLLAMA_URL=http://localhost:11434 uvicorn app.main:app --port 8080`.
+
+`GET /v1/info` reports `avg_latency_ms` (optional, added in API v1.1) once the
+Ollama backend has finished a suggestion: the moving average of recent
+generation times in ms, model load excluded. Clients such as Apotheke can fill
+an estimated progress bar against it; it is absent after a restart until the
+first request completes. See [docs/api-v1.md](docs/api-v1.md).
 
 Placeholders return 503 rather than failing at startup so Docker health checks
 and Apotheke's "test connection" both show a clear "not implemented" message.

@@ -784,3 +784,36 @@ def test_queued_request_admitted_when_it_fits(oclient, fake):
     t1.join(5)
     t2.join(5)
     assert [r.status_code for r in results] == [200, 200]
+
+
+def test_info_latency_absent_before_first_request(oclient):
+    body = assert_contract(oclient().get("/v1/info"), "/v1/info")
+    assert body["ready"] is True and "avg_latency_ms" not in body
+
+
+def test_info_latency_after_requests(oclient, fake):
+    c = oclient()
+    fake.chat_delay = 0.2
+    assert post_image(c).status_code == 200
+    first = assert_contract(c.get("/v1/info"), "/v1/info")["avg_latency_ms"]
+    assert isinstance(first, int) and 180 <= first < 1500
+    fake.chat_delay = 0.6
+    assert post_image(c).status_code == 200
+    second = assert_contract(c.get("/v1/info"), "/v1/info")["avg_latency_ms"]
+    # Moving average: moves toward the slower request, but only 30% of the way.
+    assert first < second < 600
+    assert abs(second - (0.7 * first + 0.3 * 600)) < 150
+
+
+def test_info_latency_excludes_model_load(oclient, fake):
+    c = oclient()
+    fake.chat_delay = 0.5
+    fake.load_duration_ns = 400_000_000  # 0.4 s of the 0.5 s was loading
+    assert post_image(c).status_code == 200
+    assert c.get("/v1/info").json()["avg_latency_ms"] < 400
+
+
+def test_info_latency_is_rounded_ms(oclient):
+    c = oclient()
+    c.app.state.backend._avg_s = 13.5404
+    assert c.get("/v1/info").json()["avg_latency_ms"] == 13540

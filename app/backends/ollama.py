@@ -683,11 +683,16 @@ class OllamaBackend(Backend):
             # next suggestion does not pay the load time.
             ready = False
             self._reload()
-        return {
+        out: dict[str, Any] = {
             "name": f"ollama-{self.model}",
             "capabilities": list(CAPABILITIES),
             "ready": ready,
         }
+        if self._avg_s is not None:
+            # Typical generation time (model load excluded), for clients that
+            # show an estimated progress bar. Absent until a request finished.
+            out["avg_latency_ms"] = round(self._avg_s * 1000)
+        return out
 
     async def _model_loaded(self) -> bool:
         """Whether Ollama has the model in memory (GET /api/ps). Any error
