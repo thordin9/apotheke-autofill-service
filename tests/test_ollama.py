@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 
 import pytest
 from conftest import JPEG, assert_contract, post_image
 from ollama_mock import FakeOllama
 
-from app.backends.ollama import MAX_TAG, MAX_TAGS, build_prompt, clamp, extract_json
+from app.backends.ollama import (
+    MAX_TAG,
+    MAX_TAGS,
+    RAW_LOG_LIMIT,
+    build_prompt,
+    clamp,
+    extract_json,
+    truncate_for_log,
+)
+
+LOGGER = "app.backends.ollama"
+IMAGE = b"\xff\xd8\xff\xe0" + bytes(range(256)) * 4  # distinctive base64
 
 
 @pytest.fixture
@@ -91,6 +103,63 @@ def test_malformed_model_output(oclient, fake, content):
     r = post_image(oclient())
     assert r.status_code == 503
     assert assert_contract(r, "/v1/suggest", "post")["error"]["code"] == "backend_error"
+
+
+def _log_text(caplog) -> str:
+    return "\n".join(r.getMessage() for r in caplog.records if r.name == LOGGER)
+
+
+def test_unusable_output_logs_raw_at_warning(oclient, fake, caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    fake.chat_content = "I see a red drill.\nIt is on a table."
+    c = oclient(AUTOFILL_TOKEN="s3cret-token")
+    r = post_image(c, data=IMAGE, headers={"Authorization": "Bearer s3cret-token"})
+    assert r.status_code == 503
+    warnings = [r for r in caplog.records if r.name == LOGGER and r.levelno == logging.WARNING]
+    assert warnings
+    text = _log_text(caplog)
+    assert "I see a red drill.\\nIt is on a table." in text  # repr: one line per record
+    assert "model=moondream" in text
+    assert base64.b64encode(IMAGE).decode()[:40] not in text
+    assert "s3cret-token" not in text
+
+
+def test_raw_log_is_truncated(oclient, fake, caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    fake.chat_content = "x" * 10_000
+    assert post_image(oclient()).status_code == 503
+    rec = next(r for r in caplog.records if r.name == LOGGER)
+    assert len(rec.getMessage()) < RAW_LOG_LIMIT + 300
+    assert "more chars]" in rec.getMessage()
+
+
+def test_truncate_for_log():
+    assert truncate_for_log("abc", 5) == "abc"
+    assert truncate_for_log("abcdefgh", 5) == "abcde...[3 more chars]"
+
+
+def test_good_output_not_logged_by_default(oclient, fake, caplog):
+    caplog.set_level(logging.DEBUG, logger=LOGGER)
+    assert post_image(oclient()).status_code == 200
+    assert not [r for r in caplog.records if r.name == LOGGER]
+
+
+def test_log_raw_flag_logs_every_output_at_debug(oclient, fake, caplog):
+    caplog.set_level(logging.DEBUG, logger=LOGGER)
+    c = oclient(OLLAMA_LOG_RAW="1")
+    assert post_image(c, data=IMAGE).status_code == 200
+    debug = [r for r in caplog.records if r.name == LOGGER and r.levelno == logging.DEBUG]
+    assert len(debug) == 1
+    assert "Cordless drill" in debug[0].getMessage()
+    assert base64.b64encode(IMAGE).decode()[:40] not in _log_text(caplog)
+
+
+def test_upstream_error_body_logged(oclient, fake, caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    fake.chat_status = 404
+    fake.chat_raw = b'{"error":"model \'moondream\' not found"}'
+    assert post_image(oclient()).status_code == 503
+    assert "not found" in _log_text(caplog)
 
 
 def test_upstream_http_error(oclient, fake):

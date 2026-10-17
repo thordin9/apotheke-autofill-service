@@ -16,6 +16,9 @@ Env (read when the backend is created):
   OLLAMA_KEEP_ALIVE      how long Ollama keeps the model loaded after a request
                          (default 30m; -1 keeps it loaded forever)
   OLLAMA_JSON_FORMAT     1 (default) sends format=json; 0 lets the model answer freely
+  OLLAMA_LOG_RAW         1 logs every raw model answer at DEBUG (default 0). Unusable
+                         answers are always logged at WARNING. Logged text is cut to
+                         2 KB; the image and the request token are never logged.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import re
 import threading
@@ -33,6 +37,8 @@ import httpx
 
 from ..settings import get_settings
 from .base import CAPABILITIES, Backend, BackendUnavailable
+
+log = logging.getLogger(__name__)
 
 DEFAULT_URL = "http://ollama:11434"
 DEFAULT_MODEL = "moondream"
@@ -45,6 +51,7 @@ MAX_CATEGORY = 80
 MAX_TAG = 40
 MAX_DESCRIPTION = 500
 MAX_CONTEXT_ITEMS = 50
+RAW_LOG_LIMIT = 2048
 
 
 class BackendError(BackendUnavailable):
@@ -92,6 +99,23 @@ def extract_json(text: str) -> dict[str, Any]:
         if isinstance(obj, dict):
             return obj
     raise BackendError("model output was not a JSON object")
+
+
+def truncate_for_log(text: str, limit: int = RAW_LOG_LIMIT) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...[{len(text) - limit} more chars]"
+
+
+def _enable_debug_logging() -> None:
+    # OLLAMA_LOG_RAW should work without extra logging config: uvicorn leaves
+    # app loggers at WARNING with no handler, so give this one its own.
+    if log.getEffectiveLevel() > logging.DEBUG:
+        log.setLevel(logging.DEBUG)
+    if not log.hasHandlers():
+        h = logging.StreamHandler()
+        h.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        log.addHandler(h)
 
 
 def _clip(s: str, limit: int) -> str:
@@ -196,6 +220,9 @@ class OllamaBackend(Backend):
         self.temperature = _env_float("OLLAMA_TEMPERATURE", 0.0)
         self.keep_alive = _keep_alive(os.environ.get("OLLAMA_KEEP_ALIVE", ""))
         self.json_format = _env_flag("OLLAMA_JSON_FORMAT", True)
+        self.log_raw = _env_flag("OLLAMA_LOG_RAW", False)
+        if self.log_raw:
+            _enable_debug_logging()
         self.ready = not self.warmup_enabled
         self.warmup_error: str | None = None
         self._warm_thread: threading.Thread | None = None
@@ -251,10 +278,17 @@ class OllamaBackend(Backend):
         except httpx.HTTPError as exc:
             raise BackendUnavailable(f"ollama unreachable at {self.url}: {exc}") from None
         if r.status_code >= 400:
+            log.warning(
+                "ollama %s returned HTTP %d: %r",
+                path,
+                r.status_code,
+                truncate_for_log(r.text),
+            )
             raise BackendError(f"ollama returned HTTP {r.status_code}")
         try:
             data = r.json()
         except ValueError:
+            log.warning("ollama %s returned a non-JSON body: %r", path, truncate_for_log(r.text))
             raise BackendError("ollama returned a non-JSON body") from None
         if not isinstance(data, dict):
             raise BackendError("ollama returned an unexpected body")
@@ -285,8 +319,26 @@ class OllamaBackend(Backend):
         data = await self._post("/api/chat", payload)
         content = (data.get("message") or {}).get("content")
         if not isinstance(content, str):
+            log.warning("ollama response had no message content (keys: %s)", sorted(data))
             raise BackendError("ollama response had no message content")
-        return clamp(extract_json(content), context)
+        if self.log_raw:
+            log.debug(
+                "ollama raw output (model=%s, %d chars): %r",
+                self.model,
+                len(content),
+                truncate_for_log(content),
+            )
+        try:
+            return clamp(extract_json(content), context)
+        except BackendError as exc:
+            log.warning(
+                "ollama output unusable: %s (model=%s, %d chars): %r",
+                exc,
+                self.model,
+                len(content),
+                truncate_for_log(content),
+            )
+            raise
 
     async def suggest(self, image_bytes: bytes, mime: str, context: dict[str, Any]) -> Any:
         self.start()

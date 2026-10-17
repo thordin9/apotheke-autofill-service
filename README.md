@@ -44,6 +44,7 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `OLLAMA_TEMPERATURE` | `0` | Ollama only: sampling temperature. |
 | `OLLAMA_KEEP_ALIVE` | `30m` | Ollama only: how long Ollama keeps the model loaded after a request (duration, or seconds; `-1` = forever). |
 | `OLLAMA_JSON_FORMAT` | `1` | Ollama only: send `format: "json"` to constrain output to JSON. `0` lets the model answer freely; the service still extracts the first JSON object. |
+| `OLLAMA_LOG_RAW` | `0` | Ollama only: `1` logs every raw model answer at DEBUG. Answers that cannot be used are always logged at WARNING. Logged text is cut to 2 KB; the image and the request token are never logged. |
 
 `ECHO_*` are read on every request. Example: `ECHO_MODE=slow BACKEND_TIMEOUT_S=2 uvicorn app.main:app --port 8080`.
 
