@@ -5,7 +5,7 @@ source "$(dirname "$0")/common.sh"
 M=$(sed -n 's/^OLLAMA_MODEL=//p' "$AUTOFILL_DIR/service.env")
 sug() { curl -s -o /tmp/v_$1.json -D /tmp/vh_$1 -w "$1 http=%{http_code} t=%{time_total}s" -H @"$AUTH_HEADER_FILE" -F image=@"$PHOTOS/$2" -F "$CTX" "$SERVICE_URL/v1/suggest"
         echo " retry-after=$(grep -i '^retry-after' /tmp/vh_$1 | tr -d '\r' | cut -d' ' -f2) $(head -c 160 /tmp/v_$1.json)"; }
-info() { curl -s -H @"$AUTH_HEADER_FILE" "$SERVICE_URL/v1/info" | python3 -c "import json,sys;d=json.load(sys.stdin);print('info', d['name'], 'ready=', d['ready'])"; }
+info() { curl -s -H @"$AUTH_HEADER_FILE" "$SERVICE_URL/v1/info" | python3 -c "import json,sys;d=json.load(sys.stdin);print('info', d['name'], 'ready=', d['ready'], 'avg_latency_ms=', d.get('avg_latency_ms'))"; }
 for i in $(seq 1 60); do curl -s -H @"$AUTH_HEADER_FILE" "$SERVICE_URL/v1/info" | grep -q '"ready":true' && break; sleep 2; done
 echo "healthz $(curl -s "$SERVICE_URL/healthz")"; info
 sug basic hammer.jpg

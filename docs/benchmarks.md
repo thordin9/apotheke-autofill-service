@@ -171,16 +171,18 @@ below).
 
 ## Service results
 
-### Qwen 100-run (2252ef5, 1024 px photos)
+### Qwen 100-run (build 2252ef5, 1024 px photos)
 
-> **PLACEHOLDER: not run yet.** `bench/bench100.sh qwen-2252ef5` (100 sequential requests cycling the 9 photos)
-> will be run once against the deployed service when nobody else is using the board, and this table filled in:
-> mean / p50 / p95 / max seconds, HTTP status counts, peak RAM, max GPU temperature.
-> An earlier attempt on build d3f8c3c was stopped before it logged any request, because that build was superseded.
+Run on 2026-10-18 00:56–01:19 with [`bench/bench100.sh`](../bench/bench100.sh): 100 sequential `POST /v1/suggest`
+requests cycling the 9 photos, 9 categories as context, model loaded, nothing else using the service, 20 W,
+`jetson_clocks` off, `tegrastats` every 0.5 s. Service image `apotheke-autofill:jetson-2252ef5`
+(`BACKEND_TIMEOUT_S` 25). Raw CSV: [`bench100-2252ef5_qwen2.5vl-jetson_20w.csv`](../bench/results/bench100-2252ef5_qwen2.5vl-jetson_20w.csv).
 
 | Run | Requests | 200s | Mean | p50 | p95 | Max | Peak RAM | Max GPU temp |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| qwen2.5vl-jetson:3b, 20 W | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| qwen2.5vl-jetson:3b, 20 W (2252ef5) | 100 | 100 | 13.16 s | 13.32 s | 13.80 s | 14.43 s | 5951 MB | 63 °C |
+
+No errors or retries; every request finished well inside the 25 s backend timeout.
 
 ### Moondream 100-run (d3f8c3c, old photo set)
 
@@ -236,8 +238,8 @@ because two Qwen inferences (about 2 × 13.5 s) do not fit in the 25 s backend t
 - **Shared Ollama:** with `OLLAMA_MAX_LOADED_MODELS=1`, anyone loading another model on the board's Ollama evicts Qwen.
   The next service request then gets a 503 with `Retry-After` while it reloads (about 15–20 s).
 - **Memory headroom:** about 0.8–1 GB available with Qwen loaded.
-- **End-to-end timings** below were measured on Moondream / d3f8c3c. Qwen through Apotheke has not been measured yet.
-  Expect about 13–14 s service time plus the upload.
+- **Apotheke's stock categories** (`Documents, Electronics, General, Hobby, Kitchen, Tools`) lack Lighting, Books,
+  Shoes and Clothing, so in the end-to-end test some photos landed in the closest category, or in Hobby or General.
 
 ## Reproduce
 
@@ -276,62 +278,68 @@ docker stop autofill && sudo bench/cmp2.sh apotheke-autofill:jetson moondream qw
 Results go to `bench/out/` (git-ignored). Override `AUTOFILL_DIR`, `AUTH_HEADER_FILE`, `PHOTOS`, `OUT` or
 `SERVICE_URL` from the environment if your layout differs (see [`bench/common.sh`](../bench/common.sh)).
 
-The next section is QA's report, pasted verbatim. It was measured on **Moondream / build d3f8c3c** with the old photo
-set, from Apotheke over the WireGuard tunnel, and it lists upload time separately.
+The next section is QA's report, pasted verbatim. It was measured from Apotheke v2.2.0 over the WireGuard tunnel
+against **build 2252ef5 with qwen2.5vl-jetson:3b**, and it lists upload time separately.
 
 ## End-to-end from Apotheke
 
-Measured on 2026-10-18, 00:11–00:17 Europe/Athens (UTC+3). Each number is a single run.
+Measured on 2026-10-18, 00:50–00:55 Europe/Athens (UTC+3), with no other traffic on the service. Each number is a single run.
 
 ### Setup
 | | |
 |---|---|
-| Apotheke | v2.2.0 (`e3baae4`, same code as PR #20 head `3077eba`), stock categories `Documents, Electronics, General, Hobby, Kitchen, Tools` |
-| Service | `apotheke-autofill:jetson` built from PR #3 `d3f8c3c` (= `025a0eb`) |
-| Model (`/v1/info`) | `ollama-moondream`, backend `ollama`, `max_image_bytes` 10485760, `ready: true`, Moondream 2 (q4_0) on the GPU |
+| Apotheke | v2.2.0 (`e3baae4`), stock categories `Documents, Electronics, General, Hobby, Kitchen, Tools` |
+| Service | `apotheke-autofill:jetson-2252ef5`, built from PR #3 `2252ef5` |
+| Model (`/v1/info`) | `ollama-qwen2.5vl-jetson:3b`, backend `ollama`, `max_image_bytes` 10485760, `ready: true`. 100 % GPU, `OLLAMA_KEEP_ALIVE=-1` |
 | Board | Jetson Xavier NX, L4T R35.6.0, `MODE_20W_6CORE`, `jetson_clocks` off |
 | Network path | Apotheke host → WireGuard tunnel (~20 Mbit/s measured upload) → board, with a 30 Mbit/s cap on traffic coming into the board |
+| Photos | the 9 product photos listed in SOURCES.md |
 
-Apotheke always re-encodes a photo to a ≤1024 px JPEG (quality 82) before sending it, so the service gets 12–230 KB whatever the original size. The tunnel is the worst case. On the LAN, uploads run at the 30 Mbit/s cap, so the "LAN" column swaps the tunnel upload time for size ÷ 30 Mbit/s.
+Apotheke re-encodes every photo to a ≤1024 px JPEG (quality 82) before sending it. The tunnel is the worst case. On the LAN, uploads run at the 30 Mbit/s cap, so the "LAN" column swaps the tunnel upload time for size ÷ 30 Mbit/s.
 
 ### Typical photo (≤1024 px JPEG as Apotheke sends it), model loaded
-Times are in seconds. Total = connection setup (~0.15) + upload + service.
+Times are in seconds. "Service" also includes Apotheke's own processing (about 0.1 s) and the ~0.15 s connection setup is subtracted. Total is what Apotheke's `/autofill/suggest` took.
 
-| Photo | Sent | Upload | Service | Total | Via Apotheke | LAN total (est.) |
-|---|---:|---:|---:|---:|---:|---:|
-| cordless_drill | 12 KB | 0.01 | 6.26 | 6.41 | – ¹ | 6.41 |
-| desk_lamp | 225 KB | 0.09 | 4.41 | 4.65 | 4.86 | 4.62 |
-| hammer | 159 KB | 0.07 | 4.18 | 4.39 | 4.72 | 4.37 |
-| headphones | 81 KB | 0.03 | 4.15 | 4.34 | 4.57 | 4.33 |
-| kitchen_knife | 26 KB | 0.01 | 4.10 | 4.26 | 4.16 | 4.26 |
-| laptop | 129 KB | 0.05 | 4.42 | 4.62 | 4.78 | 4.60 |
-| paperback_book | 148 KB | 0.06 | 3.87 | 4.08 | 4.28 | 4.06 |
-| sneakers | 87 KB | 0.04 | 5.08 | 5.26 | 5.75 | 5.25 |
-| t-shirt | 94 KB | 0.04 | 4.12 | 4.31 | 4.25 | 4.30 |
-| **p50 / max** | | **0.04 / 0.09** | **4.18 / 6.26** | **4.39 / 6.41** | **4.64 / 5.75** | **4.37 / 6.41** |
+| Photo | Sent | Upload | Service | Total via Apotheke | LAN total (est.) | Suggestion |
+|---|---:|---:|---:|---:|---:|---|
+| cordless_drill | 99 KB | 0.04 | 14.81 | 15.00 | 14.99 | cordless drill · Tools |
+| desk_lamp | 26 KB | 0.01 | 13.47 | 13.63 | 13.63 | blue light · Electronics |
+| hammer | 35 KB | 0.01 | 13.51 | 13.68 | 13.67 | hammer · Tools |
+| headphones | 88 KB | 0.04 | 14.00 | 14.18 | 14.17 | headphones · Electronics |
+| kitchen_knife | 28 KB | 0.01 | 13.02 | 13.18 | 13.18 | knives · Kitchen |
+| laptop | 137 KB | 0.06 | 14.12 | 14.33 | 14.31 | laptop · Electronics |
+| paperback_book | 159 KB | 0.07 | 13.53 | 13.74 | 13.72 | book · Documents |
+| sneakers | 95 KB | 0.04 | 14.03 | 14.22 | 14.21 | sneaker · General |
+| t-shirt | 149 KB | 0.06 | 13.96 | 14.17 | 14.15 | T-shirt · Hobby |
+| **p50 / max** | | **0.04 / 0.07** | **13.96 / 14.81** | **14.17 / 15.00** | **14.15 / 14.99** | |
 
-¹ First request after the model had been unloaded: 15.9 s, then a 503 `backend_error` (the model load used up the budget for the plain-text retry).
+Names are right on 8 of 9 photos. Categories are right or the closest available on 8 of 9: the stock list has no Lighting, Books, Shoes or Clothing, and the t-shirt was put in Hobby.
 
-Service times of 5–6 s are photos where Moondream's JSON answer was unusable, so the service made a second plain-text call.
+### Large photo and cold start
+| Case | Upload | Service | Total | LAN total (est.) |
+|---|---:|---:|---:|---:|
+| 5600×4200 JPEG, 9.1 MiB, sent straight to the service | ~3.9 | ~16.7 | 20.8 | ~19.4 (upload 2.55) |
+| Same photo via Apotheke (downscaled to ~80 KB) | <0.05 | – | 14.4 | ~14.4 |
+| Model unloaded: first request | – | – | 503 in 0.6 s, `Retry-After: 15` | – |
+| Retry after Retry-After (model loading in the background) | <0.05 | – | 16.4 | ~16.4 |
 
-### Raw large photo
-| Photo | Sent | Upload | Service | Total | LAN total (est.) |
-|---|---:|---:|---:|---:|---:|
-| 5600×4200 JPEG, 9.1 MiB, sent straight to the service | 9.1 MiB | ~3.9 | ~7.3 | 11.34 | ~10.0 (upload 2.55) |
-| Same photo via Apotheke (downscaled to ~80 KB) | ~80 KB | <0.05 | – | 4.89 | ~4.9 |
-| 10.6 MiB JPEG via Apotheke (downscaled) | ~80 KB | <0.05 | – | 4.69 | ~4.7 |
+Every case through Apotheke stays well inside the 30 s client timeout (worst 16.4 s). A full-size photo sent straight to the service uses 16.7 s of the 25 s backend timeout.
 
-Every case fits the 25 s backend timeout and Apotheke's 30 s client timeout.
+### Concurrency
+| Case | Result |
+|---|---|
+| 2 at once | first 200 (≈14 s). Second **503 `backend_unavailable` in ~0.8 s**, `Retry-After: 14` ("a queued request would time out"). No 504 |
+| 3 at once | 1 × 200. 2nd and 3rd 503 in ~0.75 s, `Retry-After: 14` |
 
 ### Failure handling
 | Case | Service answer | Apotheke shows |
 |---|---|---|
 | Wrong token | 401 in 0.3 s | "the service refused the access token" |
-| Service unreachable (dead port) | – | "the autofill service is not reachable" (0.3 s) |
-| 3 requests at once | 2 × 200, 3rd 503 `backend_unavailable`, `Retry-After: 5` (0.6 s) | "the service is busy or not ready. Try again later." |
-| Image > 10 MiB | 413 `payload_too_large` after the upload (11.1 MB: 4.5 s) | JPEGs are downscaled first. A HEIC over the limit is blocked locally: "larger than the service accepts" |
+| Service unreachable (dead port) | – | "the autofill service is not reachable" (0.2 s) |
+| Busy, or model loading | 503 + Retry-After | "the service is busy or not ready. Try again later." |
+| Model loading, Test connection | `/v1/info` `ready:false` | "…still warming up (loading its model). Try again in a minute." |
+| Image > 10 MiB | 413 `payload_too_large` (11.1 MB: 4.9 s) | JPEGs are downscaled first. An oversized HEIC: "larger than the service accepts" |
 | HEIC (no pillow-heif) | 415 `unsupported_media_type` | "the service cannot read this kind of image" |
-| Unusable model output | 503 `backend_error`, no Retry-After | the same "busy" message |
 | Token exposure | – | not in any page, export, backup, log or error message |
 
 ## Appendix: raw comparison straight against Ollama (d3f8c3c prompt, format=json)

@@ -13,6 +13,7 @@ import os
 import time
 
 import httpx
+
 from app.backends.ollama import build_prompt, parse_suggestion
 
 URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
