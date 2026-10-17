@@ -15,10 +15,14 @@ Env (read when the backend is created):
   OLLAMA_TEMPERATURE     sampling temperature (default 0, deterministic)
   OLLAMA_KEEP_ALIVE      how long Ollama keeps the model loaded after a request
                          (default 30m; -1 keeps it loaded forever)
-  OLLAMA_JSON_FORMAT     1 (default) sends format=json; 0 lets the model answer freely
+  OLLAMA_JSON_FORMAT     schema (default, also 1) sends a JSON schema as `format`, so
+                         Ollama constrains the answer to it (category = enum of the
+                         request's categories); json sends format=json; 0 lets the
+                         model answer freely
   OLLAMA_PLAIN_RETRY     1 (default): if the JSON answer is unusable and less than 40%
-                         of BACKEND_TIMEOUT_S has passed, ask once more with a short
-                         plain-text prompt and derive name/description from the text
+                         of BACKEND_TIMEOUT_S was spent generating (model load time
+                         does not count), ask once more with a short plain-text
+                         prompt and derive name/description from the text
   OLLAMA_LOG_RAW         1 logs every raw model answer at DEBUG (default 0). Unusable
                          answers are always logged at WARNING. Logged text is cut to
                          2 KB; the image and the request token are never logged.
@@ -64,30 +68,61 @@ class BackendError(BackendUnavailable):
 
 
 def build_prompt(context: dict[str, Any]) -> str:
-    """Short, flat prompt: small models (Moondream) follow few, concrete rules
-    and copy whatever schema they are shown, so the schema is the flat one."""
-    cats = [c for c in context.get("categories", []) if c.strip()][:MAX_CONTEXT_ITEMS]
-    tags = [t for t in context.get("tags", []) if t.strip()][:MAX_CONTEXT_ITEMS]
+    """Short prompt that names the fields in words. It deliberately shows no
+    JSON template: small models (Moondream) copy a template's placeholders or
+    example values back instead of looking at the photo. The reply's shape
+    comes from the JSON schema sent as Ollama's `format` (see build_schema)."""
+    cats = _context_list(context, "categories")
+    tags = _context_list(context, "tags")
     locale = context.get("locale") or "en"
-    lines = [
-        "Identify the main object in the photo. Reply with ONLY this JSON:",
-        '{"name":"...","category":"...","tags":["..."],"description":"...","confidence":"..."}',
-        "name: the kind of object, in 1-4 plain words. Never a brand or a person's name.",
+    parts = [
+        "What is the main object in this photo? Answer in JSON with:",
+        "name (the kind of object in 1-4 plain words, never a brand or a person's name),",
     ]
     if cats:
-        lines.append("category: choose exactly one of " + json.dumps(cats, ensure_ascii=False))
+        parts.append("category (exactly one of: " + ", ".join(cats) + "),")
     else:
-        lines.append("category: one general word.")
-    tag_line = "tags: up to 5 short lowercase words (material, colour, brand)."
+        parts.append("category (one general word),")
+    tag_part = "tags (up to 5 short lowercase words: material, colour"
     if tags:
-        tag_line += " Prefer these: " + json.dumps(tags, ensure_ascii=False)
-    lines += [
-        tag_line,
-        "description: one short sentence about the object only, not people or background.",
-        "confidence: a number from 0 to 1, how sure you are.",
+        tag_part += "; prefer: " + ", ".join(tags)
+    parts += [
+        tag_part + "),",
+        "description (one short sentence about the object only, not people or background),",
+        "confidence (0 to 1, how sure you are).",
         f"Write the values in the language of locale '{locale}'.",
     ]
-    return "\n".join(lines)
+    return "\n".join(parts)
+
+
+def _context_list(context: dict[str, Any], key: str) -> list[str]:
+    seen: set[str] = set()
+    out = []
+    for v in context.get(key, []) or []:
+        if isinstance(v, str) and v.strip() and v.strip() not in seen:
+            seen.add(v.strip())
+            out.append(v.strip())
+    return out[:MAX_CONTEXT_ITEMS]
+
+
+def build_schema(context: dict[str, Any]) -> dict[str, Any]:
+    """JSON schema for Ollama's `format`: Ollama only lets the model produce
+    text matching it, so there is nothing to echo and, when the client sends
+    categories, the category is always one of them."""
+    category: dict[str, Any] = {"type": "string"}
+    if cats := _context_list(context, "categories"):
+        category["enum"] = cats
+    return {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "minLength": 2, "maxLength": 40},
+            "category": category,
+            "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+            "description": {"type": "string", "minLength": 10, "maxLength": 200},
+            "confidence": {"type": "number"},
+        },
+        "required": ["name", "category", "tags", "description", "confidence"],
+    }
 
 
 def _repair_truncated(text: str, start: int) -> dict[str, Any] | None:
@@ -348,6 +383,35 @@ def _is_person_name(value: str) -> bool:
     return value.isalpha() and value.istitle() and value.casefold() in FIRST_NAMES
 
 
+def _words(text: str) -> set[str]:
+    return {_singular(w) for w in re.findall(r"[^\W\d_]+", text.casefold())}
+
+
+def _name_agreeing_with(
+    name: dict[str, Any] | None, description: dict[str, Any] | None, overall: float | None
+) -> dict[str, Any] | None:
+    """Moondream's name is often a brand or a person ("bose", "reebok", "John")
+    while its description names the object ("A pair of black headphones...").
+    When the name shares no word with the description's object noun phrase,
+    take that phrase instead."""
+    if description is None or len(description["value"].split()) < 4:
+        return name
+    derived = caption_name(description["value"])
+    if derived is None:
+        return name
+    # Compare with the object phrase, not the whole sentence: a brand often
+    # appears later in it ("...with a Reebok logo").
+    if name is not None and _words(name["value"]) & _words(derived):
+        return name
+    out: dict[str, Any] = {"value": _cap(derived)}
+    conf = name.get("confidence") if name else overall
+    if conf is not None:
+        out["confidence"] = min(conf, DERIVED_NAME_CONFIDENCE)
+    else:
+        out["confidence"] = DERIVED_NAME_CONFIDENCE
+    return out
+
+
 def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     raw = normalize(raw)
     # Moondream often answers flat with a single top-level confidence; it
@@ -355,8 +419,8 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     overall = _confidence(raw.get("confidence"))
     out: dict[str, Any] = {}
     name = _scored(raw.get("name"), MAX_NAME, default_confidence=overall)
-    if name is not None and not _is_person_name(name["value"]):
-        out["name"] = name
+    if name is not None and _is_person_name(name["value"]):
+        name = None
     # When the client lists its categories, the answer must be one of them.
     if (
         s := _scored(
@@ -376,6 +440,9 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         s := _scored(raw.get("description"), MAX_DESCRIPTION, default_confidence=overall)
     ) is not None and s["value"].casefold() not in echoes:
         out["description"] = s
+    name = _name_agreeing_with(name, out.get("description"), overall)
+    if name is not None:
+        out = {"name": name, **out}
     tags_raw = raw.get("tags")
     if isinstance(tags_raw, list):
         seen: set[str] = set()
@@ -401,6 +468,9 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 PLAIN_PROMPT = "Describe the main object in this photo in one short sentence."
 TEXT_NAME_CONFIDENCE = 0.3
 TEXT_DESCRIPTION_CONFIDENCE = 0.4
+DERIVED_NAME_CONFIDENCE = 0.5
+MAX_NAME_WORDS = 4
+MAX_PHRASE_WORDS = 6
 
 _REFUSAL = re.compile(r"^(?:i'?m sorry|sorry|i cannot|i can'?t|i am unable|unable to)\b", re.I)
 _LEADS = re.compile(
@@ -410,7 +480,8 @@ _LEADS = re.compile(
     r"(?:shows|features|depicts|contains|displays|captures|is of)\s+"
     r"|(?:there is|there are|this is|these are|it is|it's|i see|we can see|you can see)\s+"
     r"|(?:a |an )?(?:close-up|photo|picture|image)(?: of)?\s+"
-    r"|(?:a|an|the|some|one)\s+"
+    r"|(?:a|an|the|some|one|two|three|several)\s+"
+    r"|(?:pair|set|couple|stack|pile|piece|bunch) of\s+"
     r")",
     re.I,
 )
@@ -425,20 +496,38 @@ def _cap(s: str) -> str:
     return s[:1].upper() + s[1:]
 
 
+def caption_name(text: str) -> str | None:
+    """The object noun phrase at the start of a caption sentence, at most
+    MAX_NAME_WORDS words ("A pair of black headphones with..." -> "black
+    headphones"), or None."""
+    sentence = re.split(r"(?<=[.!?])\s", " ".join(text.split()), maxsplit=1)[0]
+    body = sentence
+    while (stripped := _LEADS.sub("", body, count=1)) != body:
+        body = stripped
+    name = _NAME_END.split(body, maxsplit=1)[0].strip()
+    words = name.split()
+    if not words or not re.search(r"[^\W\d_]{2,}", name):
+        return None
+    if len(words) > MAX_PHRASE_WORDS:
+        return None  # not a noun phrase ("utensils scattered loosely across...")
+    if len(words) > MAX_NAME_WORDS:
+        # Keep the head noun: the last words of the phrase.
+        words = words[-MAX_NAME_WORDS:]
+    name = " ".join(words)
+    return None if _is_person_name(name) else name
+
+
 def suggestion_from_text(text: str, context: dict[str, Any]) -> dict[str, Any]:
     """Derive a low-confidence Suggestion from a plain-text description."""
     text = " ".join(text.split())
     if not re.search(r"[^\W\d_]{2,}", text) or text.startswith(("{", "[")) or _REFUSAL.match(text):
         raise BackendError("model output had no usable text")
     sentence = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
-    body = sentence
-    while (stripped := _LEADS.sub("", body, count=1)) != body:
-        body = stripped
-    name = _NAME_END.split(body, maxsplit=1)[0].strip()
+    name = caption_name(sentence)
     out: dict[str, Any] = {
         "description": {"value": _cap(sentence), "confidence": TEXT_DESCRIPTION_CONFIDENCE}
     }
-    if 1 <= len(name.split()) <= 6:
+    if name:
         out["name"] = {"value": _cap(name), "confidence": TEXT_NAME_CONFIDENCE}
     low = sentence.casefold()
 
@@ -495,6 +584,22 @@ def _keep_alive(raw: str) -> str | int:
         return raw
 
 
+def _format_mode(raw: str) -> str:
+    """OLLAMA_JSON_FORMAT -> "schema" (default), "json" or "none"."""
+    raw = raw.strip().lower()
+    if raw in ("json",):
+        return "json"
+    if raw in ("0", "false", "no", "off", "none"):
+        return "none"
+    return "schema"
+
+
+def _model_key(name: str) -> str:
+    # Ollama reports "moondream:latest" for a model requested as "moondream".
+    name = name.strip()
+    return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
+
+
 class Busy(BackendUnavailable):
     def __init__(self, message: str, retry_after: int):
         super().__init__(message)
@@ -513,7 +618,7 @@ class OllamaBackend(Backend):
         self.num_predict = _env_int("OLLAMA_NUM_PREDICT", DEFAULT_NUM_PREDICT)
         self.temperature = _env_float("OLLAMA_TEMPERATURE", 0.0)
         self.keep_alive = _keep_alive(os.environ.get("OLLAMA_KEEP_ALIVE", ""))
-        self.json_format = _env_flag("OLLAMA_JSON_FORMAT", True)
+        self.format_mode = _format_mode(os.environ.get("OLLAMA_JSON_FORMAT", ""))
         self.log_raw = _env_flag("OLLAMA_LOG_RAW", False)
         self.plain_retry = _env_flag("OLLAMA_PLAIN_RETRY", True)
         if self.log_raw:
@@ -521,6 +626,7 @@ class OllamaBackend(Backend):
         self.ready = not self.warmup_enabled
         self.warmup_error: str | None = None
         self._warm_thread: threading.Thread | None = None
+        self._reload_thread: threading.Thread | None = None
         self._start_lock = threading.Lock()
         self._in_flight = 0
         self._waiting = 0
@@ -558,11 +664,55 @@ class OllamaBackend(Backend):
 
     async def info(self) -> dict[str, Any]:
         self.start()
+        ready = self.ready
+        if ready and not await self._model_loaded():
+            # Ollama unloaded the model (keep_alive expired, restart, another
+            # model took the memory). Report not ready and reload it, so the
+            # next suggestion does not pay the load time.
+            ready = False
+            self._reload()
         return {
             "name": f"ollama-{self.model}",
             "capabilities": list(CAPABILITIES),
-            "ready": self.ready,
+            "ready": ready,
         }
+
+    async def _model_loaded(self) -> bool:
+        """Whether Ollama has the model in memory (GET /api/ps). Any error
+        counts as loaded: the check must never make a working service look
+        broken, and an unreachable Ollama surfaces on /v1/suggest."""
+        try:
+            async with httpx.AsyncClient(base_url=self.url, timeout=2.0) as client:
+                r = await client.get("/api/ps")
+            models = r.json().get("models") if r.status_code < 400 else None
+        except (httpx.HTTPError, ValueError, AttributeError):
+            return True
+        if not isinstance(models, list):
+            return True
+        want = _model_key(self.model)
+        return any(
+            isinstance(m, dict) and _model_key(str(m.get("name") or m.get("model") or "")) == want
+            for m in models
+        )
+
+    def _reload(self) -> None:
+        with self._start_lock:
+            if self._reload_thread is not None and self._reload_thread.is_alive():
+                return
+            self._reload_thread = threading.Thread(target=self._load_once, daemon=True)
+            self._reload_thread.start()
+
+    def _load_once(self) -> None:
+        payload = {
+            "model": self.model,
+            "prompt": "",
+            "stream": False,
+            "keep_alive": self.keep_alive,
+        }
+        try:
+            httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
+        except httpx.HTTPError as exc:
+            log.warning("ollama model reload failed: %s", exc)
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -595,7 +745,10 @@ class OllamaBackend(Backend):
             opts["num_predict"] = self.num_predict
         return opts
 
-    async def _chat(self, prompt: str, image_b64: str, json_format: bool) -> str:
+    async def _chat(
+        self, prompt: str, image_b64: str, fmt: str | dict[str, Any] | None
+    ) -> tuple[str, float]:
+        """Return (content, seconds Ollama spent loading the model)."""
         payload: dict[str, Any] = {
             "model": self.model,
             "stream": False,
@@ -603,8 +756,8 @@ class OllamaBackend(Backend):
             "options": self.options(),
             "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
         }
-        if json_format:
-            payload["format"] = "json"
+        if fmt is not None:
+            payload["format"] = fmt
         data = await self._post("/api/chat", payload)
         content = (data.get("message") or {}).get("content")
         if not isinstance(content, str):
@@ -617,7 +770,9 @@ class OllamaBackend(Backend):
                 len(content),
                 truncate_for_log(content),
             )
-        return content
+        load = data.get("load_duration")
+        load_s = load / 1e9 if isinstance(load, (int, float)) and load > 0 else 0.0
+        return content, load_s
 
     def _parse(self, content: str, context: dict[str, Any], attempt: str) -> dict[str, Any]:
         try:
@@ -645,15 +800,29 @@ class OllamaBackend(Backend):
     async def generate(self, image_bytes: bytes, context: dict[str, Any]) -> dict[str, Any]:
         started = time.monotonic()
         image_b64 = base64.b64encode(image_bytes).decode()
-        content = await self._chat(build_prompt(context), image_b64, self.json_format)
+        fmt: str | dict[str, Any] | None = None
+        if self.format_mode == "schema":
+            fmt = build_schema(context)
+        elif self.format_mode == "json":
+            fmt = "json"
+        content, load_s = await self._chat(build_prompt(context), image_b64, fmt)
         try:
             return self._parse(content, context, "json")
         except BackendError:
-            budget = get_settings().backend_timeout_s * 0.4
-            if not self.plain_retry or time.monotonic() - started > budget:
+            if not self.plain_retry or not self._retry_fits(time.monotonic() - started, load_s):
                 raise
-        content = await self._chat(PLAIN_PROMPT, image_b64, json_format=False)
+        content, _ = await self._chat(PLAIN_PROMPT, image_b64, None)
         return self._parse(content, context, "plain")
+
+    @staticmethod
+    def _retry_fits(elapsed: float, load_s: float) -> bool:
+        """Retry when generating took at most 40% of the timeout. Model load
+        time is left out: it is paid once, and the retry runs on the loaded
+        model. Some time must still remain for the retry itself."""
+        timeout = get_settings().backend_timeout_s
+        generating = max(0.0, elapsed - load_s)
+        remaining = timeout - elapsed
+        return generating <= timeout * 0.4 and remaining >= max(generating, timeout * 0.2)
 
     async def suggest(self, image_bytes: bytes, mime: str, context: dict[str, Any]) -> Any:
         self.start()

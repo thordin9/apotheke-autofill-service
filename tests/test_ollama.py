@@ -15,6 +15,8 @@ from app.backends.ollama import (
     PLAIN_PROMPT,
     RAW_LOG_LIMIT,
     build_prompt,
+    build_schema,
+    caption_name,
     clamp,
     extract_json,
     match_key,
@@ -52,7 +54,7 @@ def test_happy_path(oclient, fake):
     assert [t["value"] for t in body["tags"]] == ["bosch", "red"]
     req = fake.chats()[-1]
     assert req["model"] == "moondream"
-    assert req["stream"] is False and req["format"] == "json"
+    assert req["stream"] is False and req["format"] == build_schema({})
     assert base64.b64decode(req["messages"][0]["images"][0]) == JPEG
 
 
@@ -61,7 +63,7 @@ def test_default_generation_options(oclient, fake):
     req = fake.chats()[-1]
     assert req["options"] == {"temperature": 0.0, "num_predict": 256}
     assert req["keep_alive"] == "30m"
-    assert req["format"] == "json"
+    assert req["format"]["type"] == "object"
 
 
 def test_generation_options_from_env(oclient, fake):
@@ -94,7 +96,10 @@ def test_context_in_prompt_and_exact_spelling(oclient, fake):
     r = post_image(oclient(), context=json.dumps(ctx))
     body = assert_contract(r, "/v1/suggest", "post")
     prompt = fake.chats()[-1]["messages"][0]["content"]
-    assert '"Tools", "Kitchen"' in prompt and '"Bosch"' in prompt and "de-DE" in prompt
+    assert "one of: Tools, Kitchen" in prompt and "prefer: Bosch" in prompt
+    assert "de-DE" in prompt
+    schema = fake.chats()[-1]["format"]
+    assert schema["properties"]["category"]["enum"] == ["Tools", "Kitchen"]
     assert body["category"]["value"] == "Tools"  # model said "tools"
     assert body["tags"][0]["value"] == "Bosch"
 
@@ -237,15 +242,78 @@ def test_clamps_via_http(oclient, fake):
 
 def test_prompt_without_context_has_defaults():
     p = build_prompt({})
-    assert "locale 'en'" in p and "Prefer these" not in p and "choose exactly" not in p
+    assert "locale 'en'" in p and "prefer:" not in p and "exactly one of" not in p
 
 
 def test_prompt_lists_categories_as_a_closed_choice():
     p = build_prompt({"categories": ["Tools", " ", "Kitchen"], "tags": ["bosch"]})
-    assert 'choose exactly one of ["Tools", "Kitchen"]' in p
-    assert 'Prefer these: ["bosch"]' in p
+    assert "exactly one of: Tools, Kitchen)" in p
+    assert "prefer: bosch" in p
     assert "brand or a person's name" in p and "object only" in p
     assert len(p) < 800  # small models do better with short prompts
+
+
+@pytest.mark.parametrize("ctx", [{}, {"categories": ["Tools", "Kitchen"], "tags": ["bosch"]}])
+def test_prompt_has_no_json_template_to_echo(ctx):
+    # S1: Moondream copied '{"name":"...",...}' back on 5 of 9 photos.
+    p = build_prompt(ctx)
+    assert "{" not in p and "..." not in p and '"name"' not in p
+
+
+def test_schema_constrains_category_to_the_client_list():
+    s = build_schema({"categories": ["Tools", " ", "Kitchen", "Tools"]})
+    assert s["properties"]["category"] == {"type": "string", "enum": ["Tools", "Kitchen"]}
+    assert set(s["required"]) == {"name", "category", "tags", "description", "confidence"}
+    assert s["properties"]["name"]["minLength"] >= 2
+    assert s["properties"]["description"]["minLength"] >= 10
+    assert "enum" not in build_schema({})["properties"]["category"]
+
+
+def test_json_format_modes(oclient, fake):
+    assert post_image(oclient(OLLAMA_JSON_FORMAT="json")).status_code == 200
+    assert fake.chats()[-1]["format"] == "json"
+    assert post_image(oclient(OLLAMA_JSON_FORMAT="1")).status_code == 200
+    assert fake.chats()[-1]["format"]["type"] == "object"
+    assert post_image(oclient(OLLAMA_JSON_FORMAT="0")).status_code == 200
+    assert "format" not in fake.chats()[-1]
+
+
+@pytest.mark.parametrize(
+    ("name", "description", "want"),
+    [
+        # Raw schema answers from Moondream on the Jetson (Oct 18, 2026).
+        ("bose", "A pair of black headphones with a silver headband.", "Black headphones"),
+        (
+            "reebok",
+            "A white and red sneaker with a Reebok logo on the side.",
+            "White and red sneaker",
+        ),
+        ("John", "A man with a beard and grey shirt holding a microphone.", "Man"),
+        # The name agrees with the description: kept as is.
+        ("Laptop", "A black laptop computer with a silver logo on its lid.", "Laptop"),
+        ("bulb", "A broken light bulb on a brown surface.", "bulb"),
+        ("Knives", "A knife with a black handle and silver blade.", "Knives"),
+    ],
+)
+def test_name_taken_from_description_when_they_disagree(name, description, want):
+    out = clamp({"name": name, "category": "x", "description": description, "confidence": 0.8}, {})
+    assert out["name"]["value"] == want
+    if want.casefold() != name.casefold():
+        assert out["name"]["confidence"] == 0.5  # derived, so capped
+    else:
+        assert out["name"]["confidence"] == 0.8
+
+
+def test_short_description_does_not_replace_the_name():
+    out = clamp({"name": "Drill", "description": "Red tool"}, {})
+    assert out["name"]["value"] == "Drill"
+
+
+def test_caption_name_limits():
+    assert caption_name("A white ceramic coffee mug on a desk.") == "white ceramic coffee mug"
+    assert caption_name("A big shiny white ceramic coffee mug.") == "white ceramic coffee mug"
+    assert caption_name("Several old kitchen utensils scattered loosely across it") is None
+    assert caption_name("John.") is None
 
 
 def _wait(cond, timeout=5.0):
@@ -404,7 +472,7 @@ def test_confidence_coercion(c, want):
         ("A white ceramic coffee mug with a blue handle.", "White ceramic coffee mug"),
         (
             "In this image, there is a pair of black headphones lying on a desk.",
-            "Pair of black headphones",
+            "Black headphones",
         ),
         ("This is a stainless steel water bottle. It has a cap.", "Stainless steel water bottle"),
         ("A close-up of an old brass key", "Old brass key"),
@@ -450,7 +518,7 @@ def test_empty_json_retries_with_plain_prompt(oclient, fake, caplog):
     body = assert_contract(post_image(oclient()), "/v1/suggest", "post")
     assert body["name"]["value"] == "White ceramic coffee mug"
     first, second = fake.chats()
-    assert first["format"] == "json"
+    assert first["format"]["type"] == "object"
     assert "format" not in second
     assert second["messages"][0]["content"] == PLAIN_PROMPT
     assert second["messages"][0]["images"] == first["messages"][0]["images"]
@@ -605,3 +673,57 @@ def test_description_echoing_name_or_category_is_dropped():
     assert "description" not in clamp(raw, {})
     raw["description"] = "A frosted light bulb."
     assert clamp(raw, {})["description"] == {"value": "A frosted light bulb."}
+
+
+# --- S2: the model was unloaded after the first warm-up --------------------
+
+
+def test_load_time_does_not_use_up_the_retry_budget(oclient, fake):
+    # 0.5 s of a 1 s timeout spent, but 0.45 s of it was Ollama loading the
+    # model: generating took 0.05 s, so the plain retry still runs.
+    fake.chat_queue = ["{}", "A white ceramic coffee mug."]
+    fake.chat_delay = 0.25
+    fake.load_duration_ns = 200_000_000
+    r = post_image(oclient(BACKEND_TIMEOUT_S="1.5"))
+    assert r.status_code == 200, r.text
+    assert r.json()["name"]["value"] == "White ceramic coffee mug"
+    assert len(fake.chats()) == 2
+
+
+def test_no_retry_when_too_little_time_remains(oclient, fake):
+    # Most of the time went on loading, but what is left is too short for a retry.
+    fake.chat_queue = ["{}", "A white ceramic coffee mug."]
+    fake.chat_delay = 0.9
+    fake.load_duration_ns = 850_000_000
+    r = post_image(oclient(BACKEND_TIMEOUT_S="1"))
+    assert r.status_code == 503 and r.json()["error"]["code"] == "backend_error"
+    assert len(fake.chats()) == 1
+
+
+def test_info_not_ready_when_ollama_unloaded_the_model(oclient, fake):
+    c = oclient()
+    assert c.get("/v1/info").json()["ready"] is True
+    fake.loaded = []  # keep_alive expired, Ollama restarted, ...
+    assert c.get("/v1/info").json()["ready"] is False
+    # The service reloads it in the background.
+    assert _wait(lambda: any(p == "/api/generate" for p, _ in fake.requests))
+    fake.loaded = ["moondream:latest"]
+    assert c.get("/v1/info").json()["ready"] is True
+
+
+def test_info_matches_tagged_model_names(oclient, fake):
+    fake.loaded = ["qwen2.5vl:3b"]
+    assert oclient(OLLAMA_MODEL="qwen2.5vl:3b").get("/v1/info").json()["ready"] is True
+    assert oclient(OLLAMA_MODEL="moondream").get("/v1/info").json()["ready"] is False
+
+
+def test_info_ready_when_ps_is_unavailable(oclient, fake):
+    fake.loaded = None  # GET /api/ps answers 404
+    assert oclient().get("/v1/info").json()["ready"] is True
+
+
+def test_suggest_still_works_while_model_reloads(oclient, fake):
+    fake.loaded = []
+    c = oclient()
+    assert c.get("/v1/info").json()["ready"] is False
+    assert post_image(c).status_code == 200  # Ollama loads it on demand

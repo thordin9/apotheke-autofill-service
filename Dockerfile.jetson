@@ -38,6 +38,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8080 \
     OLLAMA_URL=http://127.0.0.1:11434 \
     OLLAMA_MODEL=moondream \
+    OLLAMA_KEEP_ALIVE=-1 \
     PATH=/opt/python/bin:${PATH} \
     PIP_INDEX_URL=https://pypi.org/simple \
     PIP_EXTRA_INDEX_URL= \

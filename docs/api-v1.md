@@ -43,7 +43,7 @@ token shows up as `401` here.
 | `capabilities` | yes | Subset of `name`, `tags`, `category`, `description` |
 | `backend` | no | Adapter id (`echo`, `ollama`, …) |
 | `max_image_bytes` | no | Upload limit; clients may skip the call for larger images |
-| `ready` | no | `false` while the backend is still loading its model (e.g. Ollama warm-up); `/v1/suggest` then answers `503` with `Retry-After`. Absent or `true` means ready. |
+| `ready` | no | `false` while the backend is still loading its model (e.g. Ollama warm-up); `/v1/suggest` then answers `503` with `Retry-After`. Also `false` when Ollama has since unloaded the model: the service then reloads it in the background, and `/v1/suggest` still works but its first answer is slower. Absent or `true` means ready. |
 
 ### `POST /v1/suggest`
 `multipart/form-data`:

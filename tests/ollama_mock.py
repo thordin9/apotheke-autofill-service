@@ -25,6 +25,9 @@ class FakeOllama:
         self.chat_delay = 0.0
         self.warm_delay = 0.0
         self.warm_status = 200
+        self.load_duration_ns = 0  # reported on every chat answer
+        # GET /api/ps: models Ollama has in memory; None answers 404 (old Ollama).
+        self.loaded: list[str] | None = ["moondream:latest"]
         self.release = threading.Event()
         self.release.set()
         fake = self
@@ -32,6 +35,14 @@ class FakeOllama:
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
+
+            def do_GET(self):
+                fake.requests.append((self.path, {}))
+                if self.path == "/api/ps" and fake.loaded is not None:
+                    body = {"models": [{"name": n, "model": n} for n in fake.loaded]}
+                    self._send(200, json.dumps(body).encode())
+                else:
+                    self._send(404, b'{"error":"not found"}')
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
@@ -46,7 +57,10 @@ class FakeOllama:
                     self._send(fake.chat_status, fake.chat_raw)
                     return
                 content = fake.chat_queue.pop(0) if fake.chat_queue else fake.chat_content
-                msg = {"message": {"role": "assistant", "content": content}}
+                msg = {
+                    "message": {"role": "assistant", "content": content},
+                    "load_duration": fake.load_duration_ns,
+                }
                 self._send(fake.chat_status, json.dumps(msg).encode())
 
             def _send(self, status, data):
