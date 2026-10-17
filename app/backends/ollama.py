@@ -64,28 +64,29 @@ class BackendError(BackendUnavailable):
 
 
 def build_prompt(context: dict[str, Any]) -> str:
+    """Short, flat prompt: small models (Moondream) follow few, concrete rules
+    and copy whatever schema they are shown, so the schema is the flat one."""
     cats = [c for c in context.get("categories", []) if c.strip()][:MAX_CONTEXT_ITEMS]
     tags = [t for t in context.get("tags", []) if t.strip()][:MAX_CONTEXT_ITEMS]
     locale = context.get("locale") or "en"
     lines = [
-        "You catalogue household inventory items from a single photo.",
-        "Reply with ONLY one JSON object, no prose, no markdown, of this exact shape:",
-        '{"name":{"value":str,"confidence":0..1},"category":{"value":str,"confidence":0..1},'
-        '"tags":[{"value":str,"confidence":0..1}],"description":{"value":str,"confidence":0..1}}',
-        "Omit any field you are unsure about. name: short product name (max 6 words).",
-        f"description: one short sentence. Use at most {MAX_TAGS} tags, lowercase, 1-2 words.",
-        f"Write all values in the language for locale '{locale}'.",
+        "Identify the main object in the photo. Reply with ONLY this JSON:",
+        '{"name":"...","category":"...","tags":["..."],"description":"...","confidence":"..."}',
+        "name: the kind of object, in 1-4 plain words. Never a brand or a person's name.",
     ]
     if cats:
-        lines.append(
-            "Existing categories (use one of these with EXACT spelling if it fits): "
-            + json.dumps(cats, ensure_ascii=False)
-        )
+        lines.append("category: choose exactly one of " + json.dumps(cats, ensure_ascii=False))
+    else:
+        lines.append("category: one general word.")
+    tag_line = "tags: up to 5 short lowercase words (material, colour, brand)."
     if tags:
-        lines.append(
-            "Existing tags (prefer these with EXACT spelling over new ones): "
-            + json.dumps(tags, ensure_ascii=False)
-        )
+        tag_line += " Prefer these: " + json.dumps(tags, ensure_ascii=False)
+    lines += [
+        tag_line,
+        "description: one short sentence about the object only, not people or background.",
+        "confidence: a number from 0 to 1, how sure you are.",
+        f"Write the values in the language of locale '{locale}'.",
+    ]
     return "\n".join(lines)
 
 

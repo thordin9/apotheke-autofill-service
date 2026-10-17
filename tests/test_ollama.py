@@ -237,7 +237,15 @@ def test_clamps_via_http(oclient, fake):
 
 def test_prompt_without_context_has_defaults():
     p = build_prompt({})
-    assert "locale 'en'" in p and "Existing" not in p
+    assert "locale 'en'" in p and "Prefer these" not in p and "choose exactly" not in p
+
+
+def test_prompt_lists_categories_as_a_closed_choice():
+    p = build_prompt({"categories": ["Tools", " ", "Kitchen"], "tags": ["bosch"]})
+    assert 'choose exactly one of ["Tools", "Kitchen"]' in p
+    assert 'Prefer these: ["bosch"]' in p
+    assert "brand or a person's name" in p and "object only" in p
+    assert len(p) < 800  # small models do better with short prompts
 
 
 def _wait(cond, timeout=5.0):
