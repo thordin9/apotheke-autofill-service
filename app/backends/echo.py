@@ -18,6 +18,13 @@ from .base import CAPABILITIES, Backend, BackendUnavailable
 DEFAULT_TAGS = ["echo", "sample"]
 
 
+def _delay_ms() -> int:
+    try:
+        return max(0, int(os.environ.get("ECHO_DELAY_MS", "0") or 0))
+    except ValueError:
+        return 0
+
+
 class MalformedOutput(Exception):
     """Signals the app to send a deliberately broken body (QA only)."""
 
@@ -26,14 +33,17 @@ class EchoBackend(Backend):
     id = "echo"
 
     async def info(self) -> dict[str, Any]:
-        return {"name": "echo", "capabilities": list(CAPABILITIES)}
+        out: dict[str, Any] = {"name": "echo", "capabilities": list(CAPABILITIES)}
+        # With ECHO_DELAY_MS set, every answer takes that long, so report it:
+        # lets clients test their progress estimate without a real model.
+        delay_ms = _delay_ms()
+        if delay_ms > 0:
+            out["avg_latency_ms"] = delay_ms
+        return out
 
     async def suggest(self, image_bytes: bytes, mime: str, context: dict[str, Any]) -> Any:
         mode = os.environ.get("ECHO_MODE", "ok").strip().lower() or "ok"
-        try:
-            delay_ms = int(os.environ.get("ECHO_DELAY_MS", "0") or 0)
-        except ValueError:
-            delay_ms = 0
+        delay_ms = _delay_ms()
         if delay_ms > 0:
             await asyncio.sleep(delay_ms / 1000)
         if mode == "slow":

@@ -92,6 +92,9 @@ def create_app() -> FastAPI:
         }
         if isinstance(data.get("ready"), bool):
             out["ready"] = data["ready"]
+        latency = data.get("avg_latency_ms")
+        if isinstance(latency, int) and not isinstance(latency, bool) and latency >= 0:
+            out["avg_latency_ms"] = latency
         return out
 
     @app.post("/v1/suggest")

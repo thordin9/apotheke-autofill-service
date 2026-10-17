@@ -20,6 +20,50 @@ def test_info(client):
     assert set(body["capabilities"]) == {"name", "category", "tags", "description"}
     assert body["backend"] == "echo"
     assert body["max_image_bytes"] == 10 * 1024 * 1024
+    assert "avg_latency_ms" not in body  # echo without ECHO_DELAY_MS
+
+
+def test_info_echo_reports_delay_as_latency(make_client):
+    body = assert_contract(make_client(ECHO_DELAY_MS="1200").get("/v1/info"), "/v1/info")
+    assert body["avg_latency_ms"] == 1200
+
+
+@pytest.mark.parametrize("delay", ["0", "-5", "abc"])
+def test_info_echo_omits_latency_without_delay(make_client, delay):
+    assert "avg_latency_ms" not in make_client(ECHO_DELAY_MS=delay).get("/v1/info").json()
+
+
+def _info_errors(body):
+    from conftest import _registry, _schema_for
+    from jsonschema import Draft202012Validator
+
+    schema = _schema_for("/v1/info", "get", 200)
+    return list(Draft202012Validator(schema, registry=_registry).iter_errors(body))
+
+
+@pytest.mark.parametrize("value", [0, 1, 13540])
+def test_info_schema_accepts_latency(value):
+    base = {"name": "x", "version": "1", "capabilities": ["name"]}
+    assert not _info_errors(base)  # absent is valid
+    assert not _info_errors({**base, "avg_latency_ms": value})
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, "1000", None, True])
+def test_info_schema_rejects_bad_latency(value):
+    base = {"name": "x", "version": "1", "capabilities": ["name"]}
+    assert _info_errors({**base, "avg_latency_ms": value})
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, "1000", None, True])
+def test_info_drops_bad_latency_from_backend(make_client, monkeypatch, value):
+    from app.backends.echo import EchoBackend
+
+    async def info(self):
+        return {"name": "echo", "capabilities": ["name"], "avg_latency_ms": value}
+
+    monkeypatch.setattr(EchoBackend, "info", info)
+    body = assert_contract(make_client().get("/v1/info"), "/v1/info")
+    assert "avg_latency_ms" not in body
 
 
 @pytest.mark.parametrize("data", [JPEG, PNG, WEBP])

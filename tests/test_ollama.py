@@ -724,10 +724,11 @@ def test_info_ready_when_ps_is_unavailable(oclient, fake):
 
 
 def test_cold_model_gets_503_at_once_and_is_reloaded(oclient, fake):
-    # Qwen on the Jetson: 15 s load + 13.5 s answer > 25 s, so waiting would
-    # end in a 504. Answer 503 with Retry-After straight away instead.
+    # Nothing measured yet, so 15 s load + 15 s answer is assumed, which does
+    # not fit in 0.9 x 25 s: waiting would end in a 504. Answer 503 with
+    # Retry-After straight away instead.
     fake.loaded = []
-    c = oclient(OLLAMA_RETRY_AFTER_S="5")
+    c = oclient(BACKEND_TIMEOUT_S="25", OLLAMA_RETRY_AFTER_S="5")
     r = post_image(c)
     assert r.status_code == 503 and r.headers["Retry-After"] == "15"
     body = assert_contract(r, "/v1/suggest", "post")
@@ -737,6 +738,47 @@ def test_cold_model_gets_503_at_once_and_is_reloaded(oclient, fake):
     assert _wait(lambda: any(p == "/api/generate" for p, _ in fake.requests))
     fake.loaded = ["moondream:latest"]
     assert post_image(c).status_code == 200
+
+
+def test_cold_model_waits_for_load_when_it_fits(oclient, fake):
+    # Jetson: 45 s timeout, so the assumed 15 s load + 15 s answer fits in
+    # 40.5 s. The request goes straight to Ollama, which loads the model.
+    fake.loaded = []
+    fake.load_duration_ns = 300_000_000
+    c = oclient(BACKEND_TIMEOUT_S="45")
+    r = post_image(c)
+    assert r.status_code == 200
+    assert len(fake.chats()) == 1
+    assert not any(p == "/api/generate" for p, _ in fake.requests)
+
+
+def test_cold_wait_uses_measured_load_and_generation_times(oclient, fake):
+    # 3 s timeout: the 15 s defaults do not fit, so the first cold request is
+    # refused. Once a 0.6 s load and a short answer were measured, they do.
+    c = oclient(BACKEND_TIMEOUT_S="3")
+    fake.loaded = []
+    assert post_image(c).status_code == 503
+    fake.loaded = ["moondream:latest"]
+    fake.load_duration_ns = 600_000_000
+    fake.chat_delay = 0.7
+    assert post_image(c).status_code == 200  # learns load 0.6 s, answer ~0.1 s
+    backend = c.app.state.backend
+    assert backend._load_s == pytest.approx(0.6)
+    fake.loaded = []
+    fake.load_duration_ns = 0
+    fake.chat_delay = 0
+    chats = len(fake.chats())
+    assert post_image(c).status_code == 200
+    assert len(fake.chats()) == chats + 1
+
+
+def test_warm_load_time_is_not_mistaken_for_a_load(oclient, fake):
+    # Ollama reports a few ms of load_duration on a loaded model; that must
+    # not replace the load estimate.
+    fake.load_duration_ns = 5_000_000
+    c = oclient()
+    assert post_image(c).status_code == 200
+    assert c.app.state.backend._load_s is None
 
 
 def test_cold_check_tolerates_old_ollama(oclient, fake):
@@ -784,3 +826,36 @@ def test_queued_request_admitted_when_it_fits(oclient, fake):
     t1.join(5)
     t2.join(5)
     assert [r.status_code for r in results] == [200, 200]
+
+
+def test_info_latency_absent_before_first_request(oclient):
+    body = assert_contract(oclient().get("/v1/info"), "/v1/info")
+    assert body["ready"] is True and "avg_latency_ms" not in body
+
+
+def test_info_latency_after_requests(oclient, fake):
+    c = oclient()
+    fake.chat_delay = 0.2
+    assert post_image(c).status_code == 200
+    first = assert_contract(c.get("/v1/info"), "/v1/info")["avg_latency_ms"]
+    assert isinstance(first, int) and 180 <= first < 1500
+    fake.chat_delay = 0.6
+    assert post_image(c).status_code == 200
+    second = assert_contract(c.get("/v1/info"), "/v1/info")["avg_latency_ms"]
+    # Moving average: moves toward the slower request, but only 30% of the way.
+    assert first < second < 600
+    assert abs(second - (0.7 * first + 0.3 * 600)) < 150
+
+
+def test_info_latency_excludes_model_load(oclient, fake):
+    c = oclient()
+    fake.chat_delay = 0.5
+    fake.load_duration_ns = 400_000_000  # 0.4 s of the 0.5 s was loading
+    assert post_image(c).status_code == 200
+    assert c.get("/v1/info").json()["avg_latency_ms"] < 400
+
+
+def test_info_latency_is_rounded_ms(oclient):
+    c = oclient()
+    c.app.state.backend._avg_s = 13.5404
+    assert c.get("/v1/info").json()["avg_latency_ms"] == 13540
