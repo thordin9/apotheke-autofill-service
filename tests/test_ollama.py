@@ -9,6 +9,7 @@ from conftest import JPEG, assert_contract, post_image
 from ollama_mock import FakeOllama
 
 from app.backends.ollama import (
+    CATEGORY_SYNONYMS,
     MAX_TAG,
     MAX_TAGS,
     PLAIN_PROMPT,
@@ -16,6 +17,8 @@ from app.backends.ollama import (
     build_prompt,
     clamp,
     extract_json,
+    match_key,
+    snap,
     suggestion_from_text,
     truncate_for_log,
 )
@@ -469,3 +472,108 @@ def test_both_attempts_unusable_is_backend_error(oclient, fake, caplog):
     assert r.status_code == 503 and r.json()["error"]["code"] == "backend_error"
     assert len(fake.chats()) == 2
     assert "unusable (plain prompt)" in _log_text(caplog)
+
+
+CATS = ["Tools", "Electronics", "Clothing", "Books", "Kitchen", "Lighting", "Shoes", "Other"]
+
+
+@pytest.mark.parametrize(
+    ("model", "want"),
+    [
+        ("tools", "Tools"),
+        ("ELECTRONICS", "Electronics"),
+        ("clothes", "Clothing"),
+        ("book", "Books"),
+        ("shoe", "Shoes"),
+        ("Cooking utensils", "Kitchen"),
+        ("cookware", "Kitchen"),
+        ("headphones", "Electronics"),
+        ("laptop", "Electronics"),
+        ("Phone", "Electronics"),
+        ("desk lamp", "Lighting"),
+        ("bulb", "Lighting"),
+        ("sneakers", "Shoes"),
+        ("artists", None),
+        ("sculptor", None),
+        ("furniture", None),
+    ],
+)
+def test_snap_category(model, want):
+    assert snap(model, CATS, CATEGORY_SYNONYMS) == want
+
+
+def test_synonym_only_applies_when_target_is_listed():
+    assert snap("cookware", ["Tools", "Other"], CATEGORY_SYNONYMS) is None
+    assert snap("cookware", ["Tools", "kitchen"], CATEGORY_SYNONYMS) == "kitchen"
+
+
+@pytest.mark.parametrize(
+    ("s", "key"),
+    [
+        ("T-Shirts", "t shirt"),
+        ("Clothes", "clothing"),
+        ("Batteries", "battery"),
+        ("Boxes", "box"),
+        ("glass", "glass"),
+        ("Electronics", "electronic"),
+        ("", ""),
+    ],
+)
+def test_match_key(s, key):
+    assert match_key(s) == key
+
+
+def test_off_list_category_is_dropped_flat_and_nested():
+    ctx = {"categories": CATS}
+    nested = {"name": "x", "category": {"value": "artists", "confidence": 0.64}}
+    flat = {"name": "x", "category": "artists"}
+    for raw in (nested, flat):
+        assert "category" not in clamp(raw, ctx)
+
+
+def test_nested_category_is_snapped_with_its_confidence():
+    raw = {"name": "x", "category": {"value": "Cooking utensils", "confidence": 0.7}}
+    out = clamp(raw, {"categories": CATS})
+    assert out["category"] == {"value": "Kitchen", "confidence": 0.7}
+
+
+def test_category_free_without_context_categories():
+    assert clamp({"category": "artists"}, {})["category"] == {"value": "artists"}
+
+
+@pytest.mark.parametrize(
+    "v",
+    [
+        {"value": {"value": "Lamp", "confidence": 0.5}},
+        [{"value": "Lamp", "confidence": 0.5}],
+        {"value": ["Lamp"], "confidence": 0.5},
+    ],
+)
+def test_odd_nesting_is_unwrapped(v):
+    out = clamp({"name": v}, {})
+    assert out["name"]["value"] == "Lamp" and out["name"]["confidence"] == 0.5
+
+
+def test_tags_prefer_existing_spelling_but_allow_new():
+    raw = {"tags": [{"value": "knives", "confidence": 0.6}, "Bosch", "stainless steel"]}
+    out = clamp(raw, {"tags": ["Knife", "bosch"]})
+    assert [t["value"] for t in out["tags"]] == ["Knife", "bosch", "stainless steel"]
+    assert out["tags"][0]["confidence"] == 0.6
+
+
+def test_snapped_tags_are_deduped():
+    out = clamp({"tags": ["knives", "knife", "Knife"]}, {"tags": ["knife"]})
+    assert out["tags"] == [{"value": "knife"}]
+
+
+def test_top_level_confidence_fills_missing_ones():
+    raw = {
+        "name": "power drill",
+        "confidence": 0.61,
+        "category": {"value": "tools", "confidence": 0.9},
+        "tags": ["red"],
+    }
+    out = clamp(raw, {"categories": CATS})
+    assert out["name"] == {"value": "power drill", "confidence": 0.61}
+    assert out["category"] == {"value": "Tools", "confidence": 0.9}
+    assert out["tags"] == [{"value": "red"}]

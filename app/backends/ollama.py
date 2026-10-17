@@ -196,20 +196,112 @@ def _confidence(c: Any) -> float | None:
     return None
 
 
-def _scored(v: Any, limit: int, prefer: list[str] | None = None) -> dict[str, Any] | None:
+def _unwrap(v: Any, depth: int = 0) -> tuple[str | None, Any]:
+    """Return (text, confidence) from a plain string, a {"value", "confidence"}
+    object (nested any way a small model likes), or a list of those."""
     if isinstance(v, str):
-        v = {"value": v}
-    if not isinstance(v, dict) or not isinstance(v.get("value"), str):
+        return v, None
+    if depth > 3:
+        return None, None
+    if isinstance(v, dict) and "value" in v:
+        text, c = _unwrap(v["value"], depth + 1)
+        return text, v.get("confidence", c)
+    if isinstance(v, list):
+        for item in v:
+            text, c = _unwrap(item, depth + 1)
+            if text and text.strip():
+                return text, c
+    return None, None
+
+
+# Singular/plural matching for category and tag snapping. Deliberately small:
+# it only has to make "clothes" meet "Clothing" and "tools" meet "Tools".
+_IRREGULAR = {"clothes": "clothing", "knives": "knife", "shelves": "shelf", "people": "person"}
+
+
+def _singular(word: str) -> str:
+    if word in _IRREGULAR:
+        return _IRREGULAR[word]
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if word.endswith(("ches", "shes", "sses", "xes", "zes")):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
+def match_key(s: str) -> str:
+    """Case-, punctuation- and plural-insensitive key ("T-Shirts" -> "t shirt")."""
+    words = re.sub(r"[\W_]+", " ", s.casefold()).split()
+    return " ".join([*words[:-1], _singular(words[-1])]) if words else ""
+
+
+# Model category (as match_key) -> category it means (as match_key). Used only
+# when that category is in the request's list; English only, like the prompt.
+_SYNONYMS_BY_TARGET = {
+    "kitchen": "cooking utensil|kitchen utensil|utensil|cookware|kitchenware|knife|cutlery|pan|pot",
+    "electronic": "headphone|earphone|headset|laptop|computer|phone|smartphone|mobile phone"
+    "|cell phone|tablet|camera|gadget|electronic device",
+    "lighting": "lamp|light|bulb|light bulb|lantern",
+    "shoe": "sneaker|boot|footwear|sandal|trainer",
+    "clothing": "apparel|garment|shirt|t shirt|jacket|sweater",
+    "tool": "hardware|power tool|drill|hammer|screwdriver|wrench",
+    "book": "novel|paperback|hardcover",
+}
+CATEGORY_SYNONYMS = {
+    word: target for target, words in _SYNONYMS_BY_TARGET.items() for word in words.split("|")
+}
+
+
+def snap(value: str, choices: list[str], synonyms: dict[str, str] | None = None) -> str | None:
+    """Return the entry of choices that value means, in its spelling, or None.
+
+    Tries exact (case-insensitive), then singular/plural, then synonyms (whole
+    phrase, then its last word) whose target is one of the choices.
+    """
+    choices = [c for c in choices if isinstance(c, str) and c.strip()]
+    exact = {c.casefold(): c for c in choices}
+    if (hit := exact.get(value.casefold())) is not None:
+        return hit
+    by_key: dict[str, str] = {}
+    for c in choices:
+        by_key.setdefault(match_key(c), c)
+    key = match_key(value)
+    if (hit := by_key.get(key)) is not None:
+        return hit
+    if synonyms and key:
+        for k in (key, key.split()[-1]):
+            if (target := synonyms.get(k)) is not None and target in by_key:
+                return by_key[target]
+    return None
+
+
+def _scored(
+    v: Any,
+    limit: int,
+    choices: list[str] | None = None,
+    *,
+    strict: bool = False,
+    synonyms: dict[str, str] | None = None,
+    default_confidence: float | None = None,
+) -> dict[str, Any] | None:
+    """Unwrap, clip and clean one field. With choices, a value meaning one of
+    them takes its spelling; with strict, any other value is dropped."""
+    text, c = _unwrap(v)
+    if text is None:
         return None
-    value = _clip(v["value"], limit)
+    value = _clip(text, limit)
     if not value or value.casefold() in PLACEHOLDERS:
         return None
-    if prefer:
-        exact = {p.casefold(): p for p in prefer}
-        value = exact.get(value.casefold(), value)
+    if choices:
+        hit = snap(value, choices, synonyms)
+        if hit is None and strict:
+            return None
+        value = hit or value
     out: dict[str, Any] = {"value": value}
-    if (c := _confidence(v.get("confidence"))) is not None:
-        out["confidence"] = c
+    if (conf := _confidence(c)) is not None or (conf := default_confidence) is not None:
+        out["confidence"] = conf
     return out
 
 
@@ -226,6 +318,8 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
             if lowered.get(k) not in (None, "", [], {}):
                 out[key] = lowered[k]
                 break
+    if "confidence" in lowered:
+        out["confidence"] = lowered["confidence"]
     tags = out.get("tags")
     if isinstance(tags, str):
         out["tags"] = [t for t in re.split(r"[,;]", tags) if t.strip()]
@@ -236,19 +330,34 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
 
 def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     raw = normalize(raw)
+    # Moondream often answers flat with a single top-level confidence; it
+    # stands in for fields that carry none of their own.
+    overall = _confidence(raw.get("confidence"))
     out: dict[str, Any] = {}
-    for key, limit, prefer in (
-        ("name", MAX_NAME, None),
-        ("category", MAX_CATEGORY, context.get("categories")),
-        ("description", MAX_DESCRIPTION, None),
-    ):
-        if (s := _scored(raw.get(key), limit, prefer)) is not None:
-            out[key] = s
+    if (s := _scored(raw.get("name"), MAX_NAME, default_confidence=overall)) is not None:
+        out["name"] = s
+    # When the client lists its categories, the answer must be one of them.
+    if (
+        s := _scored(
+            raw.get("category"),
+            MAX_CATEGORY,
+            context.get("categories"),
+            strict=True,
+            synonyms=CATEGORY_SYNONYMS,
+            default_confidence=overall,
+        )
+    ) is not None:
+        out["category"] = s
+    if (
+        s := _scored(raw.get("description"), MAX_DESCRIPTION, default_confidence=overall)
+    ) is not None:
+        out["description"] = s
     tags_raw = raw.get("tags")
     if isinstance(tags_raw, list):
         seen: set[str] = set()
         tags = []
         for t in tags_raw:
+            # New tags are allowed; existing ones keep the client's spelling.
             s = _scored(t, MAX_TAG, context.get("tags"))
             if s is None or s["value"].casefold() in seen:
                 continue
