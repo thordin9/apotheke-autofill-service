@@ -5,6 +5,8 @@ description) from a photo, for [Apotheke](https://github.com/thordin9/apotheke).
 
 Contract: [docs/api-v1.md](docs/api-v1.md) · [openapi.yaml](openapi.yaml)
 
+Hardware CI on the Jetson (nightly, not a required check): [docs/hardware-ci.md](docs/hardware-ci.md)
+
 ## Quickstart
 
 ```bash

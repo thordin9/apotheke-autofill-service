@@ -1,0 +1,218 @@
+# Real-hardware smoke test on the self-hosted Jetson runner (label `jetson`).
+#
+# SECURITY: this repository is public and the runner sits on a private LAN,
+# running as a user in the `docker` group (root-equivalent on the board).
+#   * NEVER add `pull_request`, `pull_request_target` or any other trigger a fork
+#     can fire. Only push to main, schedule and workflow_dispatch reach the board.
+#   * No secrets. The only credential is a random AUTOFILL_TOKEN made per run.
+#   * Read-only GITHUB_TOKEN.
+# This workflow must not be a required status check: the board can be offline.
+# See docs/hardware-ci.md.
+
+name: Jetson hardware
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 00:00 UTC = 03:00 Europe/Athens in summer (EEST), 02:00 in winter (EET).
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      ollama_url:
+        description: Ollama base URL as seen from the board (host network)
+        default: http://127.0.0.1:11434
+        required: false
+      rounds:
+        description: Passes over the fixture photos (each pass = 2 requests per photo)
+        default: "2"
+        required: false
+
+permissions:
+  contents: read
+
+# One run at a time on the board; queue rather than cancel a run mid-benchmark.
+concurrency:
+  group: jetson-hardware
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  smoke:
+    name: Moondream smoke (Jetson)
+    # Forks that enable Actions have no `jetson` runner; don't queue forever there.
+    if: github.repository == 'thordin9/apotheke-autofill-service'
+    runs-on: [self-hosted, jetson]
+    timeout-minutes: 90
+    env:
+      IMAGE: apotheke-autofill:jetson-ci
+      CI_LABEL: org.apotheke.ci=jetson-hardware
+      CONTAINER: autofill-hwci-${{ github.run_id }}
+      # Loopback only, off 8080, so it never clashes with (or exposes) the
+      # long-running service on the board.
+      SVC_PORT: "18080"
+      OLLAMA_URL: ${{ inputs.ollama_url || 'http://127.0.0.1:11434' }}
+      OLLAMA_MODEL: moondream
+      ROUNDS: ${{ inputs.rounds || '2' }}
+      WARMUP_TIMEOUT_S: "900"
+      OUT: hw-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Preflight
+        id: preflight
+        run: |
+          mkdir -p "$OUT"
+          skip() {
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+              echo "::error title=Jetson hardware smoke not possible::$1"
+              exit 1
+            fi
+            echo "::warning title=Jetson hardware smoke skipped::$1"
+            exit 0
+          }
+          [ -f Dockerfile.jetson ] \
+            || skip "Dockerfile.jetson is not on this ref yet (it arrives with PR #2)."
+          [ -f app/backends/ollama.py ] \
+            || skip "The Ollama backend is not on this ref yet (it arrives with PR #3)."
+
+          # Inputs reach the shell only through env vars; still validate them.
+          [[ "$OLLAMA_URL" =~ ^https?://[A-Za-z0-9.:-]+/?$ ]] \
+            || { echo "::error::ollama_url must look like http://host:port"; exit 1; }
+          [[ "$ROUNDS" =~ ^[1-9][0-9]?$ ]] \
+            || { echo "::error::rounds must be 1-99"; exit 1; }
+
+          # Real hardware problems fail the run (not skip).
+          docker version --format 'docker {{.Server.Version}}'
+          if ! curl -fsS --max-time 10 "${OLLAMA_URL%/}/api/version" -o "$OUT/ollama-version.json"; then
+            echo "::error::Ollama is not reachable at $OLLAMA_URL from the board."
+            exit 1
+          fi
+          curl -fsS --max-time 10 "${OLLAMA_URL%/}/api/tags" -o "$OUT/ollama-tags.json"
+          python3 - "$OUT/ollama-tags.json" "$OLLAMA_MODEL" << 'PY'
+          import json, sys
+          names = [m.get("name", "") for m in json.load(open(sys.argv[1])).get("models", [])]
+          want = sys.argv[2]
+          if not any(n == want or n.startswith(want + ":") for n in names):
+              print("::error::model %r is not pulled in the host Ollama (have: %s)" % (want, names))
+              sys.exit(1)
+          print("model present:", want)
+          PY
+          {
+            echo "commit $GITHUB_SHA ($GITHUB_EVENT_NAME)"
+            cat /etc/nv_tegra_release 2>/dev/null || true
+            uname -a
+            nvpmodel -q 2>/dev/null || echo "nvpmodel not available"
+            free -m
+            df -h / /var/lib/docker 2>/dev/null || df -h /
+          } > "$OUT/board.txt" 2>&1
+          cat "$OUT/board.txt"
+          echo "power_mode=$(nvpmodel -q 2>/dev/null | sed -n 's/^NV Power Mode: //p' | head -1)" >> "$GITHUB_OUTPUT"
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build Jetson image
+        if: steps.preflight.outputs.run == 'true'
+        run: |
+          set -o pipefail
+          docker build -f Dockerfile.jetson --label "$CI_LABEL" -t "$IMAGE" . 2>&1 \
+            | tee "$OUT/build.log"
+
+      - name: Start tegrastats
+        if: steps.preflight.outputs.run == 'true'
+        run: |
+          if command -v tegrastats >/dev/null; then
+            nohup tegrastats --interval 1000 --logfile "$OUT/tegrastats.log" >/dev/null 2>&1 &
+            echo $! > "$RUNNER_TEMP/tegrastats.pid"
+            echo "tegrastats pid $(cat "$RUNNER_TEMP/tegrastats.pid")"
+          else
+            echo "::notice::tegrastats not found; no memory figures this run."
+          fi
+
+      - name: Start service container
+        if: steps.preflight.outputs.run == 'true'
+        run: |
+          token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          echo "::add-mask::$token"
+          echo "AUTOFILL_TOKEN=$token" >> "$GITHUB_ENV"
+          export AUTOFILL_TOKEN="$token"
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          # Host network so the service reaches the host Ollama on 127.0.0.1.
+          # The entrypoint is set explicitly so only our service runs (the
+          # Ollama base image must not start a second Ollama server).
+          docker run -d --name "$CONTAINER" --label "$CI_LABEL" \
+            --network host --no-healthcheck \
+            -e BACKEND=ollama \
+            -e OLLAMA_URL -e OLLAMA_MODEL -e AUTOFILL_TOKEN \
+            -e OLLAMA_LOG_RAW=1 \
+            -e OLLAMA_QUEUE_SIZE=0 \
+            -e BACKEND_TIMEOUT_S=25 \
+            --entrypoint python3.11 \
+            "$IMAGE" -m uvicorn app.main:app --host 127.0.0.1 --port "$SVC_PORT"
+
+      - name: Wait for warm-up (healthz, then info ready:true)
+        if: steps.preflight.outputs.run == 'true'
+        run: |
+          python3 scripts/hardware_smoke.py wait \
+            --base-url "http://127.0.0.1:$SVC_PORT" \
+            --container "$CONTAINER" \
+            --timeout "$WARMUP_TIMEOUT_S" \
+            --json-out "$OUT/warmup.json"
+
+      - name: Hardware smoke
+        if: steps.preflight.outputs.run == 'true'
+        run: |
+          python3 scripts/hardware_smoke.py run \
+            --base-url "http://127.0.0.1:$SVC_PORT" \
+            --rounds "$ROUNDS" \
+            --json-out "$OUT/hardware-smoke.json"
+
+      - name: Collect logs
+        if: always() && steps.preflight.outputs.run == 'true'
+        run: |
+          if [ -f "$RUNNER_TEMP/tegrastats.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/tegrastats.pid")" 2>/dev/null || true
+            rm -f "$RUNNER_TEMP/tegrastats.pid"
+          fi
+          docker logs --timestamps "$CONTAINER" > "$OUT/container.log" 2>&1 || true
+          docker inspect --format '{{json .State}}' "$CONTAINER" > "$OUT/container-state.json" 2>&1 || true
+          docker stats --no-stream "$CONTAINER" > "$OUT/container-stats.txt" 2>&1 || true
+          curl -fsS --max-time 10 "${OLLAMA_URL%/}/api/ps" -o "$OUT/ollama-ps.json" || true
+          free -m > "$OUT/free-after.txt" 2>&1 || true
+
+      - name: Summary
+        if: always()
+        env:
+          SKIP_REASON: ${{ steps.preflight.outputs.reason }}
+          POWER_MODE: ${{ steps.preflight.outputs.power_mode }}
+        run: |
+          notes=(--note "Commit \`${GITHUB_SHA::7}\` · event \`$GITHUB_EVENT_NAME\` · power mode \`${POWER_MODE:-unknown}\` · model \`$OLLAMA_MODEL\`")
+          [ -n "$SKIP_REASON" ] && notes+=(--note "Skipped: $SKIP_REASON")
+          python3 scripts/hardware_smoke.py report \
+            --results "$OUT/hardware-smoke.json" \
+            --wait-results "$OUT/warmup.json" \
+            --tegrastats "$OUT/tegrastats.log" \
+            "${notes[@]}" \
+            --out "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload logs
+        if: always() && steps.preflight.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jetson-hardware-${{ github.run_id }}-${{ github.run_attempt }}
+          path: hw-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          # Only dangling images this workflow built; never other images on the board.
+          docker image prune -f --filter "label=$CI_LABEL" || true
