@@ -16,6 +16,9 @@ Env (read when the backend is created):
   OLLAMA_KEEP_ALIVE      how long Ollama keeps the model loaded after a request
                          (default 30m; -1 keeps it loaded forever)
   OLLAMA_JSON_FORMAT     1 (default) sends format=json; 0 lets the model answer freely
+  OLLAMA_PLAIN_RETRY     1 (default): if the JSON answer is unusable and less than 40%
+                         of BACKEND_TIMEOUT_S has passed, ask once more with a short
+                         plain-text prompt and derive name/description from the text
   OLLAMA_LOG_RAW         1 logs every raw model answer at DEBUG (default 0). Unusable
                          answers are always logged at WARNING. Logged text is cut to
                          2 KB; the image and the request token are never logged.
@@ -260,6 +263,73 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# Second-chance prompt: small models describe far more reliably than they
+# follow a JSON schema.
+PLAIN_PROMPT = "Describe the main object in this photo in one short sentence."
+TEXT_NAME_CONFIDENCE = 0.3
+TEXT_DESCRIPTION_CONFIDENCE = 0.4
+
+_REFUSAL = re.compile(r"^(?:i'?m sorry|sorry|i cannot|i can'?t|i am unable|unable to)\b", re.I)
+_LEADS = re.compile(
+    r"^(?:"
+    r"(?:in|from) (?:the|this) (?:image|photo|picture),?\s*"
+    r"|(?:the|this) (?:image|photo|picture)\s+"
+    r"(?:shows|features|depicts|contains|displays|captures|is of)\s+"
+    r"|(?:there is|there are|this is|these are|it is|it's|i see|we can see|you can see)\s+"
+    r"|(?:a |an )?(?:close-up|photo|picture|image)(?: of)?\s+"
+    r"|(?:a|an|the|some|one)\s+"
+    r")",
+    re.I,
+)
+_NAME_END = re.compile(
+    r"[,.;:!?()]|\s(?:with|on|in|inside|sitting|lying|placed|resting|standing|that|which"
+    r"|next|against|under|over|near|beside|is|are|has|being)\b",
+    re.I,
+)
+
+
+def _cap(s: str) -> str:
+    return s[:1].upper() + s[1:]
+
+
+def suggestion_from_text(text: str, context: dict[str, Any]) -> dict[str, Any]:
+    """Derive a low-confidence Suggestion from a plain-text description."""
+    text = " ".join(text.split())
+    if not re.search(r"[^\W\d_]{2,}", text) or text.startswith(("{", "[")) or _REFUSAL.match(text):
+        raise BackendError("model output had no usable text")
+    sentence = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+    body = sentence
+    while (stripped := _LEADS.sub("", body, count=1)) != body:
+        body = stripped
+    name = _NAME_END.split(body, maxsplit=1)[0].strip()
+    out: dict[str, Any] = {
+        "description": {"value": _cap(sentence), "confidence": TEXT_DESCRIPTION_CONFIDENCE}
+    }
+    if 1 <= len(name.split()) <= 6:
+        out["name"] = {"value": _cap(name), "confidence": TEXT_NAME_CONFIDENCE}
+    low = sentence.casefold()
+
+    def mentioned(v: str) -> bool:
+        return bool(v.strip()) and re.search(rf"\b{re.escape(v.casefold())}\b", low) is not None
+
+    if cats := [c for c in context.get("categories", []) if mentioned(c)]:
+        out["category"] = {"value": cats[0], "confidence": TEXT_NAME_CONFIDENCE}
+    if tags := [t for t in context.get("tags", []) if mentioned(t)]:
+        out["tags"] = [{"value": t, "confidence": TEXT_NAME_CONFIDENCE} for t in tags]
+    return clamp(out, context)
+
+
+def parse_suggestion(content: str, context: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Return (suggestion, "json" | "text"); JSON first, then plain text."""
+    try:
+        return clamp(extract_json(content), context), "json"
+    except BackendError as json_exc:
+        try:
+            return suggestion_from_text(content, context), "text"
+        except BackendError:
+            raise json_exc from None
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     try:
@@ -312,6 +382,7 @@ class OllamaBackend(Backend):
         self.keep_alive = _keep_alive(os.environ.get("OLLAMA_KEEP_ALIVE", ""))
         self.json_format = _env_flag("OLLAMA_JSON_FORMAT", True)
         self.log_raw = _env_flag("OLLAMA_LOG_RAW", False)
+        self.plain_retry = _env_flag("OLLAMA_PLAIN_RETRY", True)
         if self.log_raw:
             _enable_debug_logging()
         self.ready = not self.warmup_enabled
@@ -391,21 +462,15 @@ class OllamaBackend(Backend):
             opts["num_predict"] = self.num_predict
         return opts
 
-    async def generate(self, image_bytes: bytes, context: dict[str, Any]) -> dict[str, Any]:
+    async def _chat(self, prompt: str, image_b64: str, json_format: bool) -> str:
         payload: dict[str, Any] = {
             "model": self.model,
             "stream": False,
             "keep_alive": self.keep_alive,
             "options": self.options(),
-            "messages": [
-                {
-                    "role": "user",
-                    "content": build_prompt(context),
-                    "images": [base64.b64encode(image_bytes).decode()],
-                }
-            ],
+            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
         }
-        if self.json_format:
+        if json_format:
             payload["format"] = "json"
         data = await self._post("/api/chat", payload)
         content = (data.get("message") or {}).get("content")
@@ -419,17 +484,43 @@ class OllamaBackend(Backend):
                 len(content),
                 truncate_for_log(content),
             )
+        return content
+
+    def _parse(self, content: str, context: dict[str, Any], attempt: str) -> dict[str, Any]:
         try:
-            return clamp(extract_json(content), context)
+            out, how = parse_suggestion(content, context)
         except BackendError as exc:
             log.warning(
-                "ollama output unusable: %s (model=%s, %d chars): %r",
+                "ollama output unusable (%s prompt): %s (model=%s, %d chars): %r",
+                attempt,
                 exc,
                 self.model,
                 len(content),
                 truncate_for_log(content),
             )
             raise
+        if how == "text" and attempt == "json":
+            log.warning(
+                "ollama ignored the JSON instructions; derived fields from plain text "
+                "(model=%s, %d chars): %r",
+                self.model,
+                len(content),
+                truncate_for_log(content),
+            )
+        return out
+
+    async def generate(self, image_bytes: bytes, context: dict[str, Any]) -> dict[str, Any]:
+        started = time.monotonic()
+        image_b64 = base64.b64encode(image_bytes).decode()
+        content = await self._chat(build_prompt(context), image_b64, self.json_format)
+        try:
+            return self._parse(content, context, "json")
+        except BackendError:
+            budget = get_settings().backend_timeout_s * 0.4
+            if not self.plain_retry or time.monotonic() - started > budget:
+                raise
+        content = await self._chat(PLAIN_PROMPT, image_b64, json_format=False)
+        return self._parse(content, context, "plain")
 
     async def suggest(self, image_bytes: bytes, mime: str, context: dict[str, Any]) -> Any:
         self.start()

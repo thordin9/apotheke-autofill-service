@@ -35,6 +35,7 @@ _ENV = [
     "OLLAMA_KEEP_ALIVE",
     "OLLAMA_JSON_FORMAT",
     "OLLAMA_LOG_RAW",
+    "OLLAMA_PLAIN_RETRY",
 ]
 
 

@@ -11,10 +11,12 @@ from ollama_mock import FakeOllama
 from app.backends.ollama import (
     MAX_TAG,
     MAX_TAGS,
+    PLAIN_PROMPT,
     RAW_LOG_LIMIT,
     build_prompt,
     clamp,
     extract_json,
+    suggestion_from_text,
     truncate_for_log,
 )
 
@@ -96,10 +98,21 @@ def test_context_in_prompt_and_exact_spelling(oclient, fake):
 
 @pytest.mark.parametrize(
     "content",
-    ["not json at all", "[1,2]", '{"name": 5}', "{broken", '{"tags": []}', '{"name": "str"}'],
+    [
+        "",
+        "   \n\n  ",
+        "{}",
+        "[1,2]",
+        '{"name": 5}',
+        "{broken",
+        '{"tags": []}',
+        '{"name": "str"}',
+        "I'm sorry, I can't help with that.",
+        "12 34 ?!",
+    ],
 )
 def test_malformed_model_output(oclient, fake, content):
-    fake.chat_content = content
+    fake.chat_content = content  # the plain-text retry gets the same junk
     r = post_image(oclient())
     assert r.status_code == 503
     assert assert_contract(r, "/v1/suggest", "post")["error"]["code"] == "backend_error"
@@ -111,14 +124,14 @@ def _log_text(caplog) -> str:
 
 def test_unusable_output_logs_raw_at_warning(oclient, fake, caplog):
     caplog.set_level(logging.WARNING, logger=LOGGER)
-    fake.chat_content = "I see a red drill.\nIt is on a table."
-    c = oclient(AUTOFILL_TOKEN="s3cret-token")
+    fake.chat_content = '{"name": 5}\n{"tags": []}'
+    c = oclient(AUTOFILL_TOKEN="s3cret-token", OLLAMA_PLAIN_RETRY="0")
     r = post_image(c, data=IMAGE, headers={"Authorization": "Bearer s3cret-token"})
     assert r.status_code == 503
     warnings = [r for r in caplog.records if r.name == LOGGER and r.levelno == logging.WARNING]
     assert warnings
     text = _log_text(caplog)
-    assert "I see a red drill.\\nIt is on a table." in text  # repr: one line per record
+    assert '{"name": 5}\\n{"tags": []}' in text  # repr: one line per record
     assert "model=moondream" in text
     assert base64.b64encode(IMAGE).decode()[:40] not in text
     assert "s3cret-token" not in text
@@ -126,8 +139,8 @@ def test_unusable_output_logs_raw_at_warning(oclient, fake, caplog):
 
 def test_raw_log_is_truncated(oclient, fake, caplog):
     caplog.set_level(logging.WARNING, logger=LOGGER)
-    fake.chat_content = "x" * 10_000
-    assert post_image(oclient()).status_code == 503
+    fake.chat_content = "{" + "x" * 10_000
+    assert post_image(oclient(OLLAMA_PLAIN_RETRY="0")).status_code == 503
     rec = next(r for r in caplog.records if r.name == LOGGER)
     assert len(rec.getMessage()) < RAW_LOG_LIMIT + 300
     assert "more chars]" in rec.getMessage()
@@ -365,3 +378,94 @@ def test_schema_placeholders_are_dropped():
 def test_confidence_coercion(c, want):
     out = clamp({"name": {"value": "x", "confidence": c}}, {})
     assert out["name"].get("confidence") == want
+
+
+# -- plain-text fallback ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "name"),
+    [
+        (
+            "The image shows a red Bosch cordless drill on a wooden table.",
+            "Red Bosch cordless drill",
+        ),
+        ("A white ceramic coffee mug with a blue handle.", "White ceramic coffee mug"),
+        (
+            "In this image, there is a pair of black headphones lying on a desk.",
+            "Pair of black headphones",
+        ),
+        ("This is a stainless steel water bottle. It has a cap.", "Stainless steel water bottle"),
+        ("A close-up of an old brass key", "Old brass key"),
+    ],
+)
+def test_name_from_plain_text(text, name):
+    out = suggestion_from_text(text, {})
+    assert out["name"] == {"value": name, "confidence": 0.3}
+    assert out["description"]["confidence"] == 0.4
+
+
+def test_plain_text_description_is_first_sentence():
+    out = suggestion_from_text("a red drill. It sits on a table.", {})
+    assert out["description"]["value"] == "A red drill."
+
+
+def test_long_phrase_gives_description_only():
+    out = suggestion_from_text(
+        "Several mismatched old kitchen utensils scattered loosely across the countertop", {}
+    )
+    assert "name" not in out and "description" in out
+
+
+def test_plain_text_matches_existing_categories_and_tags():
+    ctx = {"categories": ["Tools", "Kitchen"], "tags": ["Bosch", "blue", "red"]}
+    out = suggestion_from_text("The image shows a red Bosch drill among other tools.", ctx)
+    assert out["category"] == {"value": "Tools", "confidence": 0.3}
+    assert [t["value"] for t in out["tags"]] == ["Bosch", "red"]
+
+
+def test_prose_answer_to_json_prompt_is_used(oclient, fake, caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    fake.chat_content = "The image shows a red Bosch cordless drill on a wooden table."
+    body = assert_contract(post_image(oclient()), "/v1/suggest", "post")
+    assert body["name"] == {"value": "Red Bosch cordless drill", "confidence": 0.3}
+    assert len(fake.chats()) == 1  # no retry needed
+    assert "ignored the JSON instructions" in _log_text(caplog)
+
+
+def test_empty_json_retries_with_plain_prompt(oclient, fake, caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    fake.chat_queue = ["{}", "A white ceramic coffee mug on a desk."]
+    body = assert_contract(post_image(oclient()), "/v1/suggest", "post")
+    assert body["name"]["value"] == "White ceramic coffee mug"
+    first, second = fake.chats()
+    assert first["format"] == "json"
+    assert "format" not in second
+    assert second["messages"][0]["content"] == PLAIN_PROMPT
+    assert second["messages"][0]["images"] == first["messages"][0]["images"]
+    assert second["options"]["num_predict"] == 256
+    assert "unusable (json prompt)" in _log_text(caplog)
+
+
+def test_plain_retry_disabled(oclient, fake):
+    fake.chat_queue = ["{}", "A white ceramic coffee mug."]
+    r = post_image(oclient(OLLAMA_PLAIN_RETRY="0"))
+    assert r.status_code == 503 and r.json()["error"]["code"] == "backend_error"
+    assert len(fake.chats()) == 1
+
+
+def test_no_plain_retry_when_time_budget_spent(oclient, fake):
+    fake.chat_queue = ["{}", "A white ceramic coffee mug."]
+    fake.chat_delay = 0.5
+    r = post_image(oclient(BACKEND_TIMEOUT_S="1"))  # 0.5 s used > 40% of 1 s
+    assert r.status_code == 503 and r.json()["error"]["code"] == "backend_error"
+    assert len(fake.chats()) == 1
+
+
+def test_both_attempts_unusable_is_backend_error(oclient, fake, caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    fake.chat_queue = ["{}", "   "]
+    r = post_image(oclient())
+    assert r.status_code == 503 and r.json()["error"]["code"] == "backend_error"
+    assert len(fake.chats()) == 2
+    assert "unusable (plain prompt)" in _log_text(caplog)

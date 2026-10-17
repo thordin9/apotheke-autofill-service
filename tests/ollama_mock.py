@@ -19,6 +19,7 @@ class FakeOllama:
                 "description": {"value": "Red Bosch 18V drill", "confidence": 0.7},
             }
         )
+        self.chat_queue: list[str] = []  # if set, consumed one per chat call
         self.chat_status = 200
         self.chat_raw: bytes | None = None
         self.chat_delay = 0.0
@@ -44,7 +45,8 @@ class FakeOllama:
                 if fake.chat_raw is not None:
                     self._send(fake.chat_status, fake.chat_raw)
                     return
-                msg = {"message": {"role": "assistant", "content": fake.chat_content}}
+                content = fake.chat_queue.pop(0) if fake.chat_queue else fake.chat_content
+                msg = {"message": {"role": "assistant", "content": content}}
                 self._send(fake.chat_status, json.dumps(msg).encode())
 
             def _send(self, status, data):
