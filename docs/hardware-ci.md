@@ -8,11 +8,10 @@ it to branch protection.
 
 ## When it runs
 
-| Trigger | When |
-|---|---|
-| `push` to `main` | after every merge |
-| `schedule` | nightly, `0 0 * * *` UTC (03:00 Athens in summer, 02:00 in winter) |
-| `workflow_dispatch` | by hand (Actions → Jetson hardware → Run workflow); inputs `ollama_url`, `rounds` |
+Only by hand: `workflow_dispatch` (Actions → Jetson hardware → Run workflow, or
+`gh workflow run jetson-hardware.yml`), with inputs `ollama_url` and `rounds`.
+There is no schedule and no push trigger on purpose; run it once when you need
+fresh numbers, for example after changing the model or the prompt.
 
 > **Never** add `pull_request` or `pull_request_target`. The repo is public and
 > the runner's user is in the `docker` group on a LAN machine, so a fork PR that
@@ -21,8 +20,7 @@ it to branch protection.
 > (repo Actions setting), and `main` requires a PR.
 
 Until `Dockerfile.jetson` (PR #2) and the Ollama backend (PR #3) are on `main`,
-scheduled and push runs **skip** with a warning. A manual run **fails** with
-the same message.
+a run **fails** with a message saying which one is missing.
 
 ## What it does
 

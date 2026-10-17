@@ -3,7 +3,8 @@
 # SECURITY: this repository is public and the runner sits on a private LAN,
 # running as a user in the `docker` group (root-equivalent on the board).
 #   * NEVER add `pull_request`, `pull_request_target` or any other trigger a fork
-#     can fire. Only push to main, schedule and workflow_dispatch reach the board.
+#     can fire. Only workflow_dispatch (run by hand) reaches the board.
+#     There is deliberately no schedule or push trigger: run it when needed.
 #   * No secrets. The only credential is a random AUTOFILL_TOKEN made per run.
 #   * Read-only GITHUB_TOKEN.
 # This workflow must not be a required status check: the board can be offline.
@@ -12,11 +13,6 @@
 name: Jetson hardware
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    # 00:00 UTC = 03:00 Europe/Athens in summer (EEST), 02:00 in winter (EET).
-    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       ollama_url:
