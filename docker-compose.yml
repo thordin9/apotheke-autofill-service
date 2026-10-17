@@ -1,0 +1,98 @@
+# Local stacks.
+# Default (`docker compose up`) is the echo profile, selected by COMPOSE_PROFILES
+# in .env. `docker compose --profile ollama up` replaces that profile.
+services:
+  autofill:
+    profiles: ["echo"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: apotheke-autofill:echo
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      BACKEND: echo
+      # Optional bearer token; leave empty to disable auth.
+      AUTOFILL_TOKEN: "${AUTOFILL_TOKEN:-}"
+      # QA failure-mode switches (echo only): ok|error|malformed|slow
+      ECHO_MODE: "${ECHO_MODE:-ok}"
+      ECHO_DELAY_MS: "${ECHO_DELAY_MS:-0}"
+    healthcheck:
+      # /healthz stays open when AUTOFILL_TOKEN is set; /v1/info does not.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Stock Ollama on x86. CPU by default; see docker-compose.gpu.yml.
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:0.40.4
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # Image default OLLAMA_HOST is the bind address 0.0.0.0:11434.
+      # Point the client at the loopback listener explicitly.
+      test: ["CMD-SHELL", "OLLAMA_HOST=127.0.0.1:11434 ollama list"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  # Pulls moondream into the ollama volume, then exits.
+  ollama-init:
+    profiles: ["ollama"]
+    image: ollama/ollama:0.40.4
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-moondream}
+      OLLAMA_EXTRA_MODEL: ${OLLAMA_EXTRA_MODEL:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        ollama pull moondream
+        model="$${OLLAMA_MODEL:-moondream}"
+        if [ "$$model" != "moondream" ]; then
+          ollama pull "$$model"
+        fi
+        extra="$${OLLAMA_EXTRA_MODEL:-}"
+        if [ -n "$$extra" ] && [ "$$extra" != "moondream" ] && [ "$$extra" != "$$model" ]; then
+          ollama pull "$$extra"
+        fi
+    restart: "no"
+
+  autofill-ollama:
+    profiles: ["ollama"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: apotheke-autofill:echo
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      BACKEND: ollama
+      # The app reads OLLAMA_URL. OLLAMA_HOST is the server/CLI variable.
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-moondream}
+      AUTOFILL_TOKEN: "${AUTOFILL_TOKEN:-}"
+      # Vision models on CPU often exceed the app's 25s default.
+      BACKEND_TIMEOUT_S: ${BACKEND_TIMEOUT_S:-120}
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  ollama-models:

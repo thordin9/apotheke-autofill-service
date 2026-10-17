@@ -1,0 +1,64 @@
+# Jetson Xavier / JetPack 5 (L4T r35.x) image.
+# Base: dusty-nv jetson-containers Ollama build (NOT stock ollama/ollama).
+# Target: Ubuntu-based NVIDIA Jetson Xavier, 8 GB shared memory.
+#
+# dustynv/ollama:r35.4.1 (Ubuntu 20.04.6, glibc 2.31) ships Python 3.8.10 as
+# `python3`, Python 3.9.5 as `python3.9`, and Python 2.7 as `python`. It has
+# no pip or pip3. Deadsnakes no longer publishes focal/arm64 packages, so this
+# image installs CPython 3.11 from python-build-standalone (needs glibc 2.17,
+# includes pip). The service requires Python >=3.11.
+#
+# The base image sets PIP_INDEX_URL to jetson.webredirect.org (the jetson-containers
+# wheel mirror), which has no fastapi/pydantic wheels for cp311 and is often down,
+# so pip resolves "from versions: none". Point pip back at PyPI.
+#
+# Build (on a Jetson, or an arm64 builder — not GitHub-hosted QEMU; see
+# .github/workflows/jetson.yml):
+#   docker build -f Dockerfile.jetson -t apotheke-autofill:jetson .
+#
+# Run (on device):
+#   docker run --runtime nvidia --network host \
+#     -e BACKEND=ollama \
+#     -e OLLAMA_URL=http://127.0.0.1:11434 \
+#     -e OLLAMA_MODEL=moondream \
+#     -e AUTOFILL_TOKEN= \
+#     apotheke-autofill:jetson
+
+ARG L4T_TAG=r35.4.1
+FROM dustynv/ollama:${L4T_TAG}
+
+# install_only_stripped still ships bin/pip3.11. glibc symbol requirement is 2.17.
+ARG PYTHON_STANDALONE_URL=https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.11.17%2B20261013-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    BACKEND=ollama \
+    PORT=8080 \
+    OLLAMA_URL=http://127.0.0.1:11434 \
+    OLLAMA_MODEL=moondream \
+    PATH=/opt/python/bin:${PATH} \
+    PIP_INDEX_URL=https://pypi.org/simple \
+    PIP_EXTRA_INDEX_URL= \
+    PIP_TRUSTED_HOST=
+
+COPY requirements-jetson.txt .
+
+RUN curl -fsSL "${PYTHON_STANDALONE_URL}" -o /tmp/python.tgz \
+    && tar -xzf /tmp/python.tgz -C /opt \
+    && rm /tmp/python.tgz \
+    && python3.11 --version \
+    && python3.11 -m pip --version \
+    && python3.11 -m pip install --no-cache-dir -r requirements-jetson.txt \
+    && python3.11 -c "import fastapi, pydantic, uvicorn, multipart; print('jetson deps', fastapi.__version__, pydantic.VERSION, uvicorn.__version__)"
+
+COPY app ./app
+
+EXPOSE 8080
+
+# Healthcheck hits FastAPI, not Ollama. /healthz is unauthenticated.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD python3.11 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')" || exit 1
+
+CMD ["python3.11", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

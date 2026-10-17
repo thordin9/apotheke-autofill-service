@@ -1,0 +1,7 @@
+# Optional NVIDIA GPU for the Ollama profile. Not applied by `docker compose up`.
+# CPU remains the default (ollama/ollama runs without --gpus).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ollama up --build
+services:
+  ollama:
+    gpus: all

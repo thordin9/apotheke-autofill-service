@@ -9,4 +9,5 @@ htmlcov/
 dist/
 build/
 *.egg-info/
-.env
+# Secrets. The tracked .env only sets COMPOSE_PROFILES.
+.env.local
