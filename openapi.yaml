@@ -118,12 +118,60 @@ components:
             loaded model (moving average of recent requests, model load time
             excluded). Absent until the backend has a measurement. Meant for
             estimated progress indicators; not a deadline or a guarantee.
+        models:
+          type: array
+          items: {$ref: "#/components/schemas/ModelInfo"}
+          description: |
+            Added in v1.2 (additive; version stays "1"). Optional; absent unless
+            the server sets ALLOWED_MODELS. The models a client may pick with
+            `context.model`: the default first (`default: true`), then the
+            allowlisted models the backend has installed. Clients MUST tolerate
+            its absence and then send no `context.model`.
+        image_sizes:
+          type: array
+          items: {$ref: "#/components/schemas/ImageSize"}
+          description: |
+            Added in v1.2 (additive). Optional; absent unless the server sets
+            IMAGE_SIZES. Long-edge presets the client may resize photos to
+            before upload, ascending, exactly one `recommended: true`. The
+            service does not resize; it only advertises the presets.
+    ModelInfo:
+      type: object
+      required: [id, default]
+      properties:
+        id:
+          type: string
+          examples: [qwen2.5vl-jetson:3b]
+          description: Value to send as `context.model`.
+        default:
+          type: boolean
+          description: true for the model used when `context.model` is absent or not allowed
+        loaded:
+          type: boolean
+          description: Whether the model is in memory now. Picking a model that is not loaded makes the next request a cold start (it waits for the load or gets 503 + Retry-After). Absent when unknown.
+        avg_latency_ms:
+          type: integer
+          minimum: 0
+          description: Like Info.avg_latency_ms, for this model. Absent until measured.
+    ImageSize:
+      type: object
+      required: [long_edge, recommended]
+      properties:
+        long_edge: {type: integer, minimum: 64, maximum: 8192, examples: [448, 672, 1024]}
+        recommended: {type: boolean}
     Context:
       type: object
       properties:
         categories: {type: array, items: {type: string}}
         tags: {type: array, items: {type: string}}
         locale: {type: string, examples: [en, de-DE]}
+        model:
+          type: string
+          examples: [qwen2.5vl-jetson:3b]
+          description: |
+            Added in v1.2, optional. One of the `models[].id` from /v1/info.
+            A model that is not allowlisted or not installed falls back to the
+            default; `model_used` in the response says which model answered.
     Scored:
       type: object
       required: [value]
@@ -139,6 +187,10 @@ components:
         tags:
           type: array
           items: {$ref: "#/components/schemas/Scored"}
+        model_used:
+          type: string
+          examples: [qwen2.5vl-jetson:3b]
+          description: Added in v1.2, optional. The model that produced this answer.
     Error:
       type: object
       required: [error]
@@ -169,7 +221,7 @@ components:
     BackendUnavailable:
       description: Backend not implemented, not ready, busy (queue full), or failed
       headers:
-        Retry-After: {schema: {type: integer}, description: Sent when not ready or busy}
+        Retry-After: {schema: {type: integer}, description: "Sent when not ready, busy, or loading a model (a cold start, e.g. a model switch with context.model). For a cold start it is that model's remaining load time in whole seconds, at least 1: Ollama uses max(15, the model's last measured load) minus the time its background load has already run; echo uses the remaining simulated load time."}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     BackendTimeout:
       description: Backend exceeded BACKEND_TIMEOUT_S

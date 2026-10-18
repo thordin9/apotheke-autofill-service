@@ -25,3 +25,11 @@ class Backend(ABC):
 
     @abstractmethod
     async def suggest(self, image_bytes: bytes, mime: str, context: dict[str, Any]) -> Any: ...
+
+
+class Busy(BackendUnavailable):
+    """Not now: warming up, loading a model or busy (503 + Retry-After)."""
+
+    def __init__(self, message: str, retry_after: int):
+        super().__init__(message)
+        self.headers = {"Retry-After": str(retry_after)}

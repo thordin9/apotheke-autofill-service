@@ -39,7 +39,7 @@ curl -s -F image=@photo.jpg \
      localhost:8080/v1/suggest
 ```
 
-Compose publishes `${PORT:-8080}` and passes `AUTOFILL_TOKEN`, `ECHO_MODE`, and `ECHO_DELAY_MS` through from the shell (empty token disables auth). Health checks call `GET /healthz`. That route stays open when `AUTOFILL_TOKEN` is set; `GET /v1/info` returns 401, so it is not a health check.
+Compose publishes `${PORT:-8080}` and passes `AUTOFILL_TOKEN`, `BACKEND_TIMEOUT_S`, `ALLOWED_MODELS`, `IMAGE_SIZES` and the `ECHO_*` knobs through from the shell (see [.env.example](.env.example)) (empty token disables auth). Health checks call `GET /healthz`. That route stays open when `AUTOFILL_TOKEN` is set; `GET /v1/info` returns 401, so it is not a health check.
 
 ```bash
 AUTOFILL_TOKEN=secret ECHO_MODE=ok docker compose up --build
@@ -126,8 +126,10 @@ another fits as well (2 × 13.5 s). The service decides from the last load time
 it measured (never assumed below 15 s) and the slowest of the last 5
 answers (15 s until measured), so one fast answer can't let in a request
 that then times out: when loading plus answering would not fit, as with Qwen at the
-generic 25 s default, it answers 503 with `Retry-After: 15` at once and reloads
-the model in the background. A request that would time out in the queue gets
+generic 25 s default, it answers 503 at once and reloads the model in the
+background, with `Retry-After` set to that model's remaining load time
+(max(15 s, its last measured load) minus the time the load has already run,
+at least 1 s). A request that would time out in the queue gets
 503 with a `Retry-After` based on recent request times. Clients should allow
 the backend timeout plus 5 s, so 50 s for the Jetson (Apotheke's maximum is 60 s).
 
@@ -181,7 +183,12 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `MAX_IMAGE_BYTES` | `10485760` (10 MiB) | Larger images get 413. |
 | `BACKEND_TIMEOUT_S` | `25` (`45` in the Jetson image) | Backend call limit; exceeded → 504. Clients should time out 5 s later (30 s, or 50 s for the Jetson). |
 | `ECHO_MODE` | `ok` | Echo only: `ok`, `error` (503), `malformed` (200 with invalid JSON body), `slow` (hangs → 504 after `BACKEND_TIMEOUT_S`). |
-| `ECHO_DELAY_MS` | `0` | Echo only: delay before answering. When above 0, `/v1/info` reports it as `avg_latency_ms`, so clients can test progress estimates without a model. |
+| `ALLOWED_MODELS` | *(unset)* | Models a client may pick with `context.model`, comma-separated, e.g. `moondream,qwen3-vl:2b`. The backend's own model (`OLLAMA_MODEL`, or `ECHO_MODEL` on echo) is always allowed and is the default, so it need not be listed. Unset: `/v1/info` has no `models` and `context.model` is ignored. Only installed models (Ollama `GET /api/tags`, cached 30 s) are offered and used; anything else falls back to the default. See [Model and image size choice](#model-and-image-size-choice). On the Jetson, leave it unset: `qwen3-vl:2b` cannot load there with Ollama 0.15.6 (out of memory), and the lower-`max_pixels` tags add nothing over client-side `IMAGE_SIZES` ([benchmarks](docs/benchmarks.md#recommendation)). |
+| `IMAGE_SIZES` | *(unset)* | Long-edge presets (pixels, 64–8192) advertised as `image_sizes` in `/v1/info`, comma-separated, the recommended one marked with a trailing `*`, e.g. `448,672*,1024`. Without a `*` the largest is recommended; more than one `*` or a bad value fails at startup. The client resizes; the service does not. Unset: no `image_sizes`. Recommended on the Jetson: `448,560*,1024` (560 px: median 8.3 s instead of 13.9 s at 1024 px with the same accuracy; see [docs/benchmarks.md](docs/benchmarks.md#image-size-sweep-and-qwen3-vl-2b-2026-10-18)). |
+| `ECHO_DELAY_MS` | `0` | Echo only: delay before answering. When above 0, `/v1/info` reports it as `avg_latency_ms` (and in every `models` entry), so clients can test progress estimates without a model. It is also the answer time echo's cold-start check assumes. |
+| `ECHO_MODEL` | `echo` | Echo only: name of echo's default model (`model_used`, the default `models` entry). Set it to `qwen2.5vl-jetson:3b` to mimic the Jetson. |
+| `ECHO_LOAD_MS` | `0` | Echo only: simulated load time when a request switches models (needs `ALLOWED_MODELS`). Echo holds one "loaded" model, starting with the default; a request for another one is a cold start under the same rule as Ollama: it waits `ECHO_LOAD_MS` when `ECHO_LOAD_MS` + `ECHO_DELAY_MS` fit in 90% of `BACKEND_TIMEOUT_S`, otherwise it gets 503 "model '…' is loading" at once with `Retry-After` = the remaining load time in whole seconds, and the load finishes in the background. `0` switches instantly. |
+| `ECHO_INSTALLED_MODELS` | *(all of `ALLOWED_MODELS`)* | Echo only: comma-separated models echo pretends are installed, to test the not-installed fallback. Allowlisted models missing here are left out of `models` and fall back to the default. |
 | `OLLAMA_URL` | `http://ollama:11434` | Base URL the app reads. The x86 Ollama profile sets `http://ollama:11434`. The Jetson image sets `http://127.0.0.1:11434`. |
 | `OLLAMA_HOST` | `0.0.0.0:11434` on the server image | Ollama server bind address, and the address the `ollama` CLI uses. Not read by the app. |
 | `OLLAMA_MODEL` | `moondream` (`qwen2.5vl-jetson:3b` in the Jetson image) | Model the app requests, and the default tag `ollama-init` pulls. `qwen2.5vl:3b` (or another Ollama vision tag) is an option: better output, slower. Pull it first: `ollama pull <model>`. |
@@ -196,7 +203,30 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `OLLAMA_PLAIN_RETRY` | `1` | Ollama only: if the answer to the JSON prompt is unusable, ask once more with a short plain-text prompt and derive a low-confidence name and description from the text. It retries when generating took at most 40% of `BACKEND_TIMEOUT_S` (time Ollama spent loading the model does not count) and enough time is left. `0` disables the retry. |
 | `OLLAMA_LOG_RAW` | `0` | Ollama only: `1` logs every raw model answer at DEBUG. Answers that cannot be used are always logged at WARNING. Logged text is cut to 2 KB; the image and the request token are never logged. |
 
-`ECHO_*` are read on every request. Example: `ECHO_MODE=slow BACKEND_TIMEOUT_S=2 uvicorn app.main:app --port 8080`.
+`ECHO_*` are read on every request (as is `ALLOWED_MODELS` on echo; the Ollama backend reads it at startup). Example: `ECHO_MODE=slow BACKEND_TIMEOUT_S=2 uvicorn app.main:app --port 8080`.
+
+### Model and image size choice
+
+Added in API v1.2 (see [docs/api-v1.md](docs/api-v1.md#choosing-a-model-v12)); opt-in: without `ALLOWED_MODELS` and `IMAGE_SIZES`, `/v1/info` is unchanged and `/v1/suggest` behaves as before, only adding `model_used`.
+
+- `GET /v1/info` lists `models` (default first, then installed allowlisted models, each with `default`, `loaded` and, once measured, its own `avg_latency_ms`) and `image_sizes` (`long_edge` presets with one `recommended`).
+- `POST /v1/suggest` takes `context.model`. Not allowlisted or not installed → the default model. Every answer has `model_used`.
+- A model other than the loaded one is a cold start: it waits for the load when that model's load estimate plus slowest recent answer fit in 90% of `BACKEND_TIMEOUT_S`, else 503 + `Retry-After` at once while it loads in the background. With Qwen on the Jetson: fast 503 at 25 s, a wait at 45 s. Timings are kept per model; the top-level `avg_latency_ms` stays the default model's.
+- The cold-start 503's `Retry-After` is that model's remaining load time: max(15 s, its last measured load) minus the time its background load has already run, at least 1 s.
+- `/v1/info` does not reload the default while a picked allowlisted model is loaded, or while a model switch or background load is in flight, so it does not evict the client's choice.
+
+Trying it on echo (no model needed):
+
+```bash
+ALLOWED_MODELS=moondream,qwen3-vl:2b ECHO_MODEL=qwen2.5vl-jetson:3b \
+ECHO_INSTALLED_MODELS=moondream IMAGE_SIZES='448,672*,1024' \
+ECHO_LOAD_MS=15000 ECHO_DELAY_MS=13500 BACKEND_TIMEOUT_S=25 \
+uvicorn app.main:app --port 8080
+curl -s localhost:8080/v1/info            # models: qwen (default), moondream
+curl -s -F image=@photo.jpg -F 'context={"model":"moondream"}' localhost:8080/v1/suggest
+# 25 s: 503 "model 'moondream' is loading", Retry-After: 15; again after 15 s: model_used moondream
+# BACKEND_TIMEOUT_S=45: the same request waits ~15 s + 13.5 s and answers 200
+```
 
 ### Backends
 
