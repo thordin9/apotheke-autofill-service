@@ -57,3 +57,55 @@ not used. **Result: PASS**, with one Medium documentation fix and some Low items
   - The runner registration token is passed in argv.
   - Use absolute paths in the backup command.
   - `OLLAMA_LOG_RAW=1` keeps photo descriptions in the logs.
+
+## Recheck rounds and known limitations
+
+Verdict for 9e53fe1: **PASS.** Every finding from the first review (9d23ccb) and from the three rechecks is fixed. The scripts were checked with stateful docker and tc stubs; the board was not used.
+
+### Round 1: 3ae9fd6 (QA findings folded in)
+- D1: all docs use the same tag scheme, `apotheke-autofill:jetson-<short sha>` (`$IMAGE`).
+- D2: Apotheke's client timeout is explained separately from `BACKEND_TIMEOUT_S`.
+- D3: the guide covers git's "dubious ownership" check when running as root.
+- D4: build before model setup.
+- S1: `dl-cap.sh` tolerates "nothing to delete" and then fails on any `tc` error.
+  - The unit uses `Restart=on-failure`, `RestartSec=10` and a start limit of 10 per 5 min.
+  - That is valid for `Type=oneshot` from systemd 244, and the board has 245.
+  - `systemd-analyze verify` is clean.
+- S2: an unknown ref stops with a clear error before any build.
+- S3: `run-service.sh` keeps the old container as `autofill-prev` and rolls back if `docker run` fails or the new container exits or isn't healthy within `WAIT_S` (120 s). It refuses to run if a `-prev` is left over.
+- Info items addressed: Ollama version pin, CORS note, `num_ctx`, runner token in argv/history, absolute backup path, `OLLAMA_LOG_RAW=0`.
+- New finding N1: Ctrl-C during a deploy left the old container stopped.
+
+### Round 2: d9a5f3a (N1, signal handling)
+- An INT/TERM trap rolls back at every stage: before or after the rename and stop, during `docker run`, and during the health wait. Exit codes are 130 / 143.
+- The refusal message and the guide give the same, correct recovery steps.
+- New finding N1b: a signal *during* a rollback started a second rollback that removed the just-restored container.
+
+### Round 3: 9e53fe1 (N1b and Feature 7 wording)
+- The rollback is idempotent: it removes the new container only once, then makes sure whatever is named `autofill` (the old one) runs. While a rollback runs, further INT/TERM are ignored.
+- Signal tests in the stub:
+  - INT and TERM at each stage of a failed rollback (unhealthy, and `docker run` failing);
+  - a second signal during a signal-triggered rollback;
+  - a sample of the forward stages.
+- The old container always ends up running as `autofill`, a first deploy leaves nothing behind, and no `-prev` or stray containers remain.
+- The Feature 7 text in the guide and `service.env.example` matches the service PR #10 code:
+  - the default model comes from `OLLAMA_MODEL`;
+  - `ALLOWED_MODELS` lists extras only;
+  - models not installed are left out of `/v1/info`;
+  - `IMAGE_SIZES` takes comma-separated values from 64 to 8192 with at most one `*`;
+  - both settings are opt-in.
+- Secrets: gitleaks and pattern greps on every new commit are clean, and the real token appears nowhere in history or the tree. The two remaining gitleaks hits are known placeholders. shellcheck is clean.
+
+### Known limitations (accepted, not blocking)
+- **Interrupted `docker run` with real Docker:** the daemon may still create the new container after the rollback has finished. The old container is then left stopped as `autofill-prev`. The next run refuses and prints the recovery steps (also in the guide).
+- **Power cut mid-deploy:** a leftover `autofill-prev` needs the same manual recovery.
+- **Signal during an already-running failure rollback:** it is ignored, and the script exits 1 (deploy failed, old container restored), not 130 / 143.
+- **Signal after success, while `autofill-prev` is being removed:** this can leave a stopped `-prev` next to the working new container. Recovery: `docker rm autofill-prev`.
+- **"Healthy" means the image HEALTHCHECK on `/healthz` answers,** not that the model is loaded (`ready` in `/v1/info`). Run the quick check under Verify after a deploy.
+- **The first health probe runs 30 s after start,** so a good deploy takes about 30 s of downtime. Only one container can hold port 8080 on the host network.
+- **`build-image.sh` and fetch failures:** if `git fetch` fails, it warns and builds the last fetched `origin/main`.
+- **A non-numeric `WAIT_S`** gives a cryptic shell error, then rolls back safely.
+- **Untagged `apotheke-autofill:jetson`** remains in comments in `Dockerfile.jetson`, the hosted CI workflow (never deployed) and historical benchmark text.
+- **`IMAGE_SIZES` default:** without a `*`, PR #10 marks the largest size as recommended. The guide doesn't mention this.
+- **Models not installed:** a request for one falls back to the default model. The guide only mentions that such models are hidden.
+- **Feature 7 is still marked "pending (PR #10)".** Update the wording and fill in production values when PR #10 is merged and deployed.
