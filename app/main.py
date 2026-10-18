@@ -93,8 +93,12 @@ def create_app() -> FastAPI:
         if isinstance(data.get("ready"), bool):
             out["ready"] = data["ready"]
         latency = data.get("avg_latency_ms")
-        if isinstance(latency, int) and not isinstance(latency, bool) and latency >= 0:
+        if _ms(latency):
             out["avg_latency_ms"] = latency
+        if (models := sanitize_models(data.get("models"))) is not None:
+            out["models"] = models
+        if sizes := get_settings().image_sizes:
+            out["image_sizes"] = [{"long_edge": n, "recommended": rec} for n, rec in sizes]
         return out
 
     @app.post("/v1/suggest")
@@ -147,6 +151,32 @@ def parse_context(raw: Any) -> dict[str, Any]:
         if not isinstance(locale, str):
             raise ApiError(400, "bad_request", "'context.locale' must be a string")
         out["locale"] = locale
+    model = ctx.get("model")
+    if model is not None:
+        if not isinstance(model, str):
+            raise ApiError(400, "bad_request", "'context.model' must be a string")
+        out["model"] = model
+    return out
+
+
+def _ms(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def sanitize_models(models: Any) -> list[dict[str, Any]] | None:
+    """Keep well-formed `models` entries from a backend's info, or None."""
+    if not isinstance(models, list):
+        return None
+    out = []
+    for m in models:
+        if not isinstance(m, dict) or not isinstance(m.get("id"), str) or not m["id"].strip():
+            continue
+        entry: dict[str, Any] = {"id": m["id"], "default": m.get("default") is True}
+        if isinstance(m.get("loaded"), bool):
+            entry["loaded"] = m["loaded"]
+        if _ms(m.get("avg_latency_ms")):
+            entry["avg_latency_ms"] = m["avg_latency_ms"]
+        out.append(entry)
     return out
 
 
@@ -172,6 +202,9 @@ def sanitize(result: Any) -> dict[str, Any]:
         tags = [t for t in map(_scored, result["tags"]) if t is not None]
         if tags:
             out["tags"] = tags
+    model_used = result.get("model_used")
+    if isinstance(model_used, str) and model_used.strip():
+        out["model_used"] = model_used
     return out
 
 

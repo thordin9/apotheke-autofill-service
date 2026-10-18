@@ -16,3 +16,4 @@ build
 tests
 docs
 *.md
+.env.example

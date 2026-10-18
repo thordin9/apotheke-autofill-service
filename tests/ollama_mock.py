@@ -28,6 +28,11 @@ class FakeOllama:
         self.load_duration_ns = 0  # reported on every chat answer
         # GET /api/ps: models Ollama has in memory; None answers 404 (old Ollama).
         self.loaded: list[str] | None = ["moondream:latest"]
+        # GET /api/tags: installed models; None answers 404.
+        self.tags: list[str] | None = None
+        # When set, loads and chats replace `loaded` with their model, like
+        # Ollama with OLLAMA_MAX_LOADED_MODELS=1.
+        self.track_loads = False
         self.release = threading.Event()
         self.release.set()
         fake = self
@@ -41,12 +46,18 @@ class FakeOllama:
                 if self.path == "/api/ps" and fake.loaded is not None:
                     body = {"models": [{"name": n, "model": n} for n in fake.loaded]}
                     self._send(200, json.dumps(body).encode())
+                elif self.path == "/api/tags" and fake.tags is not None:
+                    body = {"models": [{"name": n, "model": n} for n in fake.tags]}
+                    self._send(200, json.dumps(body).encode())
                 else:
                     self._send(404, b'{"error":"not found"}')
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
                 fake.requests.append((self.path, body))
+                if fake.track_loads and body.get("model"):
+                    name = body["model"]
+                    fake.loaded = [name if ":" in name else f"{name}:latest"]
                 if self.path == "/api/generate":
                     time.sleep(fake.warm_delay)
                     self._send(fake.warm_status, b'{"done":true}')
@@ -80,6 +91,12 @@ class FakeOllama:
 
     def chats(self) -> list[dict]:
         return [b for p, b in self.requests if p == "/api/chat"]
+
+    def generates(self) -> list[dict]:
+        return [b for p, b in self.requests if p == "/api/generate"]
+
+    def gets(self, path: str) -> int:
+        return sum(1 for p, _ in self.requests if p == path)
 
     def close(self):
         self.release.set()
