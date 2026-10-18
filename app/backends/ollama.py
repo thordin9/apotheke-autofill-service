@@ -9,8 +9,10 @@ Env (read when the backend is created):
                          with Retry-After until it has loaded. 0 skips warm-up.
   OLLAMA_QUEUE_SIZE      requests allowed to wait behind the one in flight (default 1)
   OLLAMA_RETRY_AFTER_S   Retry-After seconds on 503 busy/warming (default 5; busy
-                         answers use the recent generation time if it is longer,
-                         and a model that Ollama unloaded gets at least 15).
+                         answers use the recent generation time if it is longer).
+                         A model that Ollama unloaded gets its own load estimate
+                         instead: max(15, last measured load) minus the time its
+                         background load has already run, at least 1.
                          A request that finds the model unloaded waits for the load
                          when last load time + recent generation time (15 s each
                          until measured) fit in 90% of BACKEND_TIMEOUT_S; otherwise
@@ -65,7 +67,6 @@ DEFAULT_URL = "http://ollama:11434"
 DEFAULT_MODEL = "moondream"
 DEFAULT_NUM_PREDICT = 256
 DEFAULT_KEEP_ALIVE = "30m"
-COLD_RETRY_AFTER_S = 15
 # Estimates for the cold-model check until the service has measured them:
 # Qwen2.5-VL 3B on a Xavier NX loads in about 15 s and answers in about 13.5 s.
 DEFAULT_LOAD_S = 15.0
@@ -732,6 +733,8 @@ class OllamaBackend(Backend):
         self.warmup_error: str | None = None
         self._warm_thread: threading.Thread | None = None
         self._reload_thread: threading.Thread | None = None
+        # Background load under way: (model, monotonic start), else None.
+        self._loading: tuple[str, float] | None = None
         self._start_lock = threading.Lock()
         self._in_flight = 0
         self._waiting = 0
@@ -826,7 +829,8 @@ class OllamaBackend(Backend):
             # admin allowed and a client picked counts as loaded: reloading
             # the default would only evict it again.
             ready = False
-            self._reload(self.model)
+            if not self._switch_or_load_in_flight():
+                self._reload(self.model)
         out: dict[str, Any] = {
             "name": f"ollama-{self.model}",
             "capabilities": list(CAPABILITIES),
@@ -901,11 +905,21 @@ class OllamaBackend(Backend):
         loaded = await self._loaded_models()
         return loaded is None or model_key(model or self.model) in loaded
 
+    def _switch_or_load_in_flight(self) -> bool:
+        """Whether a model is on its way into Ollama's memory: a background
+        load is running, or a request is in flight (its chat call makes Ollama
+        load its model, which /api/ps may not list until the load is done).
+        /v1/info must not queue a reload of the default then: with one model
+        slot it would evict the model being loaded."""
+        reloading = self._reload_thread is not None and self._reload_thread.is_alive()
+        return reloading or self._loading is not None or self._in_flight > 0
+
     def _reload(self, model: str | None = None) -> None:
         model = model or self.model
         with self._start_lock:
             if self._reload_thread is not None and self._reload_thread.is_alive():
                 return
+            self._loading = (model, time.monotonic())
             self._reload_thread = threading.Thread(
                 target=self._load_once, args=(model,), daemon=True
             )
@@ -920,6 +934,18 @@ class OllamaBackend(Backend):
                 self._record_load(time.monotonic() - t0, model)
         except httpx.HTTPError as exc:
             log.warning("ollama model reload failed (model=%s): %s", model, exc)
+        finally:
+            self._loading = None
+
+    def _cold_retry_after(self, model: str) -> int:
+        """Retry-After for a request that found its model unloaded: that
+        model's load estimate (the last measured load, at least 15 s), minus
+        how long its background load has been running, at least 1 s."""
+        remaining = self._load_estimate_s(model)
+        loading = self._loading
+        if loading is not None and same_model(loading[0], model):
+            remaining -= time.monotonic() - loading[1]
+        return max(1, math.ceil(remaining))
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -1069,7 +1095,7 @@ class OllamaBackend(Backend):
                 # (45 s), the request simply waits: the chat call makes Ollama
                 # load the model.
                 self._reload(model)
-                raise Busy(f"model '{model}' is loading", max(self.retry_after, COLD_RETRY_AFTER_S))
+                raise Busy(f"model '{model}' is loading", self._cold_retry_after(model))
         else:
             # One request in flight, up to queue_size waiting; the rest get
             # 503. A request is also refused when, judging by the slowest

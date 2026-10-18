@@ -487,3 +487,115 @@ def test_ollama_prompt_does_not_depend_on_model(oclient, fake):
     post_image(c, context=ctx(model=MOON))
     b = fake.chats()[-1]
     assert a["messages"] == b["messages"] and a["format"] == b["format"]
+
+
+# -- follow-up: switch Retry-After (B2) and /v1/info during a switch (B3) -----
+
+
+def test_ollama_switch_retry_after_uses_measured_load_over_15_s(oclient, fake):
+    # Moondream last loaded in 22.4 s: its Retry-After is 23, not 15, so a
+    # single client retry does not land mid-load.
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25", OLLAMA_RETRY_AFTER_S="5")
+    c.app.state.backend._record_load(22.4, MOON)
+    fake.warm_delay = 0.3
+    r = post_image(c, context=ctx(model=MOON))
+    assert r.status_code == 503 and r.headers["Retry-After"] == "23"
+
+
+def test_ollama_switch_retry_after_measured_load_under_15_s_keeps_floor(oclient, fake):
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25", OLLAMA_RETRY_AFTER_S="5")
+    c.app.state.backend._record_load(4.0, MOON)
+    fake.warm_delay = 0.3
+    r = post_image(c, context=ctx(model=MOON))
+    assert r.status_code == 503 and r.headers["Retry-After"] == "15"
+
+
+def test_ollama_switch_retry_after_counts_down_while_loading(oclient, fake):
+    # A retry while moondream's background load is running gets the time
+    # left: 22.4 s estimate - 10 s already loading -> 13.
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    b = c.app.state.backend
+    b._record_load(22.4, MOON)
+    fake.warm_delay = 2.0
+    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "23"
+    model, started = b._loading
+    assert model == MOON
+    b._loading = (MOON, started - 10.0)
+    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "13"
+    assert [g["model"] for g in fake.generates()] == [MOON]  # still one load
+
+
+def test_ollama_switch_retry_after_is_at_least_1(oclient, fake):
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    b = c.app.state.backend
+    fake.warm_delay = 2.0
+    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "15"
+    b._loading = (MOON, b._loading[1] - 60.0)  # overran its estimate
+    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "1"
+
+
+def test_ollama_retry_after_ignores_a_load_of_another_model(oclient, fake):
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    b = c.app.state.backend
+    b._loading = (QWEN, time.monotonic() - 10.0)
+    assert b._cold_retry_after(MOON) == 15
+
+
+def test_ollama_loading_marker_cleared_after_load(oclient, fake):
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    b = c.app.state.backend
+    post_image(c, context=ctx(model=MOON))
+    assert _wait(lambda: b._loading is None and not b._reload_thread.is_alive())
+
+
+def test_ollama_info_during_loading_switch_does_not_reload_default(oclient, fake):
+    # 25 s: the switch to moondream gets a fast 503 and loads in the
+    # background. /api/ps does not list moondream until the load is done, so
+    # no allowed model looks loaded; /v1/info must still not queue a Qwen
+    # reload that would evict moondream right after.
+    fake.loaded = []
+    fake.warm_delay = 0.5
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    assert post_image(c, context=ctx(model=MOON)).status_code == 503
+    for _ in range(3):
+        body = assert_contract(c.get("/v1/info"), "/v1/info")
+        assert body["ready"] is False
+    b = c.app.state.backend
+    assert _wait(lambda: not b._reload_thread.is_alive())
+    fake.loaded = ["moondream:latest"]
+    body = c.get("/v1/info").json()
+    assert body["ready"] is True
+    time.sleep(0.2)
+    assert [g["model"] for g in fake.generates()] == [MOON]
+
+
+def test_ollama_info_during_waiting_switch_does_not_reload_default(oclient, fake):
+    # 45 s: the switch request waits while its chat call loads moondream.
+    # /v1/info polled meanwhile must not reload Qwen.
+    fake.loaded = []
+    fake.release.clear()
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45")
+    results: list = []
+    t = _post_in_thread(c, results, ctx(model=MOON))
+    assert _wait(lambda: len(fake.chats()) == 1)
+    assert c.get("/v1/info").json()["ready"] is False
+    time.sleep(0.2)
+    assert fake.generates() == []
+    fake.release.set()
+    t.join(5)
+    assert results[0].status_code == 200 and results[0].json()["model_used"] == MOON
+
+
+def test_ollama_info_reloads_default_once_nothing_is_in_flight(oclient, fake):
+    # The B3 guard only defers the reload: with no switch, load or request in
+    # flight, an unloaded default is reloaded as before.
+    fake.loaded = []
+    c = oclient(ALLOWED_MODELS=MOON)
+    b = c.app.state.backend
+    b._in_flight = 1
+    c.get("/v1/info")
+    time.sleep(0.2)
+    assert fake.generates() == []
+    b._in_flight = 0
+    assert c.get("/v1/info").json()["ready"] is False
+    assert _wait(lambda: [g["model"] for g in fake.generates()] == [QWEN])

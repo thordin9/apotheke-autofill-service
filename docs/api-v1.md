@@ -111,9 +111,19 @@ Old clients ignore it.
   applies: when that model's load estimate (last measured load, at least 15 s)
   plus its slowest recent answer (last 5, 15 s until measured) fit in 90% of
   `BACKEND_TIMEOUT_S`, the request waits for the load; otherwise it gets `503
-  backend_unavailable` ("model '…' is loading") with `Retry-After` at once
-  (Ollama: at least 15 s; echo: the remaining simulated load time), and the model loads in the background. With Qwen on the Jetson
-  that means a fast 503 at 25 s and a wait at 45 s.
+  backend_unavailable` ("model '…' is loading") with `Retry-After` at once,
+  and the model loads in the background. With Qwen on the Jetson that means a
+  fast 503 at 25 s and a wait at 45 s.
+- **`Retry-After` on a cold start** is that model's expected remaining load
+  time in whole seconds, at least 1. Ollama: its load estimate (the last
+  measured load of **that** model, at least 15 s) minus how long its
+  background load has already been running, so a retry during the load gets
+  the time left (e.g. 15, then 10 when retried 5 s later; 23 for a model that
+  last took 22.4 s to load). Echo: the remaining simulated load time.
+- While a model switch or background load is in flight (including a request
+  waiting for its model to load), `GET /v1/info` reports `ready: false` if no
+  allowlisted model is in memory yet but does **not** reload the default
+  model, which would evict the model being loaded.
 - A request for another model than the one **in flight** must also wait for
   the requests ahead of it: it is refused at once (`503`, "a model switch would
   time out") when their slowest recent times plus the new model's load and
@@ -133,7 +143,7 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 | 401 | `unauthorized` | token required and missing/wrong (`WWW-Authenticate: Bearer`) |
 | 413 | `payload_too_large` | image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760); advertised as `max_image_bytes` in `/v1/info` |
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
-| 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or loading the model a client picked with `context.model`, when loading plus answering would not fit in the timeout (otherwise the request waits for the load), or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading and busy responses carry `Retry-After: <seconds>` |
+| 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or loading the model a client picked with `context.model`, when loading plus answering would not fit in the timeout (otherwise the request waits for the load), or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading, model-loading and busy responses carry `Retry-After: <seconds>` (for a cold start, the model's remaining load time; see [Choosing a model](#choosing-a-model-v12)) |
 | 503 | `backend_error` | backend answered but its output was unusable (e.g. model returned invalid/empty JSON, upstream HTTP error) |
 | 504 | `backend_timeout` | backend exceeded `BACKEND_TIMEOUT_S` (default 25 s; 45 s in the Jetson image) |
 
