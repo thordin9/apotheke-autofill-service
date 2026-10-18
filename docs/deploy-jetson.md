@@ -13,16 +13,17 @@ board (written `$REPO` below). All commands run as root unless noted otherwise.
 
 1. [Platform](#platform)
 2. [Ollama and its drop-in](#ollama-and-its-drop-in)
-3. [The model: qwen2.5vl-jetson:3b](#the-model-qwen25vl-jetson3b)
-4. [service.env](#serviceenv)
-5. [Build and run the container](#build-and-run-the-container)
-6. [Verify](#verify)
-7. [Redeploy a new commit](#redeploy-a-new-commit)
-8. [Roll back](#roll-back)
-9. [Inbound bandwidth limit (30 Mbit/s)](#inbound-bandwidth-limit-30-mbits)
-10. [Self-hosted GitHub Actions runner](#self-hosted-github-actions-runner)
-11. [Reboot behaviour](#reboot-behaviour)
-12. [Feature 7: ALLOWED_MODELS and IMAGE_SIZES (pending)](#feature-7-allowed_models-and-image_sizes-pending)
+3. [Build the image](#build-the-image)
+4. [The model: qwen2.5vl-jetson:3b](#the-model-qwen25vl-jetson3b)
+5. [service.env](#serviceenv)
+6. [Run the container](#run-the-container)
+7. [Verify](#verify)
+8. [Redeploy a new commit](#redeploy-a-new-commit)
+9. [Roll back](#roll-back)
+10. [Inbound bandwidth limit (30 Mbit/s)](#inbound-bandwidth-limit-30-mbits)
+11. [Self-hosted GitHub Actions runner](#self-hosted-github-actions-runner)
+12. [Reboot behaviour](#reboot-behaviour)
+13. [Feature 7: ALLOWED_MODELS and IMAGE_SIZES (pending)](#feature-7-allowed_models-and-image_sizes-pending)
 
 ## Platform
 
@@ -54,7 +55,7 @@ through `--network host`. Install it with Ollama's Linux installer (which create
 `ollama.service`), then add the drop-in:
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh      # or pin OLLAMA_VERSION=0.15.6
+curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.15.6 sh   # pinned to the board's version
 install -D -m 644 $REPO/deploy/jetson/ollama-10-autofill.conf \
   /etc/systemd/system/ollama.service.d/10-autofill.conf
 systemctl daemon-reload && systemctl restart ollama
@@ -75,7 +76,30 @@ systemctl show ollama -p Environment               # check the variables arrived
 The board also has a separate `override.conf` with board-wide settings (`OLLAMA_HOST=0.0.0.0`, `OLLAMA_ORIGINS=*`,
 `OLLAMA_CONTEXT_LENGTH=8192`). The service doesn't need it. It is recorded in
 [`ollama-override.conf.example`](../deploy/jetson/ollama-override.conf.example). Note that `OLLAMA_HOST=0.0.0.0` makes
-Ollama reachable from the LAN without authentication.
+Ollama reachable from the LAN without authentication, and `OLLAMA_ORIGINS=*` lets any web page open in a browser on
+the LAN call that API (CORS), for example to pull or delete models. If nothing else needs them, leave both out.
+`OLLAMA_CONTEXT_LENGTH` is only Ollama's default: `qwen2.5vl-jetson:3b` sets `num_ctx 4096` in its Modelfile, which
+takes precedence, so the service's model runs at 4096 regardless.
+
+## Build the image
+
+Build on the board itself (native arm64). Images are tagged **`apotheke-autofill:jetson-<short sha>`** with the
+7-character commit they were built from, so every deployed image maps to one commit and older ones stay
+available for rollback. [`build-image.sh`](../deploy/jetson/build-image.sh) builds from a `git archive` of that
+commit, not from the working tree:
+
+```bash
+cd $REPO && git fetch origin
+deploy/jetson/build-image.sh origin/main          # → built apotheke-autofill:jetson-<sha>
+IMAGE=apotheke-autofill:jetson-<sha>              # use the tag it printed in the steps below
+```
+
+Run it as root on the board. git refuses to work in a checkout owned by another user when run as root
+("detected dubious ownership in repository"). Either keep a root-owned checkout for deploys (for example
+`/opt/autofill/repo`), or allow that one path: `git config --global --add safe.directory /path/to/checkout`.
+
+The first build pulls `dustynv/ollama:r35.4.1` (about 5.8 GB compressed), which takes roughly half an hour through
+the 30 Mbit/s inbound cap. Later builds reuse it. An unknown ref stops with a clear error before anything is built.
 
 ## The model: qwen2.5vl-jetson:3b
 
@@ -92,8 +116,9 @@ about 0.5 MP) added to the GGUF metadata, and `num_ctx 4096` in the Modelfile. I
 
 The Modelfile and the patch script are in [`bench/qwen2.5vl-jetson/`](../bench/qwen2.5vl-jetson). The step-by-step
 recipe (pull the stock model, find its GGUF blob, run `gguf_set_maxpix.py`, `ollama create`) is in
-[benchmarks.md, "Building qwen2.5vl-jetson:3b"](benchmarks.md#building-qwen25vl-jetson3b). It needs a built service
-image for its Python, so do it after the first image build. Check the result:
+[benchmarks.md, "Building qwen2.5vl-jetson:3b"](benchmarks.md#building-qwen25vl-jetson3b). It uses the service image
+built above (`$IMAGE`) only for its Python and the `gguf` package. Any Python 3.8+ with `pip install gguf numpy`
+works as well. Check the result:
 
 ```bash
 ollama show qwen2.5vl-jetson:3b      # Parameters: num_ctx 4096, temperature 0.0001
@@ -111,7 +136,7 @@ and the container reads it with `--env-file`, so the token never appears on a co
 | `BACKEND` | `ollama` | Use the Ollama backend (the image's default too) |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | The host's Ollama, reachable because of `--network host` |
 | `OLLAMA_MODEL` | `qwen2.5vl-jetson:3b` | The patched model above |
-| `OLLAMA_LOG_RAW` | `1` | Log raw model output in the container log, for debugging bad suggestions |
+| `OLLAMA_LOG_RAW` | `0` | `1` logs every raw model answer, including the description of each photo, in the container log. Useful for debugging bad suggestions, but leave it off in production. (The board still has `1` from benchmarking.) |
 | `AUTOFILL_TOKEN` | a random secret | Bearer token clients send. Placeholder in the example; never commit the real one |
 | `OLLAMA_KEEP_ALIVE` | `-1` | Keep the model loaded forever. The board is dedicated to the service, so no request should wait for a reload after an idle spell |
 | `BACKEND_TIMEOUT_S` | `45` | See below |
@@ -124,7 +149,9 @@ answers and a load time never assumed below 15 s.
   503 with `Retry-After` while the model reloads in the background. That was the right setting while Apotheke
   v2.2 clients, which time out at 30 s, were in use.
 - At **45**, a cold request (15 + 13.5 s) or one queued behind another (2 × 13.5 s) fits, so it waits and gets its
-  answer. Apotheke v2.3 and later allow the backend timeout plus 5 s, 50 s here, and show progress meanwhile. Measured
+  answer. Apotheke v2.3 and later show progress meanwhile. Apotheke's client timeout is its own admin setting (default
+  50 s), independent of this one. Keep it at least about 5 s above `BACKEND_TIMEOUT_S`, so the service's own 503/504
+  reaches the user instead of a client-side timeout. Measured
   on the board: cold 29.5 s, warm 5.5 s, the queued second of two concurrent requests 28.6 s.
 
 Create the file without printing the token, then write the curl header file the scripts use:
@@ -142,30 +169,25 @@ $REPO/bench/make-auth-header.sh /opt/autofill/service.env /opt/autofill/auth.hdr
 Give the token to Apotheke's admin over a private channel. To rotate it, replace the line, rerun
 `make-auth-header.sh`, recreate the container with `run-service.sh`, and update Apotheke's settings.
 
-Before changing `service.env`, keep a copy: `cp -p service.env service.env.bak-$(date +%Y%m%d%H%M)`.
+Before changing `service.env`, keep a copy:
+`cp -p /opt/autofill/service.env /opt/autofill/service.env.bak-$(date +%Y%m%d%H%M)`.
 
-## Build and run the container
+## Run the container
 
-Build on the board itself (native arm64). Images are tagged **`apotheke-autofill:jetson-<short sha>`** with the
-7-character commit they were built from, so every deployed image maps to one commit and older ones stay
-available for rollback. [`build-image.sh`](../deploy/jetson/build-image.sh) builds from a `git archive` of that
-commit, not from the working tree:
+Once the model and `service.env` exist, (re)create the container with [`run-service.sh`](../deploy/jetson/run-service.sh):
 
 ```bash
-cd $REPO && git fetch origin
-deploy/jetson/build-image.sh origin/main          # → apotheke-autofill:jetson-<sha>
+deploy/jetson/run-service.sh "$IMAGE"
 ```
 
-The first build pulls `dustynv/ollama:r35.4.1` (about 5.8 GB compressed), which takes roughly half an hour through
-the 30 Mbit/s inbound cap. Later builds reuse it.
+The script keeps the old container as a fallback. Port 8080 on the host network can only be held by one container,
+so it renames the running `autofill` to `autofill-prev` and stops it, then starts the new one and waits up to
+`WAIT_S` (default 120 s) for Docker to report it healthy (the image has a `HEALTHCHECK` on `/healthz`). On success it
+removes `autofill-prev`. If `docker run` fails, or the new container exits or isn't healthy in time, it prints the
+new container's last log lines, removes it, and renames and starts `autofill-prev` again, so the old version keeps
+serving. If an `autofill-prev` is left over from an interrupted run, it refuses to start until you remove it.
 
-Then (re)create the container with [`run-service.sh`](../deploy/jetson/run-service.sh):
-
-```bash
-deploy/jetson/run-service.sh apotheke-autofill:jetson-<sha>
-```
-
-which runs:
+The new container is started with:
 
 ```bash
 docker run -d --name autofill --network host --runtime nvidia --restart unless-stopped \
@@ -213,6 +235,9 @@ deploy/jetson/run-service.sh apotheke-autofill:jetson-<new sha>
 $REPO/bench/verify.sh
 ```
 
+If the new container doesn't come up healthy, `run-service.sh` puts the previous one back by itself (see
+[Run the container](#run-the-container)) and exits non-zero.
+
 The model stays loaded in Ollama while the container is replaced, so the new container is ready within seconds.
 If the new commit adds environment variables, add them to `service.env` first (keep a backup). Keep the previous
 image until the new one has passed verify and QA, then remove old tags with `docker rmi` to free disk space.
@@ -234,7 +259,10 @@ All traffic coming into the board on `eth0` is limited to 30 Mbit/s, **with no e
 LAN, SSH and photo uploads to the service alike. The L4T R35 kernel has no IFB module, so the traffic can't be
 shaped. Instead [`dl-cap.sh`](../deploy/jetson/dl-cap.sh) polices it with a `tc` ingress filter for IPv4 and IPv6
 (rate 30 Mbit, burst 384 KB). Packets over the rate are dropped, and TCP backs off to about 30 Mbit/s.
-[`dl-cap.service`](../deploy/jetson/dl-cap.service) applies it at boot.
+[`dl-cap.service`](../deploy/jetson/dl-cap.service) applies it at boot. The script stops at the first failing `tc`
+call (`set -e`), so the unit fails visibly instead of leaving a partial cap. The unit has `Restart=on-failure`
+(every 10 s, at most 10 times in 5 minutes), for example while `eth0` isn't up yet. systemd allows that for
+`Type=oneshot` since version 244; L4T R35 (Ubuntu 20.04) has 245.
 
 ```bash
 install -m 755 $REPO/deploy/jetson/dl-cap.sh /usr/local/sbin/dl-cap.sh
@@ -269,7 +297,10 @@ sudo -u ghrunner ./config.sh --url https://github.com/thordin9/apotheke-autofill
 ./svc.sh install ghrunner && ./svc.sh start
 ```
 
-The registration token is short-lived and is only used once; don't store it. The runner keeps its own credentials
+The registration token is short-lived (about an hour) and only works once, but it is passed on the command line, so
+it is briefly visible in `ps` and lands in shell history. Run `config.sh` from a shell that doesn't keep history
+(for example `HISTFILE=/dev/null bash`, or prefix the command with a space if `HISTCONTROL=ignorespace`), and
+don't store the token. The runner keeps its own credentials
 in `/opt/actions-runner/.credentials*`, which must not leave the board.
 
 **Security.** The repo is public and the runner's user can control Docker on a LAN machine. So:

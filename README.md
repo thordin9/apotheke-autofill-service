@@ -141,14 +141,18 @@ publishes Ubuntu 20.04 arm64 packages, which is why the image does not
 
 
 ```bash
-docker build -f Dockerfile.jetson -t apotheke-autofill:jetson .
+deploy/jetson/build-image.sh origin/main     # prints the tag it built
+IMAGE=apotheke-autofill:jetson-<short sha>   # as printed by build-image.sh
 docker run --runtime nvidia --network host \
   -e BACKEND=ollama \
   -e OLLAMA_URL=http://127.0.0.1:11434 \
   -e OLLAMA_MODEL=qwen2.5vl-jetson:3b \
   -e AUTOFILL_TOKEN= \
-  apotheke-autofill:jetson
+  "$IMAGE"
 ```
+
+For the long-running service use `deploy/jetson/run-service.sh "$IMAGE"` with an env file instead (see
+[docs/deploy-jetson.md](docs/deploy-jetson.md)).
 
 Ollama itself can come from the same base:
 

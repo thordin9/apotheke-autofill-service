@@ -145,13 +145,14 @@ inside Ollama before encoding, which kept category accuracy at 9/9 on this set.
 Recipe (on the board, as root; [`bench/qwen2.5vl-jetson/`](../bench/qwen2.5vl-jetson)):
 
 ```bash
+IMAGE=apotheke-autofill:jetson-<short sha>   # any built service image, as printed by deploy/jetson/build-image.sh
 ollama pull qwen2.5vl:3b
 # 1. Locate the stock GGUF (the "model" layer of the manifest).
 BLOB=$(python3 -c 'import json;m=json.load(open("/usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5vl/3b"));print([l["digest"] for l in m["layers"] if l["mediaType"].endswith(".model")][0].replace(":","-"))')
 # 2. Copy it with the extra key. Needs Python 3.8+ with the gguf package; any Python works, here the service image's.
 mkdir -p /tmp/qwen-jetson && cp bench/qwen2.5vl-jetson/* /tmp/qwen-jetson/
 docker run --rm -v /usr/share/ollama/.ollama/models/blobs:/blobs:ro -v /tmp/qwen-jetson:/w -w /w \
-  --entrypoint bash apotheke-autofill:jetson -c \
+  --entrypoint bash "$IMAGE" -c \
   "python3.11 -m pip install -q --target /tmp/pp gguf numpy && \
    PYTHONPATH=/tmp/pp python3.11 gguf_set_maxpix.py /blobs/$BLOB qwen2.5vl-3b-maxpix.gguf 501760"
 # 3. Create the model from the copy (Modelfile = stock template/system/params + num_ctx 4096).
@@ -262,7 +263,8 @@ Make sure nobody else is using the service or Ollama: `verify.sh`, `coldwarm.sh`
 ```bash
 git clone https://github.com/thordin9/apotheke-autofill-service && cd apotheke-autofill-service
 git checkout 2252ef5
-docker build -f Dockerfile.jetson -t apotheke-autofill:jetson .
+IMAGE=apotheke-autofill:jetson-2252ef5       # same tag convention as deploy/jetson/build-image.sh
+docker build -f Dockerfile.jetson -t "$IMAGE" .
 
 # Token header file (mode 600) from the service env file; the token is never printed.
 sudo bench/make-auth-header.sh /opt/autofill/service.env /opt/autofill/auth.hdr
@@ -271,16 +273,16 @@ sudo bench/make-auth-header.sh /opt/autofill/service.env /opt/autofill/auth.hdr
 
 # Service passes (one per model), then put the service back on the chosen model.
 export WARMUP_PHOTO=/path/to/a/photo-not-in-bench-photos.jpg
-sudo -E bench/svcpass.sh moondream apotheke-autofill:jetson moondream
-sudo -E bench/svcpass.sh qwen2.5vl-jetson:3b apotheke-autofill:jetson qwen
+sudo -E bench/svcpass.sh moondream "$IMAGE" moondream
+sudo -E bench/svcpass.sh qwen2.5vl-jetson:3b "$IMAGE" qwen
 docker rm -f autofill && docker run -d --name autofill --network host --runtime nvidia \
-  --restart unless-stopped --env-file /opt/autofill/service.env apotheke-autofill:jetson
+  --restart unless-stopped --env-file /opt/autofill/service.env "$IMAGE"
 
 sudo bench/verify.sh                       # health, info, cold recovery, two at once
 sudo bench/bench100.sh qwen-2252ef5         # 100 sequential requests; prints mean/p50/p95/max, peak RAM, GPU temp
 
 # Raw comparison straight against Ollama (stops/restarts Ollama; stop the service container first):
-docker stop autofill && sudo bench/cmp2.sh apotheke-autofill:jetson moondream qwen2.5vl-jetson:3b; docker start autofill
+docker stop autofill && sudo bench/cmp2.sh "$IMAGE" moondream qwen2.5vl-jetson:3b; docker start autofill
 ```
 
 Results go to `bench/out/` (git-ignored). Override `AUTOFILL_DIR`, `AUTH_HEADER_FILE`, `PHOTOS`, `OUT` or

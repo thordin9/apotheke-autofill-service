@@ -1,5 +1,7 @@
 # /etc/systemd/system/dl-cap.service
 [Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=10
 Description=Cap all incoming traffic on eth0 at 30 Mbit/s (no exemptions)
 After=network-online.target
 Wants=network-online.target
@@ -9,6 +11,9 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/dl-cap.sh
 ExecStop=/usr/local/sbin/dl-cap.sh stop
+# Retry if a tc call fails (e.g. eth0 not up yet). Allowed for Type=oneshot since systemd 244 (L4T R35 has 245).
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

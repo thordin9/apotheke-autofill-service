@@ -5,8 +5,9 @@
 # Usage: dl-cap.sh        apply (idempotent)
 #        dl-cap.sh stop   remove
 DEV=${DEV:-eth0}
-tc qdisc del dev $DEV ingress 2>/dev/null
+tc qdisc del dev "$DEV" ingress 2>/dev/null   # may fail harmlessly (nothing to delete)
+set -e                                       # from here on, any failed tc call fails the unit
 [ "$1" = "stop" ] && exit 0
-tc qdisc add dev $DEV handle ffff: ingress
-tc filter add dev $DEV parent ffff: protocol ip prio 2 u32 match u32 0 0 action police rate 30mbit burst 384k drop
-tc filter add dev $DEV parent ffff: protocol ipv6 prio 3 u32 match u32 0 0 action police rate 30mbit burst 384k drop
+tc qdisc add dev "$DEV" handle ffff: ingress
+tc filter add dev "$DEV" parent ffff: protocol ip prio 2 u32 match u32 0 0 action police rate 30mbit burst 384k drop
+tc filter add dev "$DEV" parent ffff: protocol ipv6 prio 3 u32 match u32 0 0 action police rate 30mbit burst 384k drop
