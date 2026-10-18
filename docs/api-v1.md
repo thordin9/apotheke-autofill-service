@@ -111,8 +111,8 @@ Old clients ignore it.
   applies: when that model's load estimate (last measured load, at least 15 s)
   plus its slowest recent answer (last 5, 15 s until measured) fit in 90% of
   `BACKEND_TIMEOUT_S`, the request waits for the load; otherwise it gets `503
-  backend_unavailable` ("model '…' is loading") with `Retry-After` (at least
-  15 s) at once, and the model loads in the background. With Qwen on the Jetson
+  backend_unavailable` ("model '…' is loading") with `Retry-After` at once
+  (Ollama: at least 15 s; echo: the remaining simulated load time), and the model loads in the background. With Qwen on the Jetson
   that means a fast 503 at 25 s and a wait at 45 s.
 - A request for another model than the one **in flight** must also wait for
   the requests ahead of it: it is refused at once (`503`, "a model switch would

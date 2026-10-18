@@ -221,7 +221,7 @@ components:
     BackendUnavailable:
       description: Backend not implemented, not ready, busy (queue full), or failed
       headers:
-        Retry-After: {schema: {type: integer}, description: Sent when not ready or busy}
+        Retry-After: {schema: {type: integer}, description: "Sent when not ready, busy, or loading a model picked with context.model (Ollama: at least 15 s; echo: remaining simulated load time)"}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     BackendTimeout:
       description: Backend exceeded BACKEND_TIMEOUT_S
