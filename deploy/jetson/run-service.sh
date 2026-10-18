@@ -42,12 +42,14 @@ wait_ready() {
 # never removed before it has been renamed), then puts <name>-prev back under its name and starts it.
 NEW_STARTED=0
 restore_prev() {
-  if [ "$NEW_STARTED" = 1 ]; then docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
-  if exists "$PREV" && ! exists "$NAME"; then
-    docker rename "$PREV" "$NAME" && docker start "$NAME" >/dev/null && echo "restored the previous container as $NAME" >&2
-  fi
+  if [ "$NEW_STARTED" = 1 ]; then docker rm -f "$NAME" >/dev/null 2>&1 || true; NEW_STARTED=0; fi
+  if exists "$PREV" && ! exists "$NAME"; then docker rename "$PREV" "$NAME" || return 0; fi
+  # the new container is gone by now, so $NAME (if any) is the previous one: make sure it runs (no-op if it does)
+  if exists "$NAME"; then docker start "$NAME" >/dev/null && echo "previous container is running as $NAME" >&2; fi
 }
-on_signal() { trap - INT TERM; echo "interrupted; rolling back" >&2; restore_prev; exit "$1"; }
+# A rollback ignores further INT/TERM (inherited by the docker commands it runs), so a second signal can't start
+# a second rollback that would remove the just-restored container.
+on_signal() { trap '' INT TERM; echo "interrupted; rolling back" >&2; restore_prev; exit "$1"; }
 
 if exists "$PREV"; then
   cat >&2 <<MSG
@@ -67,11 +69,11 @@ fi
 NEW_STARTED=1
 if ! docker run -d --name "$NAME" --network host --runtime nvidia --restart unless-stopped \
     --env-file "$ENV_FILE" "$IMAGE" >/dev/null; then
-  echo "docker run failed" >&2; restore_prev; trap - INT TERM; exit 1
+  echo "docker run failed" >&2; trap '' INT TERM; restore_prev; exit 1
 fi
 if ! wait_ready; then
   docker logs --tail 50 "$NAME" >&2 2>&1 || true
-  restore_prev; trap - INT TERM; exit 1
+  trap '' INT TERM; restore_prev; exit 1
 fi
 trap - INT TERM
 docker rm -f "$PREV" >/dev/null 2>&1 || true

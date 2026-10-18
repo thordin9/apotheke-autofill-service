@@ -185,7 +185,10 @@ so it renames the running `autofill` to `autofill-prev` and stops it, then start
 `WAIT_S` (default 120 s) for Docker to report it healthy (the image has a `HEALTHCHECK` on `/healthz`). On success it
 removes `autofill-prev`. If `docker run` fails, or the new container exits or isn't healthy in time, it prints the
 new container's last log lines, removes it, and renames and starts `autofill-prev` again, so the old version keeps
-serving. Ctrl-C or SIGTERM during the switch rolls back the same way. If an
+serving. Ctrl-C or SIGTERM during the switch rolls back the same way, and further signals are ignored while the rollback
+runs. One caveat with real Docker: if `docker run` is interrupted, the daemon may still create the new container
+after the rollback has finished. The old container is then left stopped as `autofill-prev`, and the recovery steps
+below apply. If an
 `autofill-prev` is still left over (for example after a power cut mid-deploy), the script refuses to run until you
 resolve it:
 
@@ -334,9 +337,16 @@ After a reboot, the quick check under [Verify](#verify) is enough.
 
 ## Feature 7: ALLOWED_MODELS and IMAGE_SIZES (pending)
 
-Feature 7 lets Apotheke's admin choose the model and the image size. Once its service PR merges, two new variables go
-into `service.env`: `ALLOWED_MODELS` (the models the service may use, and the default) and `IMAGE_SIZES` (the
-long-edge presets offered to clients, and the recommended one). Their exact format and the recommended values (from
-the board benchmarks) will be documented in the README and `deploy/jetson/service.env.example` with that PR. Every
-model listed must be installed in the board's Ollama, and patched like `qwen2.5vl-jetson:3b` if it needs it.
-Because only one model fits in memory, switching models is a cold start of at least 15 s.
+Feature 7 (service PR #10) lets Apotheke's admin choose the model and the image size. Once it merges and is
+deployed, two optional variables go into `service.env`. Both are opt-in: when they're unset, `/v1/info` is unchanged.
+
+- `ALLOWED_MODELS`: a comma-separated list of **extra** Ollama tags clients may request. The default model always
+  comes from `OLLAMA_MODEL` and is always allowed, so it doesn't need to be repeated. Listed models that aren't
+  installed in the board's Ollama are left out of `/v1/info` instead of causing an error. A model that runs into the
+  same vision-buffer problem as stock Qwen needs a patched variant like `qwen2.5vl-jetson:3b`.
+- `IMAGE_SIZES`: a comma-separated list of long edges in pixels, with one `*` marking the recommended size, for
+  example `448,672*,1024`. Each value must be between 64 and 8192, and more than one `*` stops the service at
+  startup.
+
+Production values: set to ITAdvisor's recommended picks at deploy. Only one model fits in memory, so a request for
+a model other than the loaded one is a cold start of at least 15 s and follows the same fast-503 or wait rules.
