@@ -9,15 +9,20 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 - **Cold-start `Retry-After` per model (Ollama).** A 503 "model '…' is
   loading" now sends that model's remaining load time: max(15 s, its last
-  measured load) minus how long its background load has already run, at
-  least 1 s. It was always 15 s (or `OLLAMA_RETRY_AFTER_S` if higher), so a
+  measured load) plus a margin of max(2 s, 30%), so a load up to 30% slower
+  than the last still fits, minus how long its background load has already
+  run, at least 1 s (20 s for an unmeasured model). It was always 15 s (or `OLLAMA_RETRY_AFTER_S` if higher), so a
   client's single retry could land mid-load for a model that loads slower.
   `OLLAMA_RETRY_AFTER_S` no longer applies to cold-start 503s.
 - **`/v1/info` no longer evicts a model being switched to (Ollama).** While a
   model switch or background load is in flight, including a request waiting
   for its model to load, `/v1/info` reports `ready: false` if `/api/ps` does
   not list an allowlisted model yet, but no longer queues a reload of the
-  default model that would evict the model being loaded.
+  default model that would evict the model being loaded. Work in flight is
+  checked before and after the `/api/ps` read, so a load or request that
+  finishes during it cannot trigger the reload either. The guard also
+  applies without `ALLOWED_MODELS`: the reload of an unloaded default waits
+  while a request is in flight.
 - **A switch during another background load is queued (Ollama).** The
   requested model used to be dropped when another background load was
   running, although the 503 said it was loading, so the retry paid a second

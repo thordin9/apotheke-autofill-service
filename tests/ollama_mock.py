@@ -33,6 +33,9 @@ class FakeOllama:
         # When set, loads and chats replace `loaded` with their model, like
         # Ollama with OLLAMA_MAX_LOADED_MODELS=1.
         self.track_loads = False
+        # Seconds GET /api/ps waits before answering with the list it saw
+        # when the request arrived (a stale snapshot).
+        self.ps_delay = 0.0
         self.release = threading.Event()
         self.release.set()
         fake = self
@@ -45,6 +48,7 @@ class FakeOllama:
                 fake.requests.append((self.path, {}))
                 if self.path == "/api/ps" and fake.loaded is not None:
                     body = {"models": [{"name": n, "model": n} for n in fake.loaded]}
+                    time.sleep(fake.ps_delay)
                     self._send(200, json.dumps(body).encode())
                 elif self.path == "/api/tags" and fake.tags is not None:
                     body = {"models": [{"name": n, "model": n} for n in fake.tags]}

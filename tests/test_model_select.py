@@ -371,7 +371,8 @@ def test_ollama_switch_at_25_s_gets_fast_503_and_loads(oclient, fake):
     fake.track_loads = True
     c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25", OLLAMA_RETRY_AFTER_S="5")
     r = post_image(c, context=ctx(model=MOON))
-    assert r.status_code == 503 and r.headers["Retry-After"] == "15"
+    # 15 s estimate + max(2 s, 30%) margin = 19.5 s, rounded up.
+    assert r.status_code == 503 and r.headers["Retry-After"] == "20"
     assert "moondream" in r.json()["error"]["message"]
     assert fake.chats() == []
     assert _wait(lambda: [g["model"] for g in fake.generates()] == [MOON])
@@ -507,13 +508,13 @@ def test_ollama_prompt_does_not_depend_on_model(oclient, fake):
 
 
 def test_ollama_switch_retry_after_uses_measured_load_over_15_s(oclient, fake):
-    # Moondream last loaded in 22.4 s: its Retry-After is 23, not 15, so a
-    # single client retry does not land mid-load.
+    # Moondream last loaded in 22.4 s: its Retry-After is 30 (22.4 s + 30%
+    # margin), not 15, so a single client retry does not land mid-load.
     c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25", OLLAMA_RETRY_AFTER_S="5")
     c.app.state.backend._record_load(22.4, MOON)
     fake.warm_delay = 0.3
     r = post_image(c, context=ctx(model=MOON))
-    assert r.status_code == 503 and r.headers["Retry-After"] == "23"
+    assert r.status_code == 503 and r.headers["Retry-After"] == "30"
 
 
 def test_ollama_switch_retry_after_measured_load_under_15_s_keeps_floor(oclient, fake):
@@ -521,21 +522,21 @@ def test_ollama_switch_retry_after_measured_load_under_15_s_keeps_floor(oclient,
     c.app.state.backend._record_load(4.0, MOON)
     fake.warm_delay = 0.3
     r = post_image(c, context=ctx(model=MOON))
-    assert r.status_code == 503 and r.headers["Retry-After"] == "15"
+    assert r.status_code == 503 and r.headers["Retry-After"] == "20"
 
 
 def test_ollama_switch_retry_after_counts_down_while_loading(oclient, fake):
     # A retry while moondream's background load is running gets the time
-    # left: 22.4 s estimate - 10 s already loading -> 13.
+    # left: 22.4 s estimate + 30% - 10 s already loading -> 20.
     c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
     b = c.app.state.backend
     b._record_load(22.4, MOON)
     fake.warm_delay = 2.0
-    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "23"
+    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "30"
     model, started = b._loading
     assert model == MOON
     b._loading = (MOON, started - 10.0)
-    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "13"
+    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "20"
     assert [g["model"] for g in fake.generates()] == [MOON]  # still one load
 
 
@@ -543,7 +544,7 @@ def test_ollama_switch_retry_after_is_at_least_1(oclient, fake):
     c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
     b = c.app.state.backend
     fake.warm_delay = 2.0
-    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "15"
+    assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "20"
     b._loading = (MOON, b._loading[1] - 60.0)  # overran its estimate
     assert post_image(c, context=ctx(model=MOON)).headers["Retry-After"] == "1"
 
@@ -552,7 +553,7 @@ def test_ollama_retry_after_ignores_a_load_of_another_model(oclient, fake):
     c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
     b = c.app.state.backend
     b._loading = (QWEN, time.monotonic() - 10.0)
-    assert b._cold_retry_after(MOON) == 15
+    assert b._cold_retry_after(MOON) == 20
 
 
 def test_ollama_loading_marker_cleared_after_load(oclient, fake):
@@ -628,12 +629,12 @@ def test_ollama_switch_while_another_reload_is_running(oclient, fake):
     b._reload(QWEN)
     r = post_image(c, context=ctx(model=MOON))
     assert r.status_code == 503 and "moondream" in r.json()["error"]["message"]
-    # Its own 15 s plus what is left of Qwen's 15 s load.
-    assert int(r.headers["Retry-After"]) in (29, 30)
+    # Its own 19.5 s (15 s + margin) plus what is left of Qwen's 19.5 s.
+    assert int(r.headers["Retry-After"]) in (38, 39)
     assert b._pending == MOON
     assert _wait(lambda: b._loading is not None and b._loading[0] == MOON)
     r = post_image(c, context=ctx(model=MOON))  # the retry: moondream is loading
-    assert r.status_code == 503 and int(r.headers["Retry-After"]) <= 15
+    assert r.status_code == 503 and int(r.headers["Retry-After"]) <= 20
     assert _wait(lambda: not b._reload_active)
     assert [g["model"] for g in fake.generates()] == [QWEN, MOON]
     assert b._loading is None and b._pending is None
@@ -676,9 +677,9 @@ def test_ollama_retry_after_for_a_queued_load(oclient, fake):
     c = oclient(ALLOWED_MODELS=MOON)
     b = c.app.state.backend
     b._loading, b._pending = (QWEN, time.monotonic() - 5.0), MOON
-    assert b._cold_retry_after(MOON) == 25  # 15 + (15 - 5)
+    assert b._cold_retry_after(MOON) == 34  # 19.5 + (19.5 - 5)
     b._loading = (QWEN, time.monotonic() - 60.0)  # Qwen overran its estimate
-    assert b._cold_retry_after(MOON) == 15
+    assert b._cold_retry_after(MOON) == 20
 
 
 def test_ollama_install_shows_up_after_cache_ttl(oclient, fake, monkeypatch):
@@ -796,3 +797,75 @@ def test_echo_without_allowed_models_is_not_serialized(make_client):
         t.join(5)
     assert [r.status_code for r in results] == [200, 200, 200]
     assert time.monotonic() - t0 < 1.4
+
+
+# -- follow-up: QA of #11 (B3b, B2 margin) -------------------------------------
+
+
+def test_b3_toctou_ps_snapshot_before_load_finishes(oclient, fake):
+    # QA B3b: /api/ps answers with a snapshot taken before moondream's
+    # background load finished (so it lists nothing), and the answer arrives
+    # after the load is done. /v1/info must not reload the default on that
+    # stale snapshot: it would evict the model that just loaded.
+    fake.loaded = []
+    fake.warm_delay = 0.2
+    fake.ps_delay = 0.5
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    b = c.app.state.backend
+    b._reload(MOON)
+    assert c.get("/v1/info").json()["ready"] is False
+    assert not b._reload_active  # the load finished during the /api/ps call
+    time.sleep(0.3)
+    assert [g["model"] for g in fake.generates()] == [MOON]
+
+
+def test_b3_request_finishing_during_ps_call_skips_reload(oclient, fake):
+    # The same window for a request: one that starts and ends while /api/ps
+    # is answering is seen through the activity counter.
+    fake.loaded = []
+    fake.ps_delay = 0.4
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45")
+    b = c.app.state.backend
+    results: list = []
+    t = threading.Thread(target=lambda: results.append(c.get("/v1/info")))
+    t.start()
+    time.sleep(0.1)
+    b._activity += 2  # a request started and finished meanwhile
+    t.join(5)
+    time.sleep(0.2)
+    assert results[0].json()["ready"] is False and fake.generates() == []
+
+
+def test_b3_guard_applies_without_allowed_models(oclient, fake):
+    # Without ALLOWED_MODELS the default reload also waits while a request
+    # is in flight, then happens once nothing is.
+    fake.loaded = []
+    c = oclient()
+    b = c.app.state.backend
+    b._in_flight = 1
+    assert c.get("/v1/info").json()["ready"] is False
+    time.sleep(0.2)
+    assert fake.generates() == []
+    b._in_flight = 0
+    c.get("/v1/info")
+    assert _wait(lambda: [g["model"] for g in fake.generates()] == [QWEN])
+
+
+@pytest.mark.parametrize("last_load_s", [10.0, 15.0, 22.4, 40.0])
+def test_ollama_switch_retry_after_covers_a_load_30_percent_slower(oclient, last_load_s):
+    # QA B2 note: the next load can be slower than the last one. Retry-After
+    # covers a load 30% slower than the estimate (max(15 s, last load)).
+    c = oclient(ALLOWED_MODELS=MOON)
+    b = c.app.state.backend
+    b._record_load(last_load_s, MOON)
+    slower = 1.3 * max(15.0, last_load_s)
+    assert b._cold_retry_after(MOON) >= slower
+    assert b._cold_retry_after(MOON) - slower < 1  # and not much more
+
+
+def test_ollama_switch_retry_after_margin_is_at_least_2_s(oclient, monkeypatch):
+    import app.backends.ollama as ollama
+
+    monkeypatch.setattr(ollama, "LOAD_MARGIN_SHARE", 0.05)
+    c = oclient(ALLOWED_MODELS=MOON)
+    assert c.app.state.backend._cold_retry_after(MOON) == 17  # 15 + max(2, 0.75)

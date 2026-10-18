@@ -116,23 +116,31 @@ Old clients ignore it.
   fast 503 at 25 s and a wait at 45 s.
 - **`Retry-After` on a cold start** is that model's expected remaining load
   time in whole seconds, at least 1. Ollama: its load estimate (the last
-  measured load of **that** model, at least 15 s) minus how long its
-  background load has already been running, so a retry during the load gets
-  the time left (e.g. 15, then 10 when retried 5 s later; 23 for a model that
-  last took 22.4 s to load). Echo: the remaining simulated load time.
+  measured load of **that** model, at least 15 s) plus a margin of max(2 s,
+  30%), so a load up to 30% slower than the last one is still covered, minus
+  how long its background load has already been running, so a retry during
+  the load gets the time left (e.g. 20, then 15 when retried 5 s later; 30 for
+  a model that last took 22.4 s to load). Echo: the remaining simulated load
+  time.
 - **A load requested while another background load runs is queued**, not
   dropped: the backend loads one model at a time (it still holds one model)
   and loads the requested one right after the current load, so a client told
   "model '…' is loading" finds it loading or loaded when it retries. The queue
   has one slot: a later request for a third model replaces the queued one.
-  Its `Retry-After` adds what is left of the running load to its own estimate.
+  Its `Retry-After` adds what is left of the running load (with its margin)
+  to its own estimate and margin.
 - Echo (with `ALLOWED_MODELS` set) answers one request at a time like Ollama,
   so concurrent requests for different models follow the queued-switch rule
   above (one may wait, more get `503` "queue full").
 - While a model switch or background load is in flight (including a request
   waiting for its model to load), `GET /v1/info` reports `ready: false` if no
   allowlisted model is in memory yet but does **not** reload the default
-  model, which would evict the model being loaded.
+  model, which would evict the model being loaded. The check runs before and
+  after the backend reads `/api/ps`, so a load or request that starts or ends
+  during that read also skips the reload. This guard applies **without
+  `ALLOWED_MODELS` too**: the background reload of an unloaded default waits
+  while a request is in flight (that request's chat call loads the model
+  anyway) and happens on a later `/v1/info` once nothing is in flight.
 - A request for another model than the one **in flight** must also wait for
   the requests ahead of it: it is refused at once (`503`, "a model switch would
   time out") when their slowest recent times plus the new model's load and

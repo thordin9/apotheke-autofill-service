@@ -732,7 +732,8 @@ def test_cold_model_gets_503_at_once_and_is_reloaded(oclient, fake):
     fake.loaded = []
     c = oclient(BACKEND_TIMEOUT_S="25", OLLAMA_RETRY_AFTER_S="5")
     r = post_image(c)
-    assert r.status_code == 503 and r.headers["Retry-After"] == "15"
+    # 15 s assumed load + max(2 s, 30%) margin, rounded up.
+    assert r.status_code == 503 and r.headers["Retry-After"] == "20"
     body = assert_contract(r, "/v1/suggest", "post")
     assert body["error"]["code"] == "backend_unavailable"
     assert "loading" in body["error"]["message"]
