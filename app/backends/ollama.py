@@ -15,6 +15,11 @@ Env (read when the backend is created):
                          when last load time + recent generation time (15 s each
                          until measured) fit in 90% of BACKEND_TIMEOUT_S; otherwise
                          it gets 503 at once and the model reloads in the background.
+  ALLOWED_MODELS         comma-separated models a client may pick with context.model
+                         (OLLAMA_MODEL is always allowed and is the default). Only
+                         models Ollama has installed (GET /api/tags, cached 30 s) are
+                         offered in /v1/info and used; others fall back to the default.
+                         A model other than the loaded one is a cold start (above).
   OLLAMA_NUM_PREDICT     max tokens the model may generate per request (default 256;
                          0 or less removes the cap). Stops runaway output, e.g. a
                          small model padding format=json output with whitespace.
@@ -51,7 +56,8 @@ from typing import Any
 import httpx
 
 from ..settings import get_settings
-from .base import CAPABILITIES, Backend, BackendUnavailable
+from .base import CAPABILITIES, Backend, BackendUnavailable, Busy
+from .selection import allowlist, cold_wait_fits, model_key, resolve_model, same_model
 
 log = logging.getLogger(__name__)
 
@@ -663,16 +669,43 @@ def _format_mode(raw: str) -> str:
     return "schema"
 
 
-def _model_key(name: str) -> str:
-    # Ollama reports "moondream:latest" for a model requested as "moondream".
-    name = name.strip()
-    return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
+# How long the list of installed models (GET /api/tags) is reused.
+INSTALLED_TTL_S = 30.0
 
 
-class Busy(BackendUnavailable):
-    def __init__(self, message: str, retry_after: int):
-        super().__init__(message)
-        self.headers = {"Retry-After": str(retry_after)}
+class ModelStats:
+    """Timings for one model: admission decisions and avg_latency_ms."""
+
+    def __init__(self) -> None:
+        # Moving average of recent generation times (model load excluded),
+        # reported as avg_latency_ms and used for Retry-After.
+        self.avg_s: float | None = None
+        # The last few generation times. Admission decisions use the slowest
+        # of them, not the average: one fast prompt-cache hit must not let in
+        # a request that then times out.
+        self.recent: collections.deque[float] = collections.deque(maxlen=RECENT_WINDOW)
+        # Last observed load time, for deciding whether a request that finds
+        # the model unloaded can wait for the load.
+        self.load_s: float | None = None
+
+    def record(self, seconds: float) -> None:
+        seconds = max(0.0, seconds)
+        self.avg_s = seconds if self.avg_s is None else 0.7 * self.avg_s + 0.3 * seconds
+        self.recent.append(seconds)
+
+    def slow_generate_s(self) -> float:
+        """Slowest recent generation time (15 s until measured)."""
+        return max(self.recent) if self.recent else DEFAULT_GENERATE_S
+
+    def load_estimate_s(self) -> float:
+        """Expected load time: the last measured load, but never less than
+        DEFAULT_LOAD_S. Timed loads can come out short (a load already under
+        way, files in the page cache) while the next one is slow."""
+        return max(DEFAULT_LOAD_S, self.load_s or 0.0)
+
+    def record_load(self, seconds: float) -> None:
+        if seconds >= MIN_LOAD_S:
+            self.load_s = seconds
 
 
 class OllamaBackend(Backend):
@@ -690,6 +723,9 @@ class OllamaBackend(Backend):
         self.format_mode = _format_mode(os.environ.get("OLLAMA_JSON_FORMAT", ""))
         self.log_raw = _env_flag("OLLAMA_LOG_RAW", False)
         self.plain_retry = _env_flag("OLLAMA_PLAIN_RETRY", True)
+        # Models a client may pick; the default (OLLAMA_MODEL) comes first.
+        self.allowed_configured = bool(get_settings().allowed_models)
+        self.models = allowlist(self.model, get_settings().allowed_models)
         if self.log_raw:
             _enable_debug_logging()
         self.ready = not self.warmup_enabled
@@ -699,16 +735,54 @@ class OllamaBackend(Backend):
         self._start_lock = threading.Lock()
         self._in_flight = 0
         self._waiting = 0
-        # Moving average of recent generation times (model load excluded),
-        # used to refuse queued requests that could not finish in time.
-        self._avg_s: float | None = None
-        # The last few generation times. Admission decisions use the slowest
-        # of them, not the average: one fast prompt-cache hit must not let in
-        # a request that then times out.
-        self._recent: collections.deque[float] = collections.deque(maxlen=RECENT_WINDOW)
-        # Last observed model load time, for deciding whether a request that
-        # finds the model unloaded can wait for the load.
-        self._load_s: float | None = None
+        # Model of the request in flight (or the last one), for the queue check.
+        self._current = self.model
+        self._stats_by_model: dict[str, ModelStats] = {}
+        self._installed: set[str] | None = None
+        self._installed_at = -math.inf
+
+    # -- per-model timings ---------------------------------------------------
+    def stats(self, model: str | None = None) -> ModelStats:
+        return self._stats_by_model.setdefault(model_key(model or self.model), ModelStats())
+
+    # The default model's timings, under the names the admission code and
+    # tests have always used.
+    @property
+    def _avg_s(self) -> float | None:
+        return self.stats().avg_s
+
+    @_avg_s.setter
+    def _avg_s(self, value: float | None) -> None:
+        self.stats().avg_s = value
+
+    @property
+    def _recent(self) -> collections.deque[float]:
+        return self.stats().recent
+
+    @property
+    def _load_s(self) -> float | None:
+        return self.stats().load_s
+
+    def _record(self, seconds: float, model: str | None = None) -> None:
+        self.stats(model).record(seconds)
+
+    def _record_load(self, seconds: float, model: str | None = None) -> None:
+        self.stats(model).record_load(seconds)
+
+    def _slow_generate_s(self, model: str | None = None) -> float:
+        return self.stats(model).slow_generate_s()
+
+    def _load_estimate_s(self, model: str | None = None) -> float:
+        return self.stats(model).load_estimate_s()
+
+    def _cold_wait_fits(self, model: str | None = None) -> bool:
+        """Whether loading the model and then answering fits in 90% of
+        BACKEND_TIMEOUT_S, judging by its load estimate (at least 15 s) and
+        its slowest recent generation (15 s until measured)."""
+        s = self.stats(model)
+        return cold_wait_fits(
+            s.load_estimate_s(), s.slow_generate_s(), get_settings().backend_timeout_s
+        )
 
     # -- warm-up (thread, so it is independent of any event loop) ----------
     def start(self) -> None:
@@ -718,14 +792,12 @@ class OllamaBackend(Backend):
             self._warm_thread = threading.Thread(target=self._warm, daemon=True)
             self._warm_thread.start()
 
+    def _load_payload(self, model: str) -> dict[str, Any]:
+        return {"model": model, "prompt": "", "stream": False, "keep_alive": self.keep_alive}
+
     def _warm(self) -> None:
         delay = 1.0
-        payload = {
-            "model": self.model,
-            "prompt": "",
-            "stream": False,
-            "keep_alive": self.keep_alive,
-        }
+        payload = self._load_payload(self.model)
         while True:
             try:
                 t0 = time.monotonic()
@@ -746,62 +818,108 @@ class OllamaBackend(Backend):
     async def info(self) -> dict[str, Any]:
         self.start()
         ready = self.ready
-        if ready and not await self._model_loaded():
+        loaded = await self._loaded_models() if ready or self.allowed_configured else None
+        if ready and loaded is not None and not any(model_key(m) in loaded for m in self.models):
             # Ollama unloaded the model (keep_alive expired, restart, another
-            # model took the memory). Report not ready and reload it, so the
-            # next suggestion does not pay the load time.
+            # model took the memory). Report not ready and reload the default,
+            # so the next suggestion does not pay the load time. A model the
+            # admin allowed and a client picked counts as loaded: reloading
+            # the default would only evict it again.
             ready = False
-            self._reload()
+            self._reload(self.model)
         out: dict[str, Any] = {
             "name": f"ollama-{self.model}",
             "capabilities": list(CAPABILITIES),
             "ready": ready,
         }
         if self._avg_s is not None:
-            # Typical generation time (model load excluded), for clients that
-            # show an estimated progress bar. Absent until a request finished.
+            # Typical generation time of the default model (load excluded),
+            # for clients that show an estimated progress bar. Absent until a
+            # request finished.
             out["avg_latency_ms"] = round(self._avg_s * 1000)
+        if self.allowed_configured:
+            out["models"] = await self._model_entries(loaded)
         return out
 
-    async def _model_loaded(self) -> bool:
-        """Whether Ollama has the model in memory (GET /api/ps). Any error
-        counts as loaded: the check must never make a working service look
-        broken, and an unreachable Ollama surfaces on /v1/suggest."""
+    async def _model_entries(self, loaded: set[str] | None) -> list[dict[str, Any]]:
+        installed = await self._installed_models()
+        entries = []
+        for m in self.models:
+            is_default = m == self.model
+            if not is_default and (installed is None or model_key(m) not in installed):
+                continue
+            entry: dict[str, Any] = {"id": m, "default": is_default}
+            if loaded is not None:
+                entry["loaded"] = model_key(m) in loaded
+            if (avg := self.stats(m).avg_s) is not None:
+                entry["avg_latency_ms"] = round(avg * 1000)
+            entries.append(entry)
+        return entries
+
+    async def _installed_models(self) -> set[str] | None:
+        """model_key()s Ollama has installed (GET /api/tags), cached for
+        INSTALLED_TTL_S. On an error the last good answer is reused; None
+        until one arrived, which offers the default model only."""
+        if time.monotonic() - self._installed_at < INSTALLED_TTL_S:
+            return self._installed
+        try:
+            async with httpx.AsyncClient(base_url=self.url, timeout=2.0) as client:
+                r = await client.get("/api/tags")
+            models = r.json().get("models") if r.status_code < 400 else None
+        except (httpx.HTTPError, ValueError, AttributeError):
+            models = None
+        if isinstance(models, list):
+            self._installed = {
+                model_key(str(m.get("name") or m.get("model") or ""))
+                for m in models
+                if isinstance(m, dict)
+            }
+            self._installed_at = time.monotonic()
+        return self._installed
+
+    async def _loaded_models(self) -> set[str] | None:
+        """model_key()s Ollama has in memory (GET /api/ps), or None when that
+        is unknown (error, old Ollama)."""
         try:
             async with httpx.AsyncClient(base_url=self.url, timeout=2.0) as client:
                 r = await client.get("/api/ps")
             models = r.json().get("models") if r.status_code < 400 else None
         except (httpx.HTTPError, ValueError, AttributeError):
-            return True
+            return None
         if not isinstance(models, list):
-            return True
-        want = _model_key(self.model)
-        return any(
-            isinstance(m, dict) and _model_key(str(m.get("name") or m.get("model") or "")) == want
+            return None
+        return {
+            model_key(str(m.get("name") or m.get("model") or ""))
             for m in models
-        )
+            if isinstance(m, dict)
+        }
 
-    def _reload(self) -> None:
+    async def _model_loaded(self, model: str | None = None) -> bool:
+        """Whether Ollama has the model in memory (GET /api/ps). Any error
+        counts as loaded: the check must never make a working service look
+        broken, and an unreachable Ollama surfaces on /v1/suggest."""
+        loaded = await self._loaded_models()
+        return loaded is None or model_key(model or self.model) in loaded
+
+    def _reload(self, model: str | None = None) -> None:
+        model = model or self.model
         with self._start_lock:
             if self._reload_thread is not None and self._reload_thread.is_alive():
                 return
-            self._reload_thread = threading.Thread(target=self._load_once, daemon=True)
+            self._reload_thread = threading.Thread(
+                target=self._load_once, args=(model,), daemon=True
+            )
             self._reload_thread.start()
 
-    def _load_once(self) -> None:
-        payload = {
-            "model": self.model,
-            "prompt": "",
-            "stream": False,
-            "keep_alive": self.keep_alive,
-        }
+    def _load_once(self, model: str | None = None) -> None:
+        model = model or self.model
         try:
             t0 = time.monotonic()
-            r = httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
+            r = httpx.post(f"{self.url}/api/generate", json=self._load_payload(model), timeout=600)
             if r.status_code < 400:
-                self._record_load(time.monotonic() - t0)
+                self._record_load(time.monotonic() - t0, model)
         except httpx.HTTPError as exc:
-            log.warning("ollama model reload failed: %s", exc)
+            log.warning("ollama model reload failed (model=%s): %s", model, exc)
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -835,11 +953,16 @@ class OllamaBackend(Backend):
         return opts
 
     async def _chat(
-        self, prompt: str, image_b64: str, fmt: str | dict[str, Any] | None
+        self,
+        prompt: str,
+        image_b64: str,
+        fmt: str | dict[str, Any] | None,
+        model: str | None = None,
     ) -> tuple[str, float]:
         """Return (content, seconds Ollama spent loading the model)."""
+        model = model or self.model
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "stream": False,
             "keep_alive": self.keep_alive,
             "options": self.options(),
@@ -855,16 +978,19 @@ class OllamaBackend(Backend):
         if self.log_raw:
             log.debug(
                 "ollama raw output (model=%s, %d chars): %r",
-                self.model,
+                model,
                 len(content),
                 truncate_for_log(content),
             )
         load = data.get("load_duration")
         load_s = load / 1e9 if isinstance(load, (int, float)) and load > 0 else 0.0
-        self._record_load(load_s)
+        self._record_load(load_s, model)
         return content, load_s
 
-    def _parse(self, content: str, context: dict[str, Any], attempt: str) -> dict[str, Any]:
+    def _parse(
+        self, content: str, context: dict[str, Any], attempt: str, model: str | None = None
+    ) -> dict[str, Any]:
+        model = model or self.model
         try:
             out, how = parse_suggestion(content, context)
         except BackendError as exc:
@@ -872,7 +998,7 @@ class OllamaBackend(Backend):
                 "ollama output unusable (%s prompt): %s (model=%s, %d chars): %r",
                 attempt,
                 exc,
-                self.model,
+                model,
                 len(content),
                 truncate_for_log(content),
             )
@@ -881,13 +1007,16 @@ class OllamaBackend(Backend):
             log.warning(
                 "ollama ignored the JSON instructions; derived fields from plain text "
                 "(model=%s, %d chars): %r",
-                self.model,
+                model,
                 len(content),
                 truncate_for_log(content),
             )
         return out
 
-    async def generate(self, image_bytes: bytes, context: dict[str, Any]) -> dict[str, Any]:
+    async def generate(
+        self, image_bytes: bytes, context: dict[str, Any], model: str | None = None
+    ) -> dict[str, Any]:
+        model = model or self.model
         started = time.monotonic()
         image_b64 = base64.b64encode(image_bytes).decode()
         fmt: str | dict[str, Any] | None = None
@@ -895,41 +1024,15 @@ class OllamaBackend(Backend):
             fmt = build_schema(context)
         elif self.format_mode == "json":
             fmt = "json"
-        content, load_s = await self._chat(build_prompt(context), image_b64, fmt)
-        self._record(time.monotonic() - started - load_s)
+        content, load_s = await self._chat(build_prompt(context), image_b64, fmt, model)
+        self._record(time.monotonic() - started - load_s, model)
         try:
-            return self._parse(content, context, "json")
+            return self._parse(content, context, "json", model)
         except BackendError:
             if not self.plain_retry or not self._retry_fits(time.monotonic() - started, load_s):
                 raise
-        content, _ = await self._chat(PLAIN_PROMPT, image_b64, None)
-        return self._parse(content, context, "plain")
-
-    def _record(self, seconds: float) -> None:
-        seconds = max(0.0, seconds)
-        self._avg_s = seconds if self._avg_s is None else 0.7 * self._avg_s + 0.3 * seconds
-        self._recent.append(seconds)
-
-    def _slow_generate_s(self) -> float:
-        """Slowest recent generation time (15 s until measured)."""
-        return max(self._recent) if self._recent else DEFAULT_GENERATE_S
-
-    def _load_estimate_s(self) -> float:
-        """Expected model load time: the last measured load, but never less
-        than DEFAULT_LOAD_S. Timed loads can come out short (a load already
-        under way, files in the page cache) while the next one is slow."""
-        return max(DEFAULT_LOAD_S, self._load_s or 0.0)
-
-    def _record_load(self, seconds: float) -> None:
-        if seconds >= MIN_LOAD_S:
-            self._load_s = seconds
-
-    def _cold_wait_fits(self) -> bool:
-        """Whether loading the model and then answering fits in 90% of
-        BACKEND_TIMEOUT_S, judging by the load estimate (at least 15 s) and
-        the slowest recent generation (15 s until measured)."""
-        load = self._load_estimate_s()
-        return load + self._slow_generate_s() <= get_settings().backend_timeout_s * 0.9
+        content, _ = await self._chat(PLAIN_PROMPT, image_b64, None, model)
+        return self._parse(content, context, "plain", model)
 
     @staticmethod
     def _retry_fits(elapsed: float, load_s: float) -> bool:
@@ -941,32 +1044,49 @@ class OllamaBackend(Backend):
         remaining = timeout - elapsed
         return generating <= timeout * 0.4 and remaining >= max(generating, timeout * 0.2)
 
+    async def resolve(self, requested: Any) -> str:
+        """The model a request runs on: context.model when allowed and
+        installed, else the default."""
+        if not self.allowed_configured or not isinstance(requested, str):
+            return self.model
+        if not requested.strip() or same_model(requested, self.model):
+            return self.model
+        return resolve_model(requested, self.model, self.models, await self._installed_models())
+
     async def suggest(self, image_bytes: bytes, mime: str, context: dict[str, Any]) -> Any:
         self.start()
         if not self.ready:
             raise Busy(f"model '{self.model}' is warming up", self.retry_after)
-        if not self._in_flight and not self._cold_wait_fits() and not await self._model_loaded():
-            # Ollama unloaded the model (restart, eviction, keep_alive) and
-            # loading plus answering would not fit BACKEND_TIMEOUT_S (Qwen on
-            # the Jetson: 15 s + 13.5 s > 0.9 x 25 s), so answer 503 at once and
-            # load it now. When it fits (45 s), the request simply waits: the
-            # chat call makes Ollama load the model.
-            self._reload()
-            raise Busy(
-                f"model '{self.model}' is loading", max(self.retry_after, COLD_RETRY_AFTER_S)
-            )
-        # One request in flight, up to queue_size waiting; the rest get 503.
-        # A request is also refused when, judging by the slowest recent
-        # generation time, it would time out while waiting its turn.
-        # Plain counters + polling keep this independent of the event loop.
-        if self._in_flight:
+        model = await self.resolve(context.get("model"))
+        timeout = get_settings().backend_timeout_s
+        if not self._in_flight:
+            if not self._cold_wait_fits(model) and not await self._model_loaded(model):
+                # Ollama does not have the model in memory (restart, eviction,
+                # keep_alive, or the client picked another model than the
+                # loaded one) and loading plus answering would not fit
+                # BACKEND_TIMEOUT_S (Qwen on the Jetson: 15 s + 13.5 s > 0.9 x
+                # 25 s), so answer 503 at once and load it now. When it fits
+                # (45 s), the request simply waits: the chat call makes Ollama
+                # load the model.
+                self._reload(model)
+                raise Busy(f"model '{model}' is loading", max(self.retry_after, COLD_RETRY_AFTER_S))
+        else:
+            # One request in flight, up to queue_size waiting; the rest get
+            # 503. A request is also refused when, judging by the slowest
+            # recent generation times, it would time out while waiting its
+            # turn. A request for another model than the one in flight also
+            # pays that model's load (Ollama holds one model at a time).
+            # Plain counters + polling keep this independent of the event loop.
             if self._waiting >= self.queue_size:
                 raise Busy("backend busy, queue full", self._busy_retry_after())
-            timeout = get_settings().backend_timeout_s
-            if (self._waiting + 2) * self._slow_generate_s() > timeout * 0.9:
-                raise Busy(
-                    "backend busy, a queued request would time out", self._busy_retry_after()
-                )
+            ahead = (self._waiting + 1) * self._slow_generate_s(self._current)
+            need = ahead + self._slow_generate_s(model)
+            switch = not same_model(model, self._current)
+            if switch:
+                need += self._load_estimate_s(model)
+            if need > timeout * 0.9:
+                reason = "a model switch" if switch else "a queued request"
+                raise Busy(f"backend busy, {reason} would time out", self._busy_retry_after())
         self._waiting += 1
         try:
             while self._in_flight:
@@ -974,12 +1094,15 @@ class OllamaBackend(Backend):
         finally:
             self._waiting -= 1
         self._in_flight += 1
+        self._current = model
         try:
-            return await self.generate(image_bytes, context)
+            out = await self.generate(image_bytes, context, model)
         finally:
             self._in_flight -= 1
+        return {**out, "model_used": model}
 
     def _busy_retry_after(self) -> int:
-        if self._avg_s is None:
+        avg = self.stats(self._current).avg_s
+        if avg is None:
             return self.retry_after
-        return max(self.retry_after, math.ceil(self._avg_s * (self._waiting + 1)))
+        return max(self.retry_after, math.ceil(avg * (self._waiting + 1)))
