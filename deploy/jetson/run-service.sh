@@ -9,19 +9,24 @@
 #   2. start the new one and wait until Docker reports it healthy (or running, if it has no healthcheck)
 #   3. success: remove <name>-prev.  Failure: remove the new one, rename <name>-prev back and start it.
 # Ctrl-C or SIGTERM anywhere in steps 1-2 also rolls back to the previous container (exit 130 / 143).
-# Env: ENV_FILE (default /opt/autofill/service.env), NAME (default autofill), WAIT_S (default 120).
+# Env: ENV_FILE (default /opt/autofill/service.env), NAME (default autofill), WAIT_S (default 120),
+#      HEALTH_URL (default http://127.0.0.1:8080/healthz; polled directly so the switch doesn't wait for
+#      Docker's first 30 s health interval; empty = rely on Docker's health status only).
 set -euo pipefail
 IMAGE=${1:?usage: run-service.sh apotheke-autofill:jetson-<sha>}
 ENV_FILE=${ENV_FILE:-/opt/autofill/service.env}
 NAME=${NAME:-autofill}
 PREV="$NAME-prev"
 WAIT_S=${WAIT_S:-120}
+HEALTH_URL=${HEALTH_URL-http://127.0.0.1:8080/healthz}
 [ -r "$ENV_FILE" ] || { echo "missing $ENV_FILE (copy deploy/jetson/service.env.example)" >&2; exit 1; }
 docker image inspect "$IMAGE" >/dev/null || { echo "image $IMAGE not found; build it first (build-image.sh)" >&2; exit 1; }
 
 exists() { docker container inspect "$1" >/dev/null 2>&1; }
 
-# Wait until the container is healthy (image HEALTHCHECK) or, without a healthcheck, still running after 10 s.
+# Wait until the running container answers HEALTH_URL, or Docker reports it healthy (image HEALTHCHECK), or,
+# without either, it is still running after 10 s.
+url_ok() { [ -n "$HEALTH_URL" ] && command -v curl >/dev/null && curl -fsS -m 3 -o /dev/null "$HEALTH_URL" 2>/dev/null; }
 wait_ready() {
   local t=0 state health
   while [ "$t" -lt "$WAIT_S" ]; do
@@ -29,8 +34,8 @@ wait_ready() {
     health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$NAME" 2>/dev/null || echo none)
     case "$state/$health" in
       running/healthy) return 0 ;;
-      running/none) [ "$t" -ge 10 ] && return 0 ;;
-      running/starting) ;;
+      running/none) url_ok && return 0; [ "$t" -ge 10 ] && return 0 ;;
+      running/starting) url_ok && return 0 ;;
       *) echo "new container is $state/$health" >&2; return 1 ;;
     esac
     sleep 2; t=$((t + 2))

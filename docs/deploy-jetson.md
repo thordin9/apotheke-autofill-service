@@ -1,8 +1,9 @@
 # Deploying the service on a Jetson Xavier NX
 
 This page describes how the autofill service runs on the project's Jetson board, so the setup can be
-rebuilt from this repo alone. Everything below is the production setup as of 2026-10-18 (main `7339211`,
-model `qwen2.5vl-jetson:3b`, `BACKEND_TIMEOUT_S=45`). The files it refers to are in
+rebuilt from this repo alone. Everything below is the production setup as of 2026-10-18 12:45 EEST (main
+`f28d9ac`, image `apotheke-autofill:jetson-f28d9ac`, model `qwen2.5vl-jetson:3b`, `BACKEND_TIMEOUT_S=45`,
+`IMAGE_SIZES=448,560*,1024`, `ALLOWED_MODELS=qwen2.5vl-jetson:3b`). The files it refers to are in
 [`deploy/jetson/`](../deploy/jetson) and [`bench/`](../bench). Measurements are in [benchmarks.md](benchmarks.md),
 and the hand-run hardware workflow is described in [hardware-ci.md](hardware-ci.md).
 
@@ -23,7 +24,7 @@ board (written `$REPO` below). All commands run as root unless noted otherwise.
 10. [Inbound bandwidth limit (30 Mbit/s)](#inbound-bandwidth-limit-30-mbits)
 11. [Self-hosted GitHub Actions runner](#self-hosted-github-actions-runner)
 12. [Reboot behaviour](#reboot-behaviour)
-13. [Feature 7: ALLOWED_MODELS and IMAGE_SIZES (pending)](#feature-7-allowed_models-and-image_sizes-pending)
+13. [Model and image size choice: ALLOWED_MODELS and IMAGE_SIZES](#model-and-image-size-choice-allowed_models-and-image_sizes)
 
 ## Platform
 
@@ -136,10 +137,12 @@ and the container reads it with `--env-file`, so the token never appears on a co
 | `BACKEND` | `ollama` | Use the Ollama backend (the image's default too) |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | The host's Ollama, reachable because of `--network host` |
 | `OLLAMA_MODEL` | `qwen2.5vl-jetson:3b` | The patched model above |
-| `OLLAMA_LOG_RAW` | `0` | `1` logs every raw model answer, including the description of each photo, in the container log. Useful for debugging bad suggestions, but leave it off in production. (The board still has `1` from benchmarking.) |
+| `OLLAMA_LOG_RAW` | `0` | `1` logs every raw model answer, including the description of each photo, in the container log. Useful for debugging bad suggestions, but leave it off in production. |
 | `AUTOFILL_TOKEN` | a random secret | Bearer token clients send. Placeholder in the example; never commit the real one |
 | `OLLAMA_KEEP_ALIVE` | `-1` | Keep the model loaded forever. The board is dedicated to the service, so no request should wait for a reload after an idle spell |
 | `BACKEND_TIMEOUT_S` | `45` | See below |
+| `IMAGE_SIZES` | `448,560*,1024` | Image-size presets offered to Apotheke, 560 px recommended. See [Model and image size choice](#model-and-image-size-choice-allowed_models-and-image_sizes) |
+| `ALLOWED_MODELS` | `qwen2.5vl-jetson:3b` | Lists only the default model, so `/v1/info` gets a `models` field (Apotheke v2.4's model dropdown) with no extra model and no model switches. See the same section |
 
 **45 rather than 25.** A warm Qwen request takes about 13.5 s, and loading the model about 15 s. The service admits
 a request only if load (if needed) plus answer fits in 90% of the timeout, judged by the slowest of the last 5
@@ -182,7 +185,11 @@ deploy/jetson/run-service.sh "$IMAGE"
 
 The script keeps the old container as a fallback. Port 8080 on the host network can only be held by one container,
 so it renames the running `autofill` to `autofill-prev` and stops it, then starts the new one and waits up to
-`WAIT_S` (default 120 s) for Docker to report it healthy (the image has a `HEALTHCHECK` on `/healthz`). On success it
+`WAIT_S` (default 120 s) until it answers `http://127.0.0.1:8080/healthz` (`HEALTH_URL`), or Docker reports it
+healthy through the image's `HEALTHCHECK`. Polling `/healthz` directly matters, because Docker's first health check
+only runs after 30 s, and the old container is already stopped by then. On the real deploys of `f28d9ac`, waiting for
+Docker's health status took 36 s from start to finish. Polling `/healthz` directly took 10 s, which includes
+stopping the old container. On success it
 removes `autofill-prev`. If `docker run` fails, or the new container exits or isn't healthy in time, it prints the
 new container's last log lines, removes it, and renames and starts `autofill-prev` again, so the old version keeps
 serving. Ctrl-C or SIGTERM during the switch rolls back the same way, and further signals are ignored while the rollback
@@ -335,18 +342,45 @@ Everything comes back on its own after a reboot or power cut, tested on 2026-10-
 
 After a reboot, the quick check under [Verify](#verify) is enough.
 
-## Feature 7: ALLOWED_MODELS and IMAGE_SIZES (pending)
+## Model and image size choice: ALLOWED_MODELS and IMAGE_SIZES
 
-Feature 7 (service PR #10) lets Apotheke's admin choose the model and the image size. Once it merges and is
-deployed, two optional variables go into `service.env`. Both are opt-in: when they're unset, `/v1/info` is unchanged.
+Feature 7 (service PRs #10 and #11, API v1.2) lets Apotheke's admin choose the model and the image size. It is
+deployed on the board with:
 
-- `ALLOWED_MODELS`: a comma-separated list of **extra** Ollama tags clients may request. The default model always
-  comes from `OLLAMA_MODEL` and is always allowed, so it doesn't need to be repeated. Listed models that aren't
-  installed in the board's Ollama are left out of `/v1/info` instead of causing an error. A model that runs into the
-  same vision-buffer problem as stock Qwen needs a patched variant like `qwen2.5vl-jetson:3b`.
-- `IMAGE_SIZES`: a comma-separated list of long edges in pixels, with one `*` marking the recommended size, for
-  example `448,672*,1024`. Each value must be between 64 and 8192, and more than one `*` stops the service at
-  startup.
+```
+IMAGE_SIZES=448,560*,1024
+ALLOWED_MODELS=qwen2.5vl-jetson:3b
+```
 
-Production values: set to ITAdvisor's recommended picks at deploy. Only one model fits in memory, so a request for
-a model other than the loaded one is a cold start of at least 15 s and follows the same fast-503 or wait rules.
+- `IMAGE_SIZES`: a comma-separated list of long edges in pixels, each 64–8192, with one `*` marking the recommended
+  size. Without a `*` the largest size is recommended. More than one `*` or a bad value stops the service at
+  startup. The client resizes the photo; the service doesn't. **560 px is recommended** because photos sent at
+  560 px answer in a median 8.3 s instead of 13.9 s at 1024 px, with the same accuracy on the 19 benchmark photos.
+  448 px is a bit faster but names get worse, and 1024 px stays for labels with small print. 672 px was slower than
+  560 px and no more accurate, so it's left out. See
+  [benchmarks.md, "Image-size sweep and Qwen3-VL 2B"](benchmarks.md#image-size-sweep-and-qwen3-vl-2b-2026-10-18).
+- `ALLOWED_MODELS`: a comma-separated list of the Ollama tags clients may request. The default always comes from
+  `OLLAMA_MODEL` and is always allowed, so it doesn't need to be listed. Tags that aren't installed are left out of
+  `/v1/info` instead of causing an error. On the board it is set to **only the default model**,
+  `qwen2.5vl-jetson:3b`. That adds nothing a client could switch to. Its only effect is that `/v1/info` gets a
+  `models` field (just Qwen, marked default and loaded), which Apotheke v2.4 needs to show its model dropdown. A
+  request for any other model falls back to Qwen and reports `model_used: qwen2.5vl-jetson:3b`. No other model is
+  listed, for two reasons:
+  - The lower-`max_pixels` variants (`qwen2.5vl-jetson:3b-200k/-300k/-400k`) give the same speed and accuracy curve
+    as client-side resizing, but every switch is a 21–29 s cold start that evicts the default model.
+  - `qwen3-vl:2b` is installed but **must not be listed**. It can't load on this board with Ollama 0.15.6, because
+    its 2 MP image reservation is hard-coded and runs out of memory, and the service offers any installed model
+    that is listed.
+
+Both are opt-in. With `ALLOWED_MODELS` unset, `/v1/info` has no `models` list and `context.model` is ignored.
+With `IMAGE_SIZES` unset, it has no `image_sizes`. Every response reports `model_used`. Check the deployed values:
+
+```bash
+curl -s -H @/opt/autofill/auth.hdr localhost:8080/v1/info | python3 -m json.tool
+# "ready": true,
+# "models": [{"id": "qwen2.5vl-jetson:3b", "default": true, "loaded": true}],
+# "image_sizes": [448, 560 (recommended), 1024]
+```
+
+Only one model fits in memory, so if another model is ever listed, a request for a model other than the loaded one
+is a cold start of at least 15 s and follows the same fast-503 or wait rules.
