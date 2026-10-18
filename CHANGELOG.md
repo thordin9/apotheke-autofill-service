@@ -5,6 +5,20 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ## Unreleased
 
+### Fixed
+
+- **Cold-start `Retry-After` per model (Ollama).** A 503 "model '…' is
+  loading" now sends that model's remaining load time: max(15 s, its last
+  measured load) minus how long its background load has already run, at
+  least 1 s. It was always 15 s (or `OLLAMA_RETRY_AFTER_S` if higher), so a
+  client's single retry could land mid-load for a model that loads slower.
+  `OLLAMA_RETRY_AFTER_S` no longer applies to cold-start 503s.
+- **`/v1/info` no longer evicts a model being switched to (Ollama).** While a
+  model switch or background load is in flight, including a request waiting
+  for its model to load, `/v1/info` reports `ready: false` if `/api/ps` does
+  not list an allowlisted model yet, but no longer queues a reload of the
+  default model that would evict the model being loaded.
+
 ### Added
 
 - **Model choice (API v1.2).** `ALLOWED_MODELS` lists models a client may pick

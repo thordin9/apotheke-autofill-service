@@ -121,8 +121,10 @@ another fits as well (2 × 13.5 s). The service decides from the last load time
 it measured (never assumed below 15 s) and the slowest of the last 5
 answers (15 s until measured), so one fast answer can't let in a request
 that then times out: when loading plus answering would not fit, as with Qwen at the
-generic 25 s default, it answers 503 with `Retry-After: 15` at once and reloads
-the model in the background. A request that would time out in the queue gets
+generic 25 s default, it answers 503 at once and reloads the model in the
+background, with `Retry-After` set to that model's remaining load time
+(max(15 s, its last measured load) minus the time the load has already run,
+at least 1 s). A request that would time out in the queue gets
 503 with a `Retry-After` based on recent request times. Clients should allow
 the backend timeout plus 5 s, so 50 s for the Jetson (Apotheke's maximum is 60 s).
 
@@ -201,7 +203,8 @@ Added in API v1.2 (see [docs/api-v1.md](docs/api-v1.md#choosing-a-model-v12)); o
 - `GET /v1/info` lists `models` (default first, then installed allowlisted models, each with `default`, `loaded` and, once measured, its own `avg_latency_ms`) and `image_sizes` (`long_edge` presets with one `recommended`).
 - `POST /v1/suggest` takes `context.model`. Not allowlisted or not installed → the default model. Every answer has `model_used`.
 - A model other than the loaded one is a cold start: it waits for the load when that model's load estimate plus slowest recent answer fit in 90% of `BACKEND_TIMEOUT_S`, else 503 + `Retry-After` at once while it loads in the background. With Qwen on the Jetson: fast 503 at 25 s, a wait at 45 s. Timings are kept per model; the top-level `avg_latency_ms` stays the default model's.
-- `/v1/info` does not reload the default while a picked allowlisted model is loaded, so it does not evict the client's choice.
+- The cold-start 503's `Retry-After` is that model's remaining load time: max(15 s, its last measured load) minus the time its background load has already run, at least 1 s.
+- `/v1/info` does not reload the default while a picked allowlisted model is loaded, or while a model switch or background load is in flight, so it does not evict the client's choice.
 
 Trying it on echo (no model needed):
 
