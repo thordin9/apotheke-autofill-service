@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -38,6 +39,9 @@ def parse_models(raw: str) -> tuple[str, ...]:
 
 MIN_IMAGE_SIZE = 64
 MAX_IMAGE_SIZE = 8192
+# One IMAGE_SIZES entry: ASCII digits, optionally one trailing '*'. Stricter
+# than int(), which also takes "+448", "4_48" and non-ASCII digits.
+_IMAGE_SIZE_ITEM = re.compile(r"\d+\*?", re.ASCII)
 
 
 def parse_image_sizes(raw: str) -> tuple[tuple[int, bool], ...]:
@@ -51,14 +55,12 @@ def parse_image_sizes(raw: str) -> tuple[tuple[int, bool], ...]:
         part = part.strip()
         if not part:
             continue
-        star = part.endswith("*")
-        num = part.rstrip("*").strip()
-        try:
-            size = int(num)
-        except ValueError:
+        if not _IMAGE_SIZE_ITEM.fullmatch(part):
             raise RuntimeError(
                 f"IMAGE_SIZES entries must be integers (optionally ending in *), got {part!r}"
-            ) from None
+            )
+        star = part.endswith("*")
+        size = int(part.rstrip("*"))
         if not MIN_IMAGE_SIZE <= size <= MAX_IMAGE_SIZE:
             raise RuntimeError(
                 f"IMAGE_SIZES entries must be {MIN_IMAGE_SIZE}..{MAX_IMAGE_SIZE}, got {size}"

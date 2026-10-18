@@ -18,6 +18,20 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   for its model to load, `/v1/info` reports `ready: false` if `/api/ps` does
   not list an allowlisted model yet, but no longer queues a reload of the
   default model that would evict the model being loaded.
+- **A switch during another background load is queued (Ollama).** The
+  requested model used to be dropped when another background load was
+  running, although the 503 said it was loading, so the retry paid a second
+  cold cycle. It is now loaded right after the running load (one at a time,
+  one queued slot, latest request wins), and its `Retry-After` includes the
+  rest of the running load.
+- **Echo serializes requests with `ALLOWED_MODELS` set.** Like Ollama with
+  one parallel slot and a queue of one, concurrent requests for different
+  models now follow the queued-switch rule (wait, "queue full", or "a model
+  switch would time out"). Single requests, and echo without
+  `ALLOWED_MODELS`, are unchanged.
+- **Strict `IMAGE_SIZES` parsing.** Each entry must match `^\d+\*?$`;
+  `672**`, `+448`, `4_48` and `672 *` now fail at startup instead of being
+  accepted.
 
 ### Added
 
