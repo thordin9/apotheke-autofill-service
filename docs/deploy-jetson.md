@@ -185,7 +185,13 @@ so it renames the running `autofill` to `autofill-prev` and stops it, then start
 `WAIT_S` (default 120 s) for Docker to report it healthy (the image has a `HEALTHCHECK` on `/healthz`). On success it
 removes `autofill-prev`. If `docker run` fails, or the new container exits or isn't healthy in time, it prints the
 new container's last log lines, removes it, and renames and starts `autofill-prev` again, so the old version keeps
-serving. If an `autofill-prev` is left over from an interrupted run, it refuses to start until you remove it.
+serving. Ctrl-C or SIGTERM during the switch rolls back the same way. If an
+`autofill-prev` is still left over (for example after a power cut mid-deploy), the script refuses to run until you
+resolve it:
+
+- if `autofill` is missing or broken: `docker rm -f autofill` (only if a broken one exists), then
+  `docker rename autofill-prev autofill && docker start autofill`;
+- otherwise (the new `autofill` works): `docker rm autofill-prev`.
 
 The new container is started with:
 
