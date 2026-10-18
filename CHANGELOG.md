@@ -7,6 +7,16 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Documentation
 
+- **Jetson deployment guide (PR #9).** `docs/deploy-jetson.md` documents the production setup on the Jetson
+  Xavier NX: platform, Ollama drop-in, the `qwen2.5vl-jetson:3b` model, `service.env`, building
+  (`apotheke-autofill:jetson-<sha>`), switching with rollback, verifying, redeploying, rolling back, the 30 Mbit/s
+  inbound cap, the self-hosted runner and reboot behaviour. New scripts in `deploy/jetson/`: `build-image.sh`,
+  `run-service.sh` (keeps the old container as `autofill-prev` and restores it if the new one fails or the switch
+  is interrupted), `service.env.example`, the Ollama drop-in, `dl-cap.sh` and `dl-cap.service`. Deployed on the
+  board at `517352f` with `IMAGE_SIZES=448,560*,1024` and
+  `ALLOWED_MODELS=qwen2.5vl-jetson:3b`, which lists only the default and turns on `models` in `/v1/info`. `bench/verify.sh` no longer prints
+  Ollama's spinner.
+
 - **Image-size sweep and brand/serial benchmark (2026-10-18).** `docs/benchmarks.md`
   gains a section with hardware/software versions, the exact prompt, schema and
   request settings, and results for `qwen2.5vl-jetson:3b` at `max_pixels`

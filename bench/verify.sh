@@ -9,7 +9,7 @@ info() { curl -s -H @"$AUTH_HEADER_FILE" "$SERVICE_URL/v1/info" | python3 -c "im
 for i in $(seq 1 60); do curl -s -H @"$AUTH_HEADER_FILE" "$SERVICE_URL/v1/info" | grep -q '"ready":true' && break; sleep 2; done
 echo "healthz $(curl -s "$SERVICE_URL/healthz")"; info
 sug basic hammer.jpg
-echo "--- cold: ollama stop $M"; ollama stop "$M"; sleep 2; info
+echo "--- cold: ollama stop $M"; ollama stop "$M" >/dev/null 2>&1; sleep 2; info
 sug cold1 laptop.jpg
 for i in $(seq 1 30); do sleep 2; curl -s -H @"$AUTH_HEADER_FILE" "$SERVICE_URL/v1/info" | grep -q '"ready":true' && break; done; echo "ready again after ~$((i*2+2))s"; info
 sug cold_retry laptop.jpg
