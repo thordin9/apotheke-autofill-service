@@ -13,7 +13,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   inbound cap, the self-hosted runner and reboot behaviour. New scripts in `deploy/jetson/`: `build-image.sh`,
   `run-service.sh` (keeps the old container as `autofill-prev` and restores it if the new one fails or the switch
   is interrupted), `service.env.example`, the Ollama drop-in, `dl-cap.sh` and `dl-cap.service`. Deployed on the
-  board at `f28d9ac` with `IMAGE_SIZES=448,560*,1024` and
+  board at `517352f` with `IMAGE_SIZES=448,560*,1024` and
   `ALLOWED_MODELS=qwen2.5vl-jetson:3b`, which lists only the default and turns on `models` in `/v1/info`. `bench/verify.sh` no longer prints
   Ollama's spinner.
 

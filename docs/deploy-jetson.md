@@ -1,8 +1,8 @@
 # Deploying the service on a Jetson Xavier NX
 
 This page describes how the autofill service runs on the project's Jetson board, so the setup can be
-rebuilt from this repo alone. Everything below is the production setup as of 2026-10-18 12:45 EEST (main
-`f28d9ac`, image `apotheke-autofill:jetson-f28d9ac`, model `qwen2.5vl-jetson:3b`, `BACKEND_TIMEOUT_S=45`,
+rebuilt from this repo alone. Everything below is the production setup as of 2026-10-18 12:54 EEST (main
+`517352f`, image `apotheke-autofill:jetson-517352f`, model `qwen2.5vl-jetson:3b`, `BACKEND_TIMEOUT_S=45`,
 `IMAGE_SIZES=448,560*,1024`, `ALLOWED_MODELS=qwen2.5vl-jetson:3b`). The files it refers to are in
 [`deploy/jetson/`](../deploy/jetson) and [`bench/`](../bench). Measurements are in [benchmarks.md](benchmarks.md),
 and the hand-run hardware workflow is described in [hardware-ci.md](hardware-ci.md).
@@ -187,9 +187,9 @@ The script keeps the old container as a fallback. Port 8080 on the host network 
 so it renames the running `autofill` to `autofill-prev` and stops it, then starts the new one and waits up to
 `WAIT_S` (default 120 s) until it answers `http://127.0.0.1:8080/healthz` (`HEALTH_URL`), or Docker reports it
 healthy through the image's `HEALTHCHECK`. Polling `/healthz` directly matters, because Docker's first health check
-only runs after 30 s, and the old container is already stopped by then. On the real deploys of `f28d9ac`, waiting for
-Docker's health status took 36 s from start to finish. Polling `/healthz` directly took 10 s, which includes
-stopping the old container. On success it
+only runs after 30 s, and the old container is already stopped by then. On the board (2026-10-18), the first real switch waited for
+Docker's health status and took 36 s from start to finish. With `/healthz` polled directly, later switches took
+8–10 s, which includes stopping the old container. On success it
 removes `autofill-prev`. If `docker run` fails, or the new container exits or isn't healthy in time, it prints the
 new container's last log lines, removes it, and renames and starts `autofill-prev` again, so the old version keeps
 serving. Ctrl-C or SIGTERM during the switch rolls back the same way, and further signals are ignored while the rollback
