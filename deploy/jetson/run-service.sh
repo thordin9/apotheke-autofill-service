@@ -5,13 +5,15 @@
 # on a command line, in `ps` or in shell history. See docs/deploy-jetson.md.
 #
 # Order (port 8080 on the host network can only be bound by one container at a time):
-#   1. rename the running container to <name>-prev and stop it
-#   2. start the new one and wait until Docker reports it healthy (or running, if it has no healthcheck)
+#   1. rename the running container to <name>-prev and stop it; refuse (and roll back) if HEALTH_URL still
+#      answers then, because something else holds the port and would be mistaken for the new container
+#   2. start the new one and wait until it answers HEALTH_URL (polled with curl), or Docker reports it healthy,
+#      or, without either, it is still running after 10 s; at most WAIT_S seconds of wall-clock time
 #   3. success: remove <name>-prev.  Failure: remove the new one, rename <name>-prev back and start it.
 # Ctrl-C or SIGTERM anywhere in steps 1-2 also rolls back to the previous container (exit 130 / 143).
 # Env: ENV_FILE (default /opt/autofill/service.env), NAME (default autofill), WAIT_S (default 120),
-#      HEALTH_URL (default http://127.0.0.1:8080/healthz; polled directly so the switch doesn't wait for
-#      Docker's first 30 s health interval; empty = rely on Docker's health status only).
+#      HEALTH_URL (default http://127.0.0.1:8080/healthz; polled with curl so the switch doesn't wait for
+#      Docker's first 30 s health interval; empty, or no curl on the host = Docker's health status only).
 set -euo pipefail
 IMAGE=${1:?usage: run-service.sh apotheke-autofill:jetson-<sha>}
 ENV_FILE=${ENV_FILE:-/opt/autofill/service.env}
@@ -28,7 +30,7 @@ exists() { docker container inspect "$1" >/dev/null 2>&1; }
 # without either, it is still running after 10 s.
 url_ok() { [ -n "$HEALTH_URL" ] && command -v curl >/dev/null && curl -fsS -m 3 -o /dev/null "$HEALTH_URL" 2>/dev/null; }
 wait_ready() {
-  local t=0 state health
+  local t=0 state health start=$SECONDS
   while [ "$t" -lt "$WAIT_S" ]; do
     state=$(docker inspect -f '{{.State.Status}}' "$NAME" 2>/dev/null || echo missing)
     health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$NAME" 2>/dev/null || echo none)
@@ -38,7 +40,7 @@ wait_ready() {
       running/starting) url_ok && return 0 ;;
       *) echo "new container is $state/$health" >&2; return 1 ;;
     esac
-    sleep 2; t=$((t + 2))
+    sleep 2; t=$((SECONDS - start))     # wall clock: a hanging /healthz (curl -m 3) can't stretch WAIT_S
   done
   echo "new container not healthy after ${WAIT_S}s" >&2; return 1
 }
@@ -71,6 +73,12 @@ if exists "$NAME"; then
   docker stop "$PREV" >/dev/null
 fi
 
+# Nothing may answer HEALTH_URL now: otherwise the poll below would take that answer for the new container.
+# (On a first deploy there is nothing to restore, so this just refuses before starting anything.)
+if url_ok; then
+  echo "$HEALTH_URL answers while no $NAME container runs: something else holds the port; not switching" >&2
+  trap '' INT TERM; restore_prev; exit 1
+fi
 NEW_STARTED=1
 if ! docker run -d --name "$NAME" --network host --runtime nvidia --restart unless-stopped \
     --env-file "$ENV_FILE" "$IMAGE" >/dev/null; then

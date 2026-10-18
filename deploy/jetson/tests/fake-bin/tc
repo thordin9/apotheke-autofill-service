@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake `tc` for dl-cap.sh: logs calls; FAIL_IP=1 makes the IPv4 filter fail.
+echo "tc $*" >> "${DS:?}/tc.log"
+case "$*" in *"protocol ip "*) [ -n "${FAIL_IP:-}" ] && exit 2;; esac
+exit 0

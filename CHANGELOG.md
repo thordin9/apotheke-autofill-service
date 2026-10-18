@@ -31,6 +31,12 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Fixed
 
+- **`deploy/jetson/run-service.sh`: refuse a switch when port 8080 is taken; wall-clock `WAIT_S`.** After the old
+  container is stopped, the script refuses (and restores it) if `HEALTH_URL` still answers, because something else
+  holds the port and its answer would be taken for the new container. On a first deploy it refuses before starting
+  anything. The health wait now counts wall-clock time, so a hanging `/healthz` can't stretch `WAIT_S`. The deploy
+  scripts' fake-docker test harness is now in `deploy/jetson/tests/` and runs in CI (`deploy-scripts` job).
+
 - **Cold-start `Retry-After` per model (Ollama).** A 503 "model '…' is
   loading" now sends that model's remaining load time: max(15 s, its last
   measured load) plus a margin of max(2 s, 30%), so a load up to 30% slower

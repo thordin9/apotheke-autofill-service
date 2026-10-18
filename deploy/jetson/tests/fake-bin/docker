@@ -1,0 +1,33 @@
+#!/bin/bash
+# Stateful fake `docker` for the deploy script tests. No real Docker is used.
+# State: one file per container in $DS/c/<name> holding "image status health http"
+#   status: running|exited, health: healthy|starting|unhealthy|none, http: 1 if it answers /healthz when running.
+# Knobs (env): RUN_FAIL=1 (docker run fails), RUN_SLEEP=<s> (docker run hangs after creating the container),
+#   NEW_HEALTH=<health> (default healthy), NEW_HTTP=1 (new container answers /healthz),
+#   SLOW_<subcommand>=<s> (sleep before that subcommand), RENAME_BACK_SLEEP=<s> (sleep after renaming to autofill).
+set -u
+DS=${DS:?}; mkdir -p "$DS/c"; echo "docker $*" >> "$DS/log"
+cmd=$1; shift
+v="SLOW_$cmd"; [ -n "${!v:-}" ] && sleep "${!v}"
+case "$cmd" in
+  image) [ "${2:-}" = "missing:img" ] && exit 1; exit 0 ;;
+  container) [ -f "$DS/c/$2" ]; exit ;;
+  rename) [ -f "$DS/c/$1" ] && [ ! -f "$DS/c/$2" ] && mv "$DS/c/$1" "$DS/c/$2" || exit 1
+          [ "$2" = autofill ] && [ -n "${RENAME_BACK_SLEEP:-}" ] && sleep "$RENAME_BACK_SLEEP"; exit 0 ;;
+  stop) [ -f "$DS/c/$1" ] || exit 1; read -r i _ _ x < "$DS/c/$1"; echo "$i exited none $x" > "$DS/c/$1"; echo "$1" ;;
+  start) [ -f "$DS/c/$1" ] || exit 1; read -r i _ _ x < "$DS/c/$1"; echo "$i running healthy $x" > "$DS/c/$1"; echo "$1" ;;
+  rm) shift; [ -f "$DS/c/$1" ] && rm "$DS/c/$1" || exit 1 ;;
+  logs) echo "(fake logs)" ;;
+  inspect)
+    f=$2; n=$3; [ -f "$DS/c/$n" ] || exit 1; read -r _ s h _ < "$DS/c/$n"
+    case "$f" in *Health*) echo "$h";; *) echo "$s";; esac ;;
+  run)
+    name=""; img=""
+    while [ $# -gt 0 ]; do case "$1" in --name) name=$2; shift 2;; --network|--runtime|--restart|--env-file) shift 2;; -d) shift;; *) img=$1; shift;; esac; done
+    [ -f "$DS/c/$name" ] && { echo "conflict" >&2; exit 125; }
+    line="$img running ${NEW_HEALTH:-healthy} ${NEW_HTTP:-0}"
+    [ -n "${RUN_SLEEP:-}" ] && { echo "$line" > "$DS/c/$name"; sleep "$RUN_SLEEP"; }
+    [ "${RUN_FAIL:-}" = 1 ] && { rm -f "$DS/c/$name"; echo "fake run failure" >&2; exit 125; }
+    echo "$line" > "$DS/c/$name"; echo cid ;;
+  *) echo "fake docker: unsupported '$cmd'" >&2; exit 2 ;;
+esac
