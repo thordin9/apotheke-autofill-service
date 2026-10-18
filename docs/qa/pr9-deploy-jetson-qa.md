@@ -109,3 +109,10 @@ Verdict for 9e53fe1: **PASS.** Every finding from the first review (9d23ccb) and
 - **`IMAGE_SIZES` default:** without a `*`, PR #10 marks the largest size as recommended. The guide doesn't mention this.
 - **Models not installed:** a request for one falls back to the default model. The guide only mentions that such models are hidden.
 - **Feature 7 is still marked "pending (PR #10)".** Update the wording and fill in production values when PR #10 is merged and deployed.
+
+### Post-merge: direct `/healthz` poll (8ae0b2d)
+`run-service.sh` now polls `HEALTH_URL` (default `http://127.0.0.1:8080/healthz`, no auth needed) with `curl -m 3` every 2 s instead of waiting for Docker's first health check at 30 s. A switch drops from about 36 s to 8–10 s of downtime. Rechecked with the stateful fake docker and a fake curl:
+- **Good path:** a good image switches as soon as `/healthz` answers.
+- **Failure paths:** a dead or unhealthy image, a stuck start, a failing `docker run` and every N1/N1b signal case still end with the previous container running as `autofill`. Exit codes are 130 / 143 for an interrupt and 1 for a failed deploy. Nothing is left behind.
+- **Fallback:** without `curl` on the host, or with `HEALTH_URL=` empty, it waits for Docker's health status as before.
+- **Checks:** shellcheck is clean, the service tests pass and no secrets were added.

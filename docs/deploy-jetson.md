@@ -189,8 +189,16 @@ so it renames the running `autofill` to `autofill-prev` and stops it, then start
 healthy through the image's `HEALTHCHECK`. Polling `/healthz` directly matters, because Docker's first health check
 only runs after 30 s, and the old container is already stopped by then. On the board (2026-10-18), the first real switch waited for
 Docker's health status and took 36 s from start to finish. With `/healthz` polled directly, later switches took
-8–10 s, which includes stopping the old container. On success it
-removes `autofill-prev`. If `docker run` fails, or the new container exits or isn't healthy in time, it prints the
+8–10 s, which includes stopping the old container. The fast poll uses `curl` on the host (L4T has it). Without
+`curl`, or with `HEALTH_URL` set to empty, the script falls back to Docker's health status. `WAIT_S` counts
+wall-clock time, so a hanging `/healthz` (each poll times out after 3 s) can't stretch the wait.
+
+**Port check.** Once the old container is stopped, nothing should answer `HEALTH_URL`. If something still does,
+another process or container is holding port 8080, and its answer would be mistaken for the new container's. The
+script then refuses to switch: it starts nothing and puts `autofill-prev` back. On a first deploy, with no old
+container, it just refuses. Find what holds the port with `ss -ltnp 'sport = :8080'` before trying again.
+
+On success it removes `autofill-prev`. If `docker run` fails, or the new container exits or isn't healthy in time, it prints the
 new container's last log lines, removes it, and renames and starts `autofill-prev` again, so the old version keeps
 serving. Ctrl-C or SIGTERM during the switch rolls back the same way, and further signals are ignored while the rollback
 runs. One caveat with real Docker: if `docker run` is interrupted, the daemon may still create the new container
@@ -202,6 +210,12 @@ resolve it:
 - if `autofill` is missing or broken: `docker rm -f autofill` (only if a broken one exists), then
   `docker rename autofill-prev autofill && docker start autofill`;
 - otherwise (the new `autofill` works): `docker rm autofill-prev`.
+
+The script's behaviour is covered by [`deploy/jetson/tests/run-tests.sh`](../deploy/jetson/tests/run-tests.sh),
+which runs CI's `deploy-scripts` job. It uses fake `docker`, `curl` and `tc` commands (no Docker, network or root
+needed) and checks: switches, rollbacks, signals before and during a rollback, the `/healthz` poll, the port check,
+the wall-clock `WAIT_S`, `build-image.sh` refs and `dl-cap.sh`. Run it locally the same way. It takes about two
+minutes, because the signal cases use real timing.
 
 The new container is started with:
 

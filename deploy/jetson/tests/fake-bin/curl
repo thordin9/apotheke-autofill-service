@@ -1,0 +1,9 @@
+#!/bin/bash
+# Fake `curl` for HEALTH_URL polling: succeeds if some fake container is running with http=1, or if
+# PORT_TAKEN=1 (a foreign process holds the port). CURL_HANG=<s> sleeps that long (capped by -m) and fails.
+set -u
+m=""; while [ $# -gt 0 ]; do case "$1" in -m) m=$2; shift 2;; *) shift;; esac; done
+if [ -n "${CURL_HANG:-}" ]; then h=$CURL_HANG; [ -n "$m" ] && [ "$m" -lt "$h" ] && h=$m; sleep "$h"; exit 28; fi
+[ "${PORT_TAKEN:-}" = 1 ] && exit 0
+for f in "${DS:?}"/c/*; do [ -e "$f" ] || continue; read -r _ s _ x < "$f"; [ "$s" = running ] && [ "$x" = 1 ] && exit 0; done
+exit 7

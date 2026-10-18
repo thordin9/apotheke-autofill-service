@@ -31,6 +31,21 @@ jobs:
           BACKEND: echo
         run: pytest -q
 
+  deploy-scripts:
+    # Jetson deploy scripts: shellcheck and the fake-docker harness (bash only; no Docker, network or root).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          shellcheck --version | head -2
+          shellcheck -x deploy/jetson/*.sh deploy/jetson/tests/run-tests.sh deploy/jetson/tests/fake-bin/*
+
+      - name: Deploy script tests
+        run: deploy/jetson/tests/run-tests.sh
+
   image:
     runs-on: ubuntu-latest
     needs: lint-test
