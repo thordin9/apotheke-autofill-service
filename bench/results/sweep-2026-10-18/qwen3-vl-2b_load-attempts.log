@@ -1,0 +1,32 @@
+time=2026-10-18T12:02:47.790+03:00 level=INFO source=server.go:431 msg="starting runner" cmd="/usr/local/bin/ollama runner --ollama-engine --port 39287"
+time=2026-10-18T12:02:49.990+03:00 level=INFO source=server.go:431 msg="starting runner" cmd="/usr/local/bin/ollama runner --ollama-engine --model /usr/share/ollama/.ollama/models/blobs/sha256-ebabfa59b71a5b96e0281ec2994977e785284e0939807a99fc340dec3c6f10de --port 39331"
+time=2026-10-18T12:02:49.992+03:00 level=INFO source=sched.go:463 msg="system memory" total="6.7 GiB" free="4.3 GiB" free_swap="11.2 GiB"
+time=2026-10-18T12:02:49.992+03:00 level=INFO source=sched.go:470 msg="gpu memory" id=GPU-19ff8743-2f68-57ac-9a11-cf64401ab74c library=CUDA available="3.9 GiB" free="4.3 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-10-18T12:03:34.311+03:00 level=INFO source=runner.go:1284 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:8192 KvCacheType: NumThreads:6 GPULayers:[] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-10-18T12:03:38.629+03:00 level=INFO source=runner.go:1284 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:8192 KvCacheType: NumThreads:6 GPULayers:28[ID:GPU-19ff8743-2f68-57ac-9a11-cf64401ab74c Layers:28(0..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-10-18T12:05:22.153+03:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="2.0 GiB"
+time=2026-10-18T12:05:27.197+03:00 level=INFO source=device.go:256 msg="kv cache" device=CPU size="896.0 MiB"
+time=2026-10-18T12:05:31.161+03:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="4.2 GiB"
+time=2026-10-18T12:05:33.936+03:00 level=INFO source=device.go:272 msg="total memory" size="7.0 GiB"
+time=2026-10-18T12:05:34.675+03:00 level=INFO source=sched.go:490 msg="Load failed" model=/usr/share/ollama/.ollama/models/blobs/sha256-ebabfa59b71a5b96e0281ec2994977e785284e0939807a99fc340dec3c6f10de error="model failed to load, this may be due to resource limitations or an internal error, check ollama server logs for details"
+[GIN] 2026/10/18 - 12:06:11 | 500 |         3m25s |       127.0.0.1 | POST     "/api/chat"
+time=2026-10-18T12:06:51.444+03:00 level=INFO source=server.go:431 msg="starting runner" cmd="/usr/local/bin/ollama runner --ollama-engine --port 46145"
+time=2026-10-18T12:06:54.182+03:00 level=INFO source=server.go:431 msg="starting runner" cmd="/usr/local/bin/ollama runner --ollama-engine --model /usr/share/ollama/.ollama/models/blobs/sha256-ebabfa59b71a5b96e0281ec2994977e785284e0939807a99fc340dec3c6f10de --port 34441"
+time=2026-10-18T12:06:54.184+03:00 level=INFO source=sched.go:463 msg="system memory" total="6.7 GiB" free="5.1 GiB" free_swap="11.0 GiB"
+time=2026-10-18T12:06:54.184+03:00 level=INFO source=sched.go:470 msg="gpu memory" id=GPU-19ff8743-2f68-57ac-9a11-cf64401ab74c library=CUDA available="4.7 GiB" free="5.1 GiB" minimum="457.0 MiB" overhead="0 B"
+time=2026-10-18T12:07:03.372+03:00 level=INFO source=runner.go:1284 msg=load request="{Operation:alloc LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:6 GPULayers:9[ID:GPU-19ff8743-2f68-57ac-9a11-cf64401ab74c Layers:9(19..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-10-18T12:07:11.632+03:00 level=INFO source=runner.go:1284 msg=load request="{Operation:commit LoraPath:[] Parallel:1 BatchSize:512 FlashAttention:Disabled KvSize:2048 KvCacheType: NumThreads:6 GPULayers:9[ID:GPU-19ff8743-2f68-57ac-9a11-cf64401ab74c Layers:9(19..27)] MultiUserCache:false ProjectorPath: MainGPU:0 UseMmap:false}"
+time=2026-10-18T12:07:11.642+03:00 level=INFO source=ggml.go:494 msg="offloaded 9/29 layers to GPU"
+time=2026-10-18T12:07:11.649+03:00 level=INFO source=device.go:240 msg="model weights" device=CUDA0 size="263.3 MiB"
+time=2026-10-18T12:07:11.653+03:00 level=INFO source=device.go:245 msg="model weights" device=CPU size="1.7 GiB"
+time=2026-10-18T12:07:11.656+03:00 level=INFO source=device.go:251 msg="kv cache" device=CUDA0 size="72.0 MiB"
+time=2026-10-18T12:07:11.656+03:00 level=INFO source=device.go:256 msg="kv cache" device=CPU size="152.0 MiB"
+time=2026-10-18T12:07:11.657+03:00 level=INFO source=device.go:262 msg="compute graph" device=CUDA0 size="4.3 GiB"
+time=2026-10-18T12:07:11.658+03:00 level=INFO source=device.go:267 msg="compute graph" device=CPU size="126.6 MiB"
+time=2026-10-18T12:07:11.658+03:00 level=INFO source=device.go:272 msg="total memory" size="6.7 GiB"
+[GIN] 2026/10/18 - 12:07:30 | 500 | 39.682801569s |       127.0.0.1 | POST     "/api/chat"
+---
+[Sun Oct 18 12:06:09 2026] Out of memory: Killed process 334364 (ollama) total-vm:46734604kB, anon-rss:0kB, file-rss:235408kB, shmem-rss:0kB, UID:999 pgtables:4860kB oom_score_adj:0
+[Sun Oct 18 12:07:27 2026] Out of memory: Killed process 335336 (ollama) total-vm:47425308kB, anon-rss:0kB, file-rss:234196kB, shmem-rss:0kB, UID:999 pgtables:5860kB oom_score_adj:0
+---
+{"error":"llama runner process has terminated: signal: killed"}
