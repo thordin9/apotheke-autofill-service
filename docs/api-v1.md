@@ -120,8 +120,12 @@ Old clients ignore it.
   30%), so a load up to 30% slower than the last one is still covered, minus
   how long its background load has already been running, so a retry during
   the load gets the time left (e.g. 20, then 15 when retried 5 s later; 30 for
-  a model that last took 22.4 s to load). Echo: the remaining simulated load
-  time.
+  a model that last took 22.4 s to load). It is **capped at
+  `BACKEND_TIMEOUT_S` + 5 s**, the recommended client timeout (50 at 45 s),
+  including the queued-switch value below: a client that only retries when
+  `Retry-After` is within its timeout (Apotheke) still retries, and a capped
+  retry that lands mid-load is no worse than none. E.g. a 40 s measured load
+  at 45 s gives 50, not 52. Echo: the remaining simulated load time.
 - **A load requested while another background load runs is queued**, not
   dropped: the backend loads one model at a time (it still holds one model)
   and loads the requested one right after the current load, so a client told

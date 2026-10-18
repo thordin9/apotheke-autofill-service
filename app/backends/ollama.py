@@ -13,7 +13,7 @@ Env (read when the backend is created):
                          A model that Ollama unloaded gets its own load estimate
                          instead: max(15, last measured load) plus a margin of
                          max(2 s, 30%), minus the time its background load has
-                         already run, at least 1.
+                         already run, at least 1 and at most BACKEND_TIMEOUT_S + 5.
                          A request that finds the model unloaded waits for the load
                          when last load time + recent generation time (15 s each
                          until measured) fit in 90% of BACKEND_TIMEOUT_S; otherwise
@@ -76,6 +76,10 @@ DEFAULT_GENERATE_S = 15.0
 # the last one is still over when the client retries: max(2 s, 30%).
 LOAD_MARGIN_S = 2.0
 LOAD_MARGIN_SHARE = 0.3
+# A cold-start Retry-After never exceeds BACKEND_TIMEOUT_S plus this, the
+# recommended client timeout: Apotheke does not retry when Retry-After is
+# above its timeout, and a capped retry that lands mid-load is no worse.
+CLIENT_TIMEOUT_EXTRA_S = 5.0
 # A load_duration below this is a model that was already in memory.
 MIN_LOAD_S = 0.5
 # How many recent generation times the admission checks look at.
@@ -990,7 +994,8 @@ class OllamaBackend(Backend):
         """Retry-After for a request that found its model unloaded: that
         model's load budget (estimate plus margin), minus how long its
         background load has been running, at least 1 s. A model queued behind
-        another background load also waits for the rest of that load."""
+        another background load also waits for the rest of that load. Capped
+        at BACKEND_TIMEOUT_S + 5 s, the recommended client timeout."""
         remaining = self._load_budget_s(model)
         loading, pending = self._loading, self._pending
         if loading is not None and same_model(loading[0], model):
@@ -998,7 +1003,8 @@ class OllamaBackend(Backend):
         elif loading is not None and pending is not None and same_model(pending, model):
             elapsed = time.monotonic() - loading[1]
             remaining += max(0.0, self._load_budget_s(loading[0]) - elapsed)
-        return max(1, math.ceil(remaining))
+        cap = max(1, math.floor(get_settings().backend_timeout_s + CLIENT_TIMEOUT_EXTRA_S))
+        return min(cap, max(1, math.ceil(remaining)))
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:

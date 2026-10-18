@@ -622,9 +622,11 @@ def test_ollama_info_reloads_default_once_nothing_is_in_flight(oclient, fake):
 def test_ollama_switch_while_another_reload_is_running(oclient, fake):
     # A background reload of Qwen is running when a client switches to
     # moondream: moondream is queued and loads right after, so the client's
-    # retry finds it loading (B1). Loads stay one at a time.
-    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    # retry finds it loading (B1). Loads stay one at a time. 40 s timeout
+    # (Retry-After cap 45) with a slow moondream answer, so it is a fast 503.
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="40")
     b = c.app.state.backend
+    b._record(30.0, MOON)
     fake.warm_delay = 0.6
     b._reload(QWEN)
     r = post_image(c, context=ctx(model=MOON))
@@ -674,7 +676,7 @@ def test_ollama_queued_load_runs_after_a_failed_load(oclient, fake):
 
 
 def test_ollama_retry_after_for_a_queued_load(oclient, fake):
-    c = oclient(ALLOWED_MODELS=MOON)
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="40")  # cap 45
     b = c.app.state.backend
     b._loading, b._pending = (QWEN, time.monotonic() - 5.0), MOON
     assert b._cold_retry_after(MOON) == 34  # 19.5 + (19.5 - 5)
@@ -854,8 +856,9 @@ def test_b3_guard_applies_without_allowed_models(oclient, fake):
 @pytest.mark.parametrize("last_load_s", [10.0, 15.0, 22.4, 40.0])
 def test_ollama_switch_retry_after_covers_a_load_30_percent_slower(oclient, last_load_s):
     # QA B2 note: the next load can be slower than the last one. Retry-After
-    # covers a load 30% slower than the estimate (max(15 s, last load)).
-    c = oclient(ALLOWED_MODELS=MOON)
+    # covers a load 30% slower than the estimate (max(15 s, last load)), as
+    # long as that stays under the cap (BACKEND_TIMEOUT_S + 5 = 125 here).
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="120")
     b = c.app.state.backend
     b._record_load(last_load_s, MOON)
     slower = 1.3 * max(15.0, last_load_s)
@@ -869,3 +872,39 @@ def test_ollama_switch_retry_after_margin_is_at_least_2_s(oclient, monkeypatch):
     monkeypatch.setattr(ollama, "LOAD_MARGIN_SHARE", 0.05)
     c = oclient(ALLOWED_MODELS=MOON)
     assert c.app.state.backend._cold_retry_after(MOON) == 17  # 15 + max(2, 0.75)
+
+
+def test_ollama_switch_retry_after_capped_at_client_timeout(oclient, fake):
+    # 40 s measured load: 40 + 30% = 52 s, capped at BACKEND_TIMEOUT_S + 5 =
+    # 50 (the recommended client timeout), so Apotheke still retries.
+    fake.warm_delay = 0.3
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45")
+    b = c.app.state.backend
+    b._record_load(40.0, MOON)
+    b._record(30.0, MOON)  # 40 + 30 > 0.9 x 45: fast 503
+    r = post_image(c, context=ctx(model=MOON))
+    assert r.status_code == 503 and r.headers["Retry-After"] == "50"
+
+
+def test_ollama_switch_retry_after_cap_follows_backend_timeout(oclient):
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    b = c.app.state.backend
+    b._record_load(40.0, MOON)
+    assert b._cold_retry_after(MOON) == 30
+    b._record_load(15.0, MOON)
+    assert b._cold_retry_after(MOON) == 20  # under the cap: unchanged
+
+
+def test_ollama_queued_switch_retry_after_is_capped(oclient, fake):
+    # B1 queued value: 19.5 s own budget + up to 19.5 s left of the running
+    # load = 39, capped at 25 + 5 = 30.
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="25")
+    b = c.app.state.backend
+    fake.warm_delay = 0.6
+    b._reload(QWEN)
+    r = post_image(c, context=ctx(model=MOON))
+    assert r.status_code == 503 and r.headers["Retry-After"] == "30"
+    assert b._pending == MOON
+    b._loading, b._pending = (QWEN, time.monotonic() - 5.0), MOON
+    assert b._cold_retry_after(MOON) == 30  # 34 uncapped
+    assert _wait(lambda: not b._reload_active)

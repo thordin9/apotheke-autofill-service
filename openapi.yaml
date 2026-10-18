@@ -221,7 +221,7 @@ components:
     BackendUnavailable:
       description: Backend not implemented, not ready, busy (queue full), or failed
       headers:
-        Retry-After: {schema: {type: integer}, description: "Sent when not ready, busy, or loading a model (a cold start, e.g. a model switch with context.model). For a cold start it is that model's remaining load time in whole seconds, at least 1: Ollama uses max(15, the model's last measured load) plus a margin of max(2 s, 30%), minus the time its background load has already run (a model queued behind another load also waits for the rest of that load); echo uses the remaining simulated load time."}
+        Retry-After: {schema: {type: integer}, description: "Sent when not ready, busy, or loading a model (a cold start, e.g. a model switch with context.model). For a cold start it is that model's remaining load time in whole seconds, at least 1: Ollama uses max(15, the model's last measured load) plus a margin of max(2 s, 30%), minus the time its background load has already run (a model queued behind another load also waits for the rest of that load), capped at BACKEND_TIMEOUT_S + 5 (the recommended client timeout); echo uses the remaining simulated load time."}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     BackendTimeout:
       description: Backend exceeded BACKEND_TIMEOUT_S

@@ -11,7 +11,10 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   loading" now sends that model's remaining load time: max(15 s, its last
   measured load) plus a margin of max(2 s, 30%), so a load up to 30% slower
   than the last still fits, minus how long its background load has already
-  run, at least 1 s (20 s for an unmeasured model). It was always 15 s (or `OLLAMA_RETRY_AFTER_S` if higher), so a
+  run, at least 1 s (20 s for an unmeasured model), and capped at
+  `BACKEND_TIMEOUT_S` + 5 s, the recommended client timeout (50 at 45 s), so
+  Apotheke, which never retries when `Retry-After` exceeds its timeout,
+  still retries. The cap also applies to a switch queued behind another load. It was always 15 s (or `OLLAMA_RETRY_AFTER_S` if higher), so a
   client's single retry could land mid-load for a model that loads slower.
   `OLLAMA_RETRY_AFTER_S` no longer applies to cold-start 503s.
 - **`/v1/info` no longer evicts a model being switched to (Ollama).** While a
