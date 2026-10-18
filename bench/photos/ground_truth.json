@@ -1,0 +1,229 @@
+{
+ "categories": [
+  "General",
+  "Tools",
+  "Electronics",
+  "Kitchen",
+  "Documents",
+  "Hobby",
+  "Clothing",
+  "Shoes",
+  "Books",
+  "Lighting"
+ ],
+ "_note": "Ground truth for bench/sweep.py + bench/score.py. category must equal 'category' (or one of 'also_accept'); the name passes if it contains one of name_keywords (case-insensitive). brand/model/serial are what is legible in the 1024 px photo; they are looked for in name, tags and description.",
+ "photos": {
+  "cordless_drill.jpg": {
+   "set": "original",
+   "category": "Tools",
+   "also_accept": [],
+   "name_keywords": [
+    "drill"
+   ]
+  },
+  "desk_lamp.jpg": {
+   "set": "original",
+   "category": "Lighting",
+   "also_accept": [],
+   "name_keywords": [
+    "lamp"
+   ]
+  },
+  "hammer.jpg": {
+   "set": "original",
+   "category": "Tools",
+   "also_accept": [],
+   "name_keywords": [
+    "hammer"
+   ]
+  },
+  "headphones.jpg": {
+   "set": "original",
+   "category": "Electronics",
+   "also_accept": [],
+   "name_keywords": [
+    "headphone"
+   ]
+  },
+  "kitchen_knife.jpg": {
+   "set": "original",
+   "category": "Kitchen",
+   "also_accept": [],
+   "name_keywords": [
+    "knife",
+    "knives"
+   ]
+  },
+  "laptop.jpg": {
+   "set": "original",
+   "category": "Electronics",
+   "also_accept": [],
+   "name_keywords": [
+    "laptop",
+    "notebook"
+   ]
+  },
+  "paperback_book.jpg": {
+   "set": "original",
+   "category": "Books",
+   "also_accept": [],
+   "name_keywords": [
+    "book",
+    "paperback"
+   ]
+  },
+  "sneakers.jpg": {
+   "set": "original",
+   "category": "Shoes",
+   "also_accept": [],
+   "name_keywords": [
+    "sneaker",
+    "shoe"
+   ]
+  },
+  "t-shirt.jpg": {
+   "set": "original",
+   "category": "Clothing",
+   "also_accept": [],
+   "name_keywords": [
+    "shirt"
+   ]
+  },
+  "sony_cd_player_label.jpg": {
+   "set": "brand",
+   "category": "Electronics",
+   "also_accept": [],
+   "name_keywords": [
+    "cd player",
+    "compact disc",
+    "disc player",
+    "cd-player"
+   ],
+   "brand": "Sony",
+   "model": "CDP-CE525",
+   "serial": "5104890"
+  },
+  "panasonic_vcr_label.jpg": {
+   "set": "brand",
+   "category": "Electronics",
+   "also_accept": [],
+   "name_keywords": [
+    "video",
+    "vcr",
+    "recorder",
+    "cassette"
+   ],
+   "brand": "Panasonic",
+   "model": "NV-G12EO",
+   "serial": "E7KL06311"
+  },
+  "makita_drill_dhp453.jpg": {
+   "set": "brand",
+   "category": "Tools",
+   "also_accept": [],
+   "name_keywords": [
+    "drill",
+    "screwdriver",
+    "driver"
+   ],
+   "brand": "Makita",
+   "model": "DHP453",
+   "serial": null
+  },
+  "ibuprofen_al400_pack.jpg": {
+   "set": "brand",
+   "category": "General",
+   "also_accept": [],
+   "name_keywords": [
+    "ibuprofen",
+    "tablet",
+    "pill",
+    "medic",
+    "painkiller"
+   ],
+   "brand": "Ibuprofen AL",
+   "model": "AL 400",
+   "serial": null
+  },
+  "raspberry_pi4.jpg": {
+   "set": "brand",
+   "category": "Electronics",
+   "also_accept": [],
+   "name_keywords": [
+    "raspberry",
+    "computer",
+    "board"
+   ],
+   "brand": "Raspberry Pi",
+   "model": "Raspberry Pi 4 Model B",
+   "serial": "2ABCB-RPI4B"
+  },
+  "fluke45_multimeter.jpg": {
+   "set": "brand",
+   "category": "Electronics",
+   "also_accept": [
+    "Tools"
+   ],
+   "name_keywords": [
+    "multimeter",
+    "meter"
+   ],
+   "brand": "Fluke",
+   "model": "45",
+   "serial": null
+  },
+  "casio_fx991ex.jpg": {
+   "set": "brand",
+   "category": "Electronics",
+   "also_accept": [],
+   "name_keywords": [
+    "calculator"
+   ],
+   "brand": "Casio",
+   "model": "fx-991EX",
+   "serial": null
+  },
+  "tefal_kettle.jpg": {
+   "set": "brand",
+   "category": "Kitchen",
+   "also_accept": [],
+   "name_keywords": [
+    "kettle"
+   ],
+   "brand": "Tefal",
+   "model": "Express",
+   "serial": null
+  },
+  "panadol_500_pack.jpg": {
+   "set": "brand",
+   "category": "General",
+   "also_accept": [],
+   "name_keywords": [
+    "panadol",
+    "paracetamol",
+    "medic",
+    "pill",
+    "tablet",
+    "painkiller"
+   ],
+   "brand": "Panadol",
+   "model": "500 mg",
+   "serial": "05 79 65"
+  },
+  "osram_lamp_box.jpg": {
+   "set": "brand",
+   "category": "Lighting",
+   "also_accept": [],
+   "name_keywords": [
+    "box",
+    "packag",
+    "bulb",
+    "lamp",
+    "light"
+   ],
+   "brand": "OSRAM",
+   "model": null,
+   "serial": null
+  }
+ }
+}

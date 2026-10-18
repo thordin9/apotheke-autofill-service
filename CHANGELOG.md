@@ -5,6 +5,20 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ## Unreleased
 
+### Documentation
+
+- **Image-size sweep and brand/serial benchmark (2026-10-18).** `docs/benchmarks.md`
+  gains a section with hardware/software versions, the exact prompt, schema and
+  request settings, and results for `qwen2.5vl-jetson:3b` at `max_pixels`
+  501760/401408/301056/200704 and at 1024/672/560/448 px uploads on 19 photos
+  (10 new ones with brand names, model and serial numbers, with ground truth).
+  Recommendation: `IMAGE_SIZES=448,560*,1024` (560 px: median 8.3 s instead of
+  13.9 s, same accuracy), `ALLOWED_MODELS` unset. `qwen3-vl:2b` does not fit in
+  memory with Ollama 0.15.6 and must not be allowlisted. New scripts:
+  `bench/sweep.sh`, `bench/sweep.py`, `bench/score.py`, `bench/make_sets.py`;
+  Modelfiles for the extra tags in `bench/qwen2.5vl-jetson/`; raw results in
+  `bench/results/sweep-2026-10-18/`.
+
 ### Fixed
 
 - **Cold-start `Retry-After` per model (Ollama).** A 503 "model '…' is
