@@ -1,0 +1,14 @@
+# /etc/systemd/system/dl-cap.service
+[Unit]
+Description=Cap all incoming traffic on eth0 at 30 Mbit/s (no exemptions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/dl-cap.sh
+ExecStop=/usr/local/sbin/dl-cap.sh stop
+
+[Install]
+WantedBy=multi-user.target

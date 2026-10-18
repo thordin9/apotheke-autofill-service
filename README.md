@@ -7,6 +7,8 @@ Contract: [docs/api-v1.md](docs/api-v1.md) · [openapi.yaml](openapi.yaml)
 
 Hardware CI on the Jetson (run by hand, not a required check): [docs/hardware-ci.md](docs/hardware-ci.md)
 
+Deploying on the Jetson (production setup, scripts in `deploy/jetson/`): [docs/deploy-jetson.md](docs/deploy-jetson.md)
+
 ## Quickstart
 
 ```bash
@@ -91,6 +93,9 @@ Checked against the Ollama library on 2026-10-14:
 | `qwen2.5vl:3b`, `qwen2.5vl:7b`, `qwen2.5vl:32b`, `qwen2.5vl:72b` | Yes. `qwen2.5vl:3b` is the smallest official Qwen vision tag. It is not Qwen2-VL-2B. |
 
 ## Jetson (JetPack 5 / L4T r35)
+
+The full production deployment (Ollama drop-in, model, `service.env`, container, verify, redeploy, rollback,
+bandwidth cap, runner, reboot) is in [docs/deploy-jetson.md](docs/deploy-jetson.md).
 
 `Dockerfile.jetson` is based on `dustynv/ollama:r35.4.1` (dusty-nv's Jetson
 container, not the stock `ollama/ollama` image) and sets `BACKEND=ollama`,

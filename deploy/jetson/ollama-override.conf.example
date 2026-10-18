@@ -1,0 +1,7 @@
+# /etc/systemd/system/ollama.service.d/override.conf as on the production board (board-wide settings, not needed by the service).
+# OLLAMA_HOST=0.0.0.0 makes the board's Ollama reachable from the LAN without authentication. The autofill
+# container only needs 127.0.0.1:11434 (host network); drop that line if nothing else on the LAN uses Ollama.
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0"
+Environment="OLLAMA_ORIGINS=*"
+Environment="OLLAMA_CONTEXT_LENGTH=8192"
