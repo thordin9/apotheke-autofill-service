@@ -126,6 +126,10 @@ Old clients ignore it.
   `Retry-After` is within its timeout (Apotheke) still retries, and a capped
   retry that lands mid-load is no worse than none. E.g. a 40 s measured load
   at 45 s gives 50, not 52. Echo: the remaining simulated load time.
+  A client whose own timeout is set below `BACKEND_TIMEOUT_S` + 5 s (e.g.
+  Apotheke at 30 s against a 45 s backend) may get a `Retry-After` above its
+  timeout and then won't retry; keep the client timeout at
+  `BACKEND_TIMEOUT_S` + 5 s or more.
 - **A load requested while another background load runs is queued**, not
   dropped: the backend loads one model at a time (it still holds one model)
   and loads the requested one right after the current load, so a client told
