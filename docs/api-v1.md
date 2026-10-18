@@ -54,7 +54,7 @@ its typical generation time:
 | `ready` | no | `false` while the backend is still loading its model (e.g. Ollama warm-up); `/v1/suggest` then answers `503` with `Retry-After`. Also `false` when Ollama has since unloaded the model: the service then reloads it in the background, and `/v1/suggest` still works but its first answer is slower. Absent or `true` means ready. |
 | `avg_latency_ms` | no | *Added in v1.1, optional; clients MUST tolerate its absence.* Non-negative integer: the **default model's** typical time in milliseconds for one `/v1/suggest` generation on the loaded model, model load time excluded. Ollama reports a moving average of recent requests (70% previous, 30% latest), so the field is **absent until the first suggestion has finished** after a service start. Echo reports `ECHO_DELAY_MS` when it is above 0. Meant for estimated progress bars: fill by elapsed time against this value, hold below 100% until the answer arrives, and fall back to an indeterminate spinner when absent. It is not a deadline: cold starts (model load), queueing and the plain-text retry can take longer. |
 | `models` | no | *Added in v1.2, optional; absent unless the server sets `ALLOWED_MODELS`.* The models a client may pick with `context.model`: the default model first, then the other allowlisted models the backend has installed (Ollama: `GET /api/tags`, cached 30 s; if that fails before it ever answered, only the default is listed). Each entry: `id` (string, required; the value to send as `context.model`), `default` (boolean, required; exactly one entry is `true`), `loaded` (boolean, optional; whether the model is in memory now, absent when unknown), `avg_latency_ms` (integer, optional; like the top-level field, for this model, absent until measured). |
-| `image_sizes` | no | *Added in v1.2, optional; absent unless the server sets `IMAGE_SIZES`.* Long-edge presets in pixels the client may resize photos to before upload, ascending: `[{"long_edge":448,"recommended":false},…]`, exactly one `recommended: true`. The service only advertises them; it does not resize, and there is no per-request size or `max_pixels` setting. |
+| `image_sizes` | no | *Added in v1.2, optional; absent unless the server sets `IMAGE_SIZES`.* Long-edge presets in pixels the client may resize photos to before upload, ascending: `[{"long_edge":448,"recommended":false},…]`, exactly one `recommended: true`. Each `IMAGE_SIZES` entry must be ASCII digits with at most one trailing `*` (`^\d+\*?$`); anything else (`672**`, `+448`, `4_48`) fails at startup. The service only advertises them; it does not resize, and there is no per-request size or `max_pixels` setting. |
 
 A service with `ALLOWED_MODELS=moondream` and `IMAGE_SIZES=448,672*,1024`
 (v1.2) also lists the models and image sizes a client may choose:
@@ -116,14 +116,39 @@ Old clients ignore it.
   fast 503 at 25 s and a wait at 45 s.
 - **`Retry-After` on a cold start** is that model's expected remaining load
   time in whole seconds, at least 1. Ollama: its load estimate (the last
-  measured load of **that** model, at least 15 s) minus how long its
-  background load has already been running, so a retry during the load gets
-  the time left (e.g. 15, then 10 when retried 5 s later; 23 for a model that
-  last took 22.4 s to load). Echo: the remaining simulated load time.
+  measured load of **that** model, at least 15 s) plus a margin of max(2 s,
+  30%), so a load up to 30% slower than the last one is still covered, minus
+  how long its background load has already been running, so a retry during
+  the load gets the time left (e.g. 20, then 15 when retried 5 s later; 30 for
+  a model that last took 22.4 s to load). It is **capped at
+  `BACKEND_TIMEOUT_S` + 5 s**, the recommended client timeout (50 at 45 s),
+  including the queued-switch value below: a client that only retries when
+  `Retry-After` is within its timeout (Apotheke) still retries, and a capped
+  retry that lands mid-load is no worse than none. E.g. a 40 s measured load
+  at 45 s gives 50, not 52. Echo: the remaining simulated load time.
+  A client whose own timeout is set below `BACKEND_TIMEOUT_S` + 5 s (e.g.
+  Apotheke at 30 s against a 45 s backend) may get a `Retry-After` above its
+  timeout and then won't retry; keep the client timeout at
+  `BACKEND_TIMEOUT_S` + 5 s or more.
+- **A load requested while another background load runs is queued**, not
+  dropped: the backend loads one model at a time (it still holds one model)
+  and loads the requested one right after the current load, so a client told
+  "model '…' is loading" finds it loading or loaded when it retries. The queue
+  has one slot: a later request for a third model replaces the queued one.
+  Its `Retry-After` adds what is left of the running load (with its margin)
+  to its own estimate and margin.
+- Echo (with `ALLOWED_MODELS` set) answers one request at a time like Ollama,
+  so concurrent requests for different models follow the queued-switch rule
+  above (one may wait, more get `503` "queue full").
 - While a model switch or background load is in flight (including a request
   waiting for its model to load), `GET /v1/info` reports `ready: false` if no
   allowlisted model is in memory yet but does **not** reload the default
-  model, which would evict the model being loaded.
+  model, which would evict the model being loaded. The check runs before and
+  after the backend reads `/api/ps`, so a load or request that starts or ends
+  during that read also skips the reload. This guard applies **without
+  `ALLOWED_MODELS` too**: the background reload of an unloaded default waits
+  while a request is in flight (that request's chat call loads the model
+  anyway) and happens on a later `/v1/info` once nothing is in flight.
 - A request for another model than the one **in flight** must also wait for
   the requests ahead of it: it is refused at once (`503`, "a model switch would
   time out") when their slowest recent times plus the new model's load and
