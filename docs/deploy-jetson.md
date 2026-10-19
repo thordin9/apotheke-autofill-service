@@ -84,19 +84,26 @@ takes precedence, so the service's model runs at 4096 regardless.
 
 **Boot race: Ollama before CUDA.** After a reboot on 2026-10-19, `ollama.service` started while
 `/dev/nvhost-ctrl-gpu` and `/dev/nvmap` already existed, but GPU discovery still logged only `library=cpu`
-(`offloaded 0/37 layers to GPU`) until a manual `systemctl restart ollama`, after which it logged
-`library=CUDA compute=7.2 name=CUDA0 description=Xavier`. Two pieces fix that:
+(`offloaded 0/37 layers to GPU`) 0.44 s after `discovering available GPUs`, until a manual
+`systemctl restart ollama`, after which it logged `library=CUDA compute=7.2 name=CUDA0 description=Xavier`.
+The race is CUDA initialisation, not the device nodes. Two pieces fix that:
 
 1. [`wait-cuda.sh`](../deploy/jetson/wait-cuda.sh) + drop-in
-   [`ollama-wait-cuda.conf`](../deploy/jetson/ollama-wait-cuda.conf) (`ExecStartPre`): waits up to `CUDA_WAIT_S`
-   seconds (default 60) for the device nodes **and** an nvgpu/gv11b sysfs path. On timeout it logs and exits 0 so
-   the unit still starts (never fails forever).
+   [`ollama-wait-cuda.conf`](../deploy/jetson/ollama-wait-cuda.conf) (`ExecStartPre`, `After=nv.service
+   nvpmodel.service`, `TimeoutStartSec=180`): waits up to `CUDA_WAIT_S` seconds (default 60, capped at 150) for
+   the device nodes **and** an nvgpu/gv11b sysfs path, then polls a bounded `cuInit` probe as the `ollama` user
+   (`python3` + `libcuda.so.1`, fresh process per try, 10 s per probe). Every check is logged with a wall-clock
+   timestamp and the elapsed seconds (`device/sysfs: present|missing`, `cuInit probe #N: …`), so the journal
+   shows whether `cuInit` ever failed early on that boot. On timeout it logs and exits 0 so the unit still
+   starts (never fails forever). `CUDA_WAIT_S=0` skips the wait entirely (including the cuInit probe).
 2. [`ollama-gpu-check.sh`](../deploy/jetson/ollama-gpu-check.sh) +
-   [`ollama-gpu-check.service`](../deploy/jetson/ollama-gpu-check.service): after Ollama is up, reads this start's
-   journal for an `inference compute` line with `library=CUDA`. If only `library=cpu` was found, it restarts
-   `ollama.service` **at most once per boot** (marker in `/run/ollama-gpu-check.restarted`). It never loops when
-   there is truly no GPU, and it never loads, pulls or allowlists models. `ollama-gpu-check.sh check` exits 0 for
-   GPU and 1 for CPU-only.
+   [`ollama-gpu-check.service`](../deploy/jetson/ollama-gpu-check.service) (`Requisite=`/`After=ollama.service`,
+   `TimeoutStartSec=600`): after Ollama is up, reads this start's journal (by `_SYSTEMD_INVOCATION_ID`) for any
+   `inference compute` line with `library=cuda` (any case). If only `library=cpu` was found, it waits
+   `OLLAMA_GPU_CHECK_RESTART_DELAY_S` (default 10) then restarts `ollama.service` **at most once per boot**
+   (marker in `/run/ollama-gpu-check.restarted`). It never loops when there is truly no GPU, never starts a
+   disabled Ollama, and never loads, pulls or allowlists models. `ollama-gpu-check.sh check` exits 0 for GPU and
+   1 for CPU-only; it needs root or the `systemd-journal` group to read the journal.
 
 Install with the drop-in above:
 
@@ -107,9 +114,33 @@ install -D -m 755 $REPO/deploy/jetson/ollama-gpu-check.sh /usr/local/sbin/ollama
 install -D -m 644 $REPO/deploy/jetson/ollama-gpu-check.service /etc/systemd/system/ollama-gpu-check.service
 systemctl daemon-reload
 systemctl enable ollama-gpu-check.service
-systemctl restart ollama          # picks up ExecStartPre; gpu-check runs after
-/usr/local/sbin/ollama-gpu-check.sh check   # exit 0 = library=CUDA
+systemctl restart ollama          # picks up ExecStartPre (gpu-check itself only runs at boot)
+systemctl start ollama-gpu-check  # optional: run the check now; restarts at most once per boot
+sudo /usr/local/sbin/ollama-gpu-check.sh check   # exit 0 = library=CUDA (needs journal access)
 ```
+
+**Reproduce the old race (QA).** To skip the wait on one boot — so the reboot checklist can still exercise the
+once-per-boot restart path — drop the NVIDIA ordering and set `CUDA_WAIT_S=0` in a temporary drop-in, then remove
+it again:
+
+```bash
+# Enable the override (as root):
+mkdir -p /etc/systemd/system/ollama.service.d
+cat > /etc/systemd/system/ollama.service.d/99-qa-skip-wait-cuda.conf <<'EOF'
+[Unit]
+# Clear the After= from ollama-wait-cuda.conf so Ollama is not ordered after nv*/nvpmodel.
+After=
+[Service]
+Environment=CUDA_WAIT_S=0
+EOF
+systemctl daemon-reload
+# …reboot, run the checklist, then remove the override:
+rm /etc/systemd/system/ollama.service.d/99-qa-skip-wait-cuda.conf
+systemctl daemon-reload
+```
+
+`wait-cuda.sh` then logs `CUDA_WAIT_S=0; skipping the wait` and exits at once; `ollama-gpu-check` is still the
+safety net. Leave the override in place only for that one reboot test.
 
 ## Build the image
 
@@ -344,12 +375,14 @@ sometimes takes over `eth0` a moment *after* that (journal: `device (eth0): stat
 goes with it, and the cap is silently gone while `dl-cap.service` still shows `active (exited)`; only a manual
 `systemctl restart dl-cap` brought it back. The NetworkManager dispatcher hook
 [`nm-dispatcher-90-dl-cap`](../deploy/jetson/nm-dispatcher-90-dl-cap) fixes that: when `eth0` (the `DEV` in
-`dl-cap.sh`) gets the `up`, `connectivity-change` or `dhcp4-change` event, it runs
-`systemctl --no-block restart dl-cap.service`. `--no-block` queues the restart and returns at once, so the hook
-never holds up NetworkManager's dispatcher while `network-online.target` is still pending. Other interfaces and
-other events are ignored, and the hook always exits 0. It does nothing while `dl-cap.service` is disabled, so
+`dl-cap.sh`) comes `up`, it runs `systemctl --no-block restart dl-cap.service`. On `dhcp4-change` for `eth0`, and
+on `connectivity-change` (which NetworkManager sends with an empty interface), it runs `dl-cap.sh check` first and
+only restarts if the cap is missing — a lease renewal must not leave a short uncapped gap or burn the unit's start
+limit (10 per 5 min). `--no-block` queues the restart and returns at once, so the hook never holds up
+NetworkManager's dispatcher while `network-online.target` is still pending. Other interfaces and other events are
+ignored, and the hook always exits 0. It does nothing while `dl-cap.service` is disabled, so
 `systemctl disable --now dl-cap` keeps the cap off. A plain `systemctl stop dl-cap` lasts only until the next
-`eth0` event.
+`eth0` `up`.
 
 Install (as root). NetworkManager only runs dispatcher scripts that are owned by root and not writable by group or
 others:
@@ -438,7 +471,9 @@ ollama ps                              # qwen2.5vl-jetson:3b at 100% GPU, keep_a
 /usr/local/sbin/ollama-gpu-check.sh check   # exit 0 (library=CUDA in this start's journal)
 /usr/local/sbin/dl-cap.sh check        # "cap is in place on eth0"
 tc filter show dev eth0 parent ffff:   # two police filters (protocol ip and ipv6), rate 30Mbit burst 384Kb
-curl -s localhost:8080/healthz         # ok / ready
+curl -s localhost:8080/healthz         # {"status":"ok"} (liveness only)
+curl -s -H @/opt/autofill/auth.hdr localhost:8080/v1/info   # "ready":true, models: only qwen2.5vl-jetson:3b
+journalctl -b -u ollama-gpu-check -o cat   # which path: "GPU already in use" or "restarting ... once" + "after restart, library=CUDA"
 ```
 
 After a reboot, the quick check under [Verify](#verify) is also enough once the checklist above has passed once

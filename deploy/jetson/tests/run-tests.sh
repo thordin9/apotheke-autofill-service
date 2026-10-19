@@ -181,25 +181,47 @@ result "dl-cap: unknown argument -> usage, exit 2, no tc call" "$ok" "exit=$rc"
 echo "== nm-dispatcher-90-dl-cap"
 NMD=$JET/nm-dispatcher-90-dl-cap
 # nmd EXP_RESTART IFACE ACTION [ENV...]: EXP_RESTART=1 if dl-cap.service must be restarted. Always exits 0.
+# Runs a copy of the hook whose DL_CAP points at the repo's dl-cap.sh (or NMD_DLCAP), with the fake tc and systemctl.
+# NMD_CAP=1: the cap is already in place (fake tc state has the ingress qdisc and both filters).
 nmd() {
   local er=$1 i=$2 a=$3 rc n; shift 3
-  newds; env PATH="$FAKE:$PATH" "$@" sh "$NMD" "$i" "$a" > "$DS/out" 2>&1; rc=$?
+  newds
+  if [ -n "${NMD_CAP:-}" ]; then touch "$DS/tc.qdisc"; printf 'ip\nipv6\n' > "$DS/tc.filters"; fi
+  sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=${NMD_DLCAP:-$DC}|" "$NMD" > "$DS/hook"
+  env PATH="$FAKE:$PATH" "$@" sh "$DS/hook" "$i" "$a" > "$DS/out" 2>&1; rc=$?
   n=$(grep -c "restart dl-cap.service" "$DS/systemctl.log" 2>/dev/null); n=${n:-0}
   [ "$rc" = 0 ] && [ "$n" = "$er" ] && ok=1 || ok=0
-  result "nm-dispatcher: '$i' '$a'${1:+ $*} -> $([ "$er" = 1 ] && echo restart || echo nothing)" "$ok" "exit=$rc restarts=$n"
+  result "nm-dispatcher: '$i' '$a'${NMD_CAP:+ cap ok}${NMD_DLCAP:+ no dl-cap.sh}${1:+ $*} -> $([ "$er" = 1 ] && echo restart || echo nothing)" "$ok" "exit=$rc restarts=$n"
 }
+newds; sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$NMD" > "$DS/hook"
+grep -qx "DL_CAP=$DC" "$DS/hook" && ok=1 || ok=0; result "nm-dispatcher: harness can point DL_CAP at the repo copy" "$ok" ""
+# Cap missing: every handled event restarts.
 for a in up connectivity-change dhcp4-change; do nmd 1 eth0 "$a"; done
+nmd 1 "" connectivity-change          # NetworkManager sends connectivity-change with an empty interface (L5)
 for a in down pre-up pre-down dhcp6-change hostname reapply vpn-up ""; do nmd 0 eth0 "$a"; done
 for i in wlan0 eth1 lo eth0.5 docker0 ""; do nmd 0 "$i" up; done
+for i in wlan0 docker0; do nmd 0 "$i" connectivity-change; nmd 0 "$i" dhcp4-change; done
+# Cap in place: `up` still restarts (the device was just reset); renewals and connectivity changes don't (L5).
+NMD_CAP=1 nmd 1 eth0 up
+NMD_CAP=1 nmd 0 eth0 dhcp4-change
+NMD_CAP=1 nmd 0 "" connectivity-change
+NMD_CAP=1 nmd 0 eth0 connectivity-change
+NMD_CAP=1 nmd 0 eth0 dhcp4-change; grep -q "filter show dev eth0 parent ffff:" "$DS/tc.log" && ! grep -qE "qdisc|filter add" "$DS/tc.log" && ok=1 || ok=0
+result "  ...dhcp4-change ran 'dl-cap.sh check' (read-only tc filter show) first" "$ok" ""
+# dl-cap.sh not installed: check impossible, so restart (the safe side).
+NMD_DLCAP=/nonexistent/dl-cap.sh NMD_CAP=1 nmd 1 eth0 dhcp4-change
+# Disabled unit: nothing, whatever the event or cap state.
 nmd 0 eth0 up UNIT_DISABLED=1
+nmd 0 eth0 dhcp4-change UNIT_DISABLED=1
+nmd 0 "" connectivity-change UNIT_DISABLED=1
 nmd 1 eth0 up SYSTEMCTL_FAIL=1
+nmd 1 eth0 dhcp4-change SYSTEMCTL_FAIL=1
 newds; env PATH="$FAKE:$PATH" sh "$NMD" eth0 up > "$DS/out" 2>&1
 grep -qx "systemctl --no-block restart dl-cap.service" "$DS/systemctl.log" && ok=1 || ok=0
 result "  ...restart is queued (--no-block), not waited for" "$ok" ""
 # shellcheck disable=SC2016  # a literal ${DEV:-...} in the sed pattern
 d1=$(sed -n 's/^DEV=\${DEV:-\([^}]*\)}.*/\1/p' "$DC"); d2=$(sed -n 's/^DEV=\([^ ]*\).*/\1/p' "$NMD")
 [ -n "$d1" ] && [ "$d1" = "$d2" ] && ok=1 || ok=0; result "nm-dispatcher: interface matches DEV in dl-cap.sh" "$ok" "dl-cap=$d1 hook=$d2"
-
 
 echo "== dl-cap.sh: real board tc filter show fixture"
 # Verbatim iproute2-ss200127 output from the board (police on a separate line from protocol ip/ipv6).
@@ -231,6 +253,7 @@ newds; dc USE_FIXTURE=1 sh "$DC" check > "$DS/out" 2>&1; rc=$?
 
 echo "== wait-cuda.sh"
 WC=$JET/wait-cuda.sh
+FPY=$FAKE/fake-python3
 # Helper: build a CUDA_TEST_ROOT with device nodes; optional sysfs readiness path.
 mk_gpu() { # root [sysfs=nvgpu|gpu.0|gv11b|none]
   local r=$1 kind=${2:-nvgpu}
@@ -244,50 +267,212 @@ mk_gpu() { # root [sysfs=nvgpu|gpu.0|gv11b|none]
     *) echo "bad kind $kind" >&2; return 1 ;;
   esac
 }
+# wc_run [ENV...]: run wait-cuda.sh with the fake python3 (cuInit OK unless FAKE_CUINIT says otherwise).
+wc_run() { env CUDA_TEST_ROOT="$DS/root" CUDA_PROBE_PYTHON="$FPY" "$@" sh "$WC" > "$DS/out" 2>&1; }
+probes() { cat "$DS/probes" 2>/dev/null || echo 0; }
 newds; mk_gpu "$DS/root" nvgpu
-env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=2 sh "$WC" > "$DS/out" 2>&1; rc=$?
-[ "$rc" = 0 ] && grep -q "GPU ready" "$DS/out" && ok=1 || ok=0
-result "wait-cuda: already ready (Ollama after CUDA) -> immediate" "$ok" "exit=$rc"
+wc_run CUDA_WAIT_S=2; rc=$?
+[ "$rc" = 0 ] && grep -qE 'device/sysfs: present' "$DS/out" && grep -qE 'cuInit probe #1: OK' "$DS/out" \
+  && grep -qE '\+[0-9]+s\)' "$DS/out" && [ "$(probes)" = 1 ] && ok=1 || ok=0
+result "wait-cuda: already ready (Ollama after CUDA) -> one cuInit probe, timestamped" "$ok" "exit=$rc probes=$(probes)"
 # Device nodes alone are not enough (the board race).
 newds; mk_gpu "$DS/root" none
-SECONDS=0; env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=2 sh "$WC" > "$DS/out" 2>&1; rc=$?
-[ "$rc" = 0 ] && grep -q "timed out" "$DS/out" && [ "$SECONDS" -ge 2 ] && ok=1 || ok=0
+SECONDS=0; wc_run CUDA_WAIT_S=2; rc=$?
+[ "$rc" = 0 ] && grep -q "timed out" "$DS/out" && grep -q "device/sysfs: missing" "$DS/out" \
+  && [ "$SECONDS" -ge 2 ] && [ "$(probes)" = 0 ] && ok=1 || ok=0
 result "wait-cuda: device nodes only (no sysfs) -> timeout, exit 0" "$ok" "exit=$rc ${SECONDS}s"
 # Ollama before CUDA: nodes appear after ~1 s.
 newds; mkdir -p "$DS/root"
 ( sleep 1; mk_gpu "$DS/root" gv11b ) &
-SECONDS=0; env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=5 sh "$WC" > "$DS/out" 2>&1; rc=$?
-[ "$rc" = 0 ] && grep -q "GPU ready after" "$DS/out" && [ "$SECONDS" -ge 1 ] && [ "$SECONDS" -le 5 ] && ok=1 || ok=0
+SECONDS=0; wc_run CUDA_WAIT_S=5; rc=$?
+[ "$rc" = 0 ] && grep -qE 'device/sysfs: present' "$DS/out" && grep -qE 'cuInit probe #1: OK' "$DS/out" \
+  && [ "$SECONDS" -ge 1 ] && [ "$SECONDS" -le 5 ] && ok=1 || ok=0
 result "wait-cuda: ready appears after 1s (Ollama before CUDA)" "$ok" "exit=$rc ${SECONDS}s"
 # Timeout validation: bad values fall back to 60 but we use a ready root so it returns immediately;
-# the warning must mention the bad value.
+# the warning must mention the bad value. (0 is valid — skip — and is tested next.)
 newds; mk_gpu "$DS/root" nvgpu
-for w in abc 0 -5 010 1.5 1000000; do
-  env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S="$w" sh "$WC" > "$DS/out" 2>&1; rc=$?
-  [ "$rc" = 0 ] && grep -q "CUDA_WAIT_S must be a positive whole number" "$DS/out" && grep -q "GPU ready" "$DS/out" && ok=1 || ok=0
+for w in abc -5 010 1.5 1000000; do
+  wc_run CUDA_WAIT_S="$w"; rc=$?
+  [ "$rc" = 0 ] && grep -q "CUDA_WAIT_S must be a whole number of seconds from 0 to 150" "$DS/out" && grep -qE 'cuInit probe #1: OK|GPU ready' "$DS/out" && ok=1 || ok=0
   result "wait-cuda: CUDA_WAIT_S='$w' -> warn, use 60, still exit 0" "$ok" "exit=$rc"
 done
+# CUDA_WAIT_S=0: skip the wait entirely (including cuInit). Used by QA to reproduce the old race.
+newds; mk_gpu "$DS/root" none   # no device nodes either — still must exit at once
+SECONDS=0; wc_run CUDA_WAIT_S=0; rc=$?
+[ "$rc" = 0 ] && [ "$SECONDS" -le 1 ] && grep -q "CUDA_WAIT_S=0; skipping the wait" "$DS/out" \
+  && ! grep -qE 'device/sysfs|cuInit probe' "$DS/out" && [ "$(probes)" = 0 ] && ok=1 || ok=0
+result "wait-cuda: CUDA_WAIT_S=0 -> skip entirely (no device/cuInit probes), exit 0" "$ok" "exit=$rc ${SECONDS}s probes=$(probes)"
+newds; mk_gpu "$DS/root" nvgpu
+wc_run CUDA_WAIT_S=0; rc=$?
+[ "$rc" = 0 ] && grep -q "CUDA_WAIT_S=0; skipping the wait" "$DS/out" && [ "$(probes)" = 0 ] && ok=1 || ok=0
+result "wait-cuda: CUDA_WAIT_S=0 with nodes present -> still skips cuInit" "$ok" "exit=$rc probes=$(probes)"
+# L1: a wait longer than the drop-in's TimeoutStartSec allows is clamped to 150.
+for w in 151 999999; do
+  wc_run CUDA_WAIT_S="$w"; rc=$?
+  [ "$rc" = 0 ] && grep -q "CUDA_WAIT_S=$w is above 150" "$DS/out" && grep -q "using 150" "$DS/out" && grep -qE 'cuInit probe #1: OK' "$DS/out" && ok=1 || ok=0
+  result "wait-cuda: CUDA_WAIT_S=$w -> clamped to 150 (L1)" "$ok" "exit=$rc"
+done
+wc_run CUDA_WAIT_S=150; rc=$?
+[ "$rc" = 0 ] && ! grep -q "above 150" "$DS/out" && ok=1 || ok=0; result "wait-cuda: CUDA_WAIT_S=150 -> accepted as is" "$ok" "exit=$rc"
 # Real timeout path with short wait (nodes never appear).
 newds; mkdir -p "$DS/root"
-SECONDS=0; env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=2 sh "$WC" > "$DS/out" 2>&1; rc=$?
+SECONDS=0; wc_run CUDA_WAIT_S=2; rc=$?
 [ "$rc" = 0 ] && grep -q "timed out after 2s" "$DS/out" && ok=1 || ok=0
 result "wait-cuda: nothing appears, CUDA_WAIT_S=2 -> timeout exit 0" "$ok" "exit=$rc ${SECONDS}s"
+echo "== wait-cuda.sh: cuInit gate (M2)"
+# Nodes and sysfs present (as on the bad boot), cuInit fails twice, then succeeds: a fresh probe process each time.
+newds; mk_gpu "$DS/root" gv11b
+SECONDS=0; wc_run CUDA_WAIT_S=10 FAKE_CUINIT_FAIL_N=2; rc=$?
+[ "$rc" = 0 ] && [ "$(probes)" = 3 ] && grep -q "cuInit probe #3: OK" "$DS/out" \
+  && [ "$(grep -c 'cuInit probe #' "$DS/out")" = 3 ] \
+  && grep -q "cuInit probe #1: not ready yet" "$DS/out" && grep -q "cuInit=100" "$DS/out" \
+  && grep -q "cuInit=0 cuDeviceGetCount=0 devices=1" "$DS/out" \
+  && grep -qE '\+[0-9]+s\)' "$DS/out" && [ "$SECONDS" -ge 2 ] && [ "$SECONDS" -le 5 ] && ok=1 || ok=0
+result "wait-cuda: cuInit fails twice then OK -> 3 timestamped probes" "$ok" "exit=$rc probes=$(probes) ${SECONDS}s"
+# Every probe is timestamped and numbered; device/sysfs status is logged too (QA: "did cuInit ever fail early?").
+newds; mk_gpu "$DS/root" nvgpu
+wc_run CUDA_WAIT_S=5 FAKE_CUINIT_FAIL_N=1; rc=$?
+n_dev=$(grep -cE 'device/sysfs: (present|missing)' "$DS/out")
+n_probe=$(grep -cE 'cuInit probe #[0-9]+:' "$DS/out")
+ts_ok=$(awk '/wait-cuda: /{if ($0 ~ /[0-9]{4}-[0-9]{2}-[0-9]{2}T/ && $0 ~ /\+[0-9]+s\)/) c++} END{print c+0}' "$DS/out")
+[ "$rc" = 0 ] && [ "$n_dev" -ge 1 ] && [ "$n_probe" = 2 ] && [ "$ts_ok" -ge 3 ] \
+  && grep -q "cuInit probe #1: not ready yet" "$DS/out" && grep -q "cuInit probe #2: OK" "$DS/out" && ok=1 || ok=0
+result "wait-cuda: every probe and device check is timestamped (+Ns)" "$ok" "dev=$n_dev probes=$n_probe ts=$ts_ok"
+# cuInit 0 but no device counts as not ready.
+newds; mk_gpu "$DS/root" nvgpu
+SECONDS=0; wc_run CUDA_WAIT_S=2 FAKE_CUINIT=nodev; rc=$?
+[ "$rc" = 0 ] && grep -q "timed out after 2s" "$DS/out" && grep -q "devices=0" "$DS/out" && ok=1 || ok=0
+result "wait-cuda: cuInit 0 but 0 devices -> not ready, timeout exit 0" "$ok" "exit=$rc probes=$(probes) ${SECONDS}s"
+# cuInit never succeeds -> exit 0 at the deadline (never fails the unit).
+newds; mk_gpu "$DS/root" nvgpu
+SECONDS=0; wc_run CUDA_WAIT_S=3 FAKE_CUINIT=fail; rc=$?
+[ "$rc" = 0 ] && grep -q "timed out after 3s" "$DS/out" && [ "$SECONDS" -ge 3 ] && [ "$SECONDS" -le 5 ] \
+  && [ "$(probes)" -ge 3 ] && ok=1 || ok=0
+result "wait-cuda: cuInit never OK, CUDA_WAIT_S=3 -> timeout exit 0" "$ok" "exit=$rc probes=$(probes) ${SECONDS}s"
+# A hanging probe is killed by its timeout, capped at the time left, so the total stays near CUDA_WAIT_S.
+newds; mk_gpu "$DS/root" nvgpu
+SECONDS=0; wc_run CUDA_WAIT_S=3 FAKE_CUINIT=hang; rc=$?
+[ "$rc" = 0 ] && grep -q "cuInit probe #1: timed out" "$DS/out" && grep -q "timed out after 3s" "$DS/out" \
+  && [ "$SECONDS" -le 7 ] && ok=1 || ok=0
+result "wait-cuda: probe hangs -> killed by timeout, exit 0 within the wait" "$ok" "exit=$rc ${SECONDS}s"
+# Default per-probe timeout is 10 s.
+# shellcheck disable=SC2016  # literal $ for the stub / pattern
+grep -qx 'PROBE_TIMEOUT_S=10' "$WC" && grep -q 'timeout -k 2 "\$1"' "$WC" && ok=1 || ok=0
+result "wait-cuda: per-probe timeout is 10 s (timeout -k 2)" "$ok" ""
+# I1: CUDA comes up exactly at the deadline -> the last probe at the deadline still sees it.
+newds; mk_gpu "$DS/root" nvgpu
+wc_run CUDA_WAIT_S=2 FAKE_CUINIT_OK_AFTER=$(( $(date +%s) + 2 )); rc=$?
+[ "$rc" = 0 ] && grep -qE 'cuInit probe #[0-9]+: OK' "$DS/out" && ! grep -q "timed out" "$DS/out" && ok=1 || ok=0
+result "wait-cuda: cuInit OK right at the deadline -> ready, not timed out (I1)" "$ok" "exit=$rc probes=$(probes)"
+# python3 missing -> log and fall back to the device checks.
+newds; mk_gpu "$DS/root" nvgpu
+wc_run CUDA_WAIT_S=2 CUDA_PROBE_PYTHON=/nonexistent/python3; rc=$?
+[ "$rc" = 0 ] && grep -q "/nonexistent/python3 not found; skipping the cuInit check" "$DS/out" && ok=1 || ok=0
+result "wait-cuda: python3 missing -> device checks only, exit 0" "$ok" "exit=$rc"
+# libcuda missing (probe exit 3) -> log and fall back, one probe only.
+newds; mk_gpu "$DS/root" nvgpu
+wc_run CUDA_WAIT_S=5 FAKE_CUINIT=nolib; rc=$?
+[ "$rc" = 0 ] && grep -q "cuInit probe #1: unavailable (libcuda.so.1 not loadable)" "$DS/out" && [ "$(probes)" = 1 ] && ok=1 || ok=0
+result "wait-cuda: libcuda missing -> device checks only, exit 0" "$ok" "exit=$rc probes=$(probes)"
+# The real probe with the box's python3: no libcuda here, so it must report "unavailable" (exit 3), not crash.
+if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import ctypes; ctypes.CDLL("libcuda.so.1")' 2>/dev/null; then
+  newds; mk_gpu "$DS/root" nvgpu
+  env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=5 sh "$WC" > "$DS/out" 2>&1; rc=$?
+  [ "$rc" = 0 ] && grep -q "cuInit probe #1: unavailable (libcuda.so.1 not loadable)" "$DS/out" && ok=1 || ok=0
+  result "wait-cuda: real python3 probe without libcuda -> unavailable, exit 0" "$ok" "exit=$rc"
+fi
+# The real probe code with the real python3 against a stub libcuda.so.1 (built here; needs a C compiler):
+# cuInit 0 + 1 device -> ready; cuInit 100 -> not ready; cuInit 0 + 0 devices -> not ready.
+if command -v python3 >/dev/null 2>&1 && command -v cc >/dev/null 2>&1; then
+  newds; mk_gpu "$DS/root" nvgpu; mkdir -p "$DS/lib"
+  printf '#include <stdlib.h>\nint cuInit(unsigned f){const char*e=getenv("STUB_INIT");(void)f;return e?atoi(e):0;}\nint cuDeviceGetCount(int*n){const char*e=getenv("STUB_N");*n=e?atoi(e):1;return 0;}\n' > "$DS/lib/c.c"
+  if cc -shared -fPIC -o "$DS/lib/libcuda.so.1" "$DS/lib/c.c" 2>"$DS/out"; then
+    for v in "0 1 0 cuInit=0 cuDeviceGetCount=0 devices=1" "100 1 1 cuInit=100" "0 0 1 devices=0"; do
+      read -r si sn to want <<< "$v"
+      env LD_LIBRARY_PATH="$DS/lib" STUB_INIT="$si" STUB_N="$sn" CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=1 sh "$WC" > "$DS/out" 2>&1; rc=$?
+      if [ "$to" = 0 ]; then grep -qE 'cuInit probe #1: OK' "$DS/out" && grep -q "$want" "$DS/out" && ok=1 || ok=0
+      else grep -q "timed out after 1s" "$DS/out" && grep -q "$want" "$DS/out" && ok=1 || ok=0; fi
+      [ "$rc" = 0 ] || ok=0
+      result "wait-cuda: real probe, stub libcuda cuInit=$si devices=$sn -> $([ "$to" = 0 ] && echo ready || echo timeout)" "$ok" "exit=$rc"
+    done
+  fi
+fi
+# Not root: the probe runs directly (ExecStartPre already runs as User=ollama), no runuser.
+newds; mk_gpu "$DS/root" nvgpu; mkdir -p "$DS/bin"
+# shellcheck disable=SC2016  # literal $ for the stub / pattern
+printf '#!/bin/sh\necho "runuser $*" >> "$DS/runuser.log"; exit 99\n' > "$DS/bin/runuser"
+# shellcheck disable=SC2016  # literal $ for the stub / pattern
+printf '#!/bin/sh\n[ "$1" = -u ] && { echo 1000; exit 0; }\nexit 0\n' > "$DS/bin/id"; chmod +x "$DS/bin/"*
+wc_run PATH="$DS/bin:$PATH" CUDA_WAIT_S=2; rc=$?
+[ "$rc" = 0 ] && grep -q "cuInit probe #1: OK" "$DS/out" && [ ! -e "$DS/runuser.log" ] && ok=1 || ok=0
+result "wait-cuda: not root -> probe runs as the unit's user, no runuser" "$ok" "exit=$rc"
+# Root: the probe runs as the ollama user through runuser.
+newds; mk_gpu "$DS/root" nvgpu; mkdir -p "$DS/bin"
+# shellcheck disable=SC2016  # literal $DS / $* for the stub
+printf '#!/bin/sh\necho "runuser $*" >> "$DS/runuser.log"\n[ "$1" = -u ] && [ "$3" = -- ] || exit 98\nshift 3; exec "$@"\n' > "$DS/bin/runuser"
+# shellcheck disable=SC2016  # literal $ for the stub / pattern
+printf '#!/bin/sh\n[ "$1" = -u ] && { echo 0; exit 0; }\n[ "$1" = ollama ] && exit 0\nexit 1\n' > "$DS/bin/id"; chmod +x "$DS/bin/"*
+wc_run PATH="$DS/bin:$PATH" CUDA_WAIT_S=2; rc=$?
+[ "$rc" = 0 ] && grep -q "cuInit probe #1: OK" "$DS/out" && grep -q "^runuser -u ollama -- $FPY -c" "$DS/runuser.log" && ok=1 || ok=0
+result "wait-cuda: root -> probe via runuser -u ollama" "$ok" "exit=$rc $(head -c 60 "$DS/runuser.log" 2>/dev/null)"
+# Root, but no ollama user: warn once and probe as root (still bounded, still exit 0).
+newds; mk_gpu "$DS/root" nvgpu; mkdir -p "$DS/bin"
+# shellcheck disable=SC2016  # literal $ for the stub / pattern
+printf '#!/bin/sh\necho "runuser $*" >> "$DS/runuser.log"; exit 99\n' > "$DS/bin/runuser"
+# shellcheck disable=SC2016  # literal $ for the stub / pattern
+printf '#!/bin/sh\n[ "$1" = -u ] && { echo 0; exit 0; }\nexit 1\n' > "$DS/bin/id"; chmod +x "$DS/bin/"*
+wc_run PATH="$DS/bin:$PATH" CUDA_WAIT_S=10 FAKE_CUINIT_FAIL_N=1; rc=$?
+[ "$rc" = 0 ] && grep -qE 'cuInit probe #[0-9]+: OK' "$DS/out" && [ "$(grep -c "cannot switch to 'ollama'" "$DS/out")" = 1 ] && [ ! -e "$DS/runuser.log" ] && ok=1 || ok=0
+result "wait-cuda: root without an ollama user -> warn once, probe as root" "$ok" "exit=$rc"
+echo "== ollama unit files (L1, L4, M2)"
+DROPIN=$JET/ollama-wait-cuda.conf; GCU=$JET/ollama-gpu-check.service
+grep -qx 'After=nv.service nvpmodel.service' "$DROPIN" && grep -qx 'TimeoutStartSec=180' "$DROPIN" \
+  && grep -qx 'ExecStartPre=/usr/local/sbin/wait-cuda.sh' "$DROPIN" && ok=1 || ok=0
+result "drop-in: After=nv.service nvpmodel.service, TimeoutStartSec=180, unprivileged ExecStartPre" "$ok" ""
+mw=$(sed -n 's/^MAX_WAIT=//p' "$WC"); pt=$(sed -n 's/^PROBE_TIMEOUT_S=//p' "$WC")
+[ -n "$mw" ] && [ -n "$pt" ] && [ $((mw + pt + 2)) -lt 180 ] && ok=1 || ok=0
+result "drop-in: CUDA_WAIT_S cap + one probe + kill grace < TimeoutStartSec" "$ok" "max=$mw probe=$pt"
+grep -qx 'Requisite=ollama.service' "$GCU" && grep -qx 'After=ollama.service' "$GCU" && ! grep -q '^Wants=' "$GCU" \
+  && grep -qx 'TimeoutStartSec=600' "$GCU" && ok=1 || ok=0
+result "gpu-check unit: Requisite+After ollama, no Wants=, TimeoutStartSec=600" "$ok" ""
+gw=$(sed -n 's/^DEFAULT_WAIT=//p' "$JET/ollama-gpu-check.sh"); gd=$(sed -n 's/^DEFAULT_DELAY=//p' "$JET/ollama-gpu-check.sh")
+[ $((2 * gw + gd + 180)) -lt 600 ] && ok=1 || ok=0
+result "gpu-check unit: 2 x wait + delay + one restart < TimeoutStartSec" "$ok" "wait=$gw delay=$gd"
+# systemd's own parser, where available (CI's ubuntu-latest has it). Paths rewritten to existing stubs.
+if command -v systemd-analyze >/dev/null 2>&1; then
+  newds; mkdir -p "$DS/u/ollama.service.d"
+  printf '#!/bin/sh\nexit 0\n' > "$DS/stub"; chmod +x "$DS/stub"
+  printf '[Unit]\nDescription=stub ollama\n[Service]\nExecStart=%s\n' "$DS/stub" > "$DS/u/ollama.service"
+  sed "s|/usr/local/sbin/[a-z-]*\.sh|$DS/stub|" "$DROPIN" > "$DS/u/ollama.service.d/ollama-wait-cuda.conf"
+  sed "s|/usr/local/sbin/[a-z-]*\.sh|$DS/stub|" "$GCU" > "$DS/u/ollama-gpu-check.service"
+  (cd "$DS/u" && SYSTEMD_UNIT_PATH="$DS/u:" systemd-analyze verify --man=no ollama-gpu-check.service ollama.service) > "$DS/out" 2>&1; rc=$?
+  ! grep -qiE 'unknown (key|section)|invalid|failed to parse|bad' "$DS/out" && ok=1 || ok=0
+  result "systemd-analyze verify: gpu-check unit and drop-in parse cleanly" "$ok" "exit=$rc"
+  # Negative control: the same check catches a misspelt key (so a clean run means something).
+  echo 'Requisitee=ollama.service' >> "$DS/u/ollama-gpu-check.service"
+  (cd "$DS/u" && SYSTEMD_UNIT_PATH="$DS/u:" systemd-analyze verify --man=no ollama-gpu-check.service) > "$DS/out" 2>&1
+  grep -q "Unknown key 'Requisitee'" "$DS/out" && ok=1 || ok=0
+  result "systemd-analyze verify: negative control catches a misspelt key" "$ok" ""
+fi
 
 echo "== ollama-gpu-check.sh"
 OG=$JET/ollama-gpu-check.sh
+# Every forbidden call from any gpu-check case also lands here, so the final assertion covers all of them (I2).
+ALL_MODEL_CALLS=$TMPROOT/gpu-check-model-calls.log; : > "$ALL_MODEL_CALLS"; OG_CASES=0
 # Strict curl/ollama on PATH ahead of fakes: any model pull/generate fails the case.
 strict_bins() {
   mkdir -p "$DS/strict"
-  cat > "$DS/strict/curl" <<'C'
+  cat > "$DS/strict/curl" <<C
 #!/bin/sh
-echo "curl $*" >> "$DS/curl.log"
-case "$*" in */api/generate*|*/api/pull*|*/api/chat*) echo "FORBIDDEN: $*" >&2; exit 99 ;; esac
+echo "curl \$*" >> "\$DS/curl.log"
+case "\$*" in */api/generate*|*/api/pull*|*/api/chat*) echo "curl \$*" >> "$ALL_MODEL_CALLS"; echo "FORBIDDEN: \$*" >&2; exit 99 ;; esac
 exit 0
 C
-  cat > "$DS/strict/ollama" <<'O'
+  cat > "$DS/strict/ollama" <<O
 #!/bin/sh
-echo "ollama $*" >> "$DS/ollama.log"
-echo "FORBIDDEN ollama call: $*" >&2
+echo "ollama \$*" >> "\$DS/ollama.log"
+echo "ollama \$*" >> "$ALL_MODEL_CALLS"
+echo "FORBIDDEN ollama call: \$*" >&2
 exit 99
 O
   chmod +x "$DS/strict/curl" "$DS/strict/ollama"
@@ -297,18 +482,22 @@ no_model_calls() {
   if [ -f "$DS/curl.log" ] && grep -qE '/api/(generate|pull|chat)' "$DS/curl.log"; then return 1; fi
   return 0
 }
-og() { # og [ENV...] sh "$OG" [args]; uses FAKE + strict bins
-  env PATH="$DS/strict:$FAKE:$PATH" "$@" > "$DS/out" 2>&1
+og() { # og [ENV...] sh "$OG" [args]; uses FAKE + strict bins. Restart delay 0 unless the case sets it.
+  OG_CASES=$((OG_CASES + 1))
+  [ -x "$DS/strict/ollama" ] || { echo "og: strict bins missing in $DS" >> "$ALL_MODEL_CALLS"; }
+  env PATH="$DS/strict:$FAKE:$PATH" OLLAMA_GPU_CHECK_RESTART_DELAY_S=0 "$@" > "$DS/out" 2>&1
 }
+CUDA_LINE='msg="inference compute" id=CUDA0 library=CUDA compute=7.2 name=CUDA0 description=Xavier'
+CPU_LINE='msg="inference compute" id=cpu library=cpu'
 # check: CUDA -> 0
 newds; strict_bins
-echo 'msg="inference compute" id=CUDA0 library=CUDA compute=7.2 name=CUDA0 description=Xavier' > "$DS/journal.txt"
+echo "$CUDA_LINE" > "$DS/journal.txt"
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG" check; rc=$?
 [ "$rc" = 0 ] && grep -q "library=CUDA" "$DS/out" && no_model_calls && ok=1 || ok=0
 result "ollama-gpu-check check: library=CUDA -> 0" "$ok" "exit=$rc"
 # check: CPU -> 1
 newds; strict_bins
-echo 'msg="inference compute" id=cpu library=cpu' > "$DS/journal.txt"
+echo "$CPU_LINE" > "$DS/journal.txt"
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG" check; rc=$?
 [ "$rc" = 1 ] && grep -q "CPU-only" "$DS/out" && ok=1 || ok=0
 result "ollama-gpu-check check: library=cpu -> 1" "$ok" "exit=$rc"
@@ -316,22 +505,90 @@ result "ollama-gpu-check check: library=cpu -> 1" "$ok" "exit=$rc"
 newds; strict_bins; : > "$DS/journal.txt"
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG" check; rc=$?
 [ "$rc" = 1 ] && ok=1 || ok=0; result "ollama-gpu-check check: no compute line -> 1" "$ok" "exit=$rc"
+# D4: not root and nothing readable -> the message says it needs root / the journal group.
+newds; strict_bins; : > "$DS/journal.txt"
+# shellcheck disable=SC2016  # literal $ for the stub / pattern
+printf '#!/bin/sh\n[ "$1" = -u ] && { echo 1000; exit 0; }\nexit 0\n' > "$DS/strict/id"; chmod +x "$DS/strict/id"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" sh "$OG" check; rc=$?
+[ "$rc" = 1 ] && grep -q "needs root or the systemd-journal group" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check check: not root, no lines -> hint: needs root/journal (D4)" "$ok" "exit=$rc"
+# L2: the board's exact lines (types.go:60 CPU at 18:22, types.go:42 GPU at 19:28); keys on library=, not source=.
+BOARD_CPU='time=2026-10-19T18:22:10.715+03:00 level=INFO source=types.go:60 msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu libdirs=ollama driver="" pci_id="" type="" total="6.8 GiB" available="5.1 GiB"'
+BOARD_GPU='time=2026-10-19T19:28:41.102+03:00 level=INFO source=types.go:42 msg="inference compute" id=GPU-00000000-0000-0000-0000-000000000000 library=CUDA compute=7.2 name=CUDA0 description=Xavier libdirs=ollama,cuda_jetpack5 driver=11.4 pci_id="" type=iGPU total="6.8 GiB" available="5.1 GiB"'
+# gc_check NAME EXP_EXIT LINE...: one start's journal with these lines, then `check`.
+gc_check() {
+  local name=$1 ee=$2; shift 2
+  newds; strict_bins; printf '%s\n' "$@" > "$DS/journal.txt"
+  og OLLAMA_GPU_CHECK_MARKER="$DS/marker" sh "$OG" check; rc=$?
+  [ "$rc" = "$ee" ] && no_model_calls && ok=1 || ok=0; result "ollama-gpu-check check: $name -> $ee" "$ok" "exit=$rc"
+}
+gc_check "board CPU line (source=types.go:60)" 1 "$BOARD_CPU"
+gc_check "board GPU line (source=types.go:42)" 0 "$BOARD_GPU"
+gc_check "board GPU line with source= swapped to :60" 0 "${BOARD_GPU/types.go:42/types.go:60}"
+gc_check "board CPU line with source= swapped to :42" 1 "${BOARD_CPU/types.go:60/types.go:42}"
+gc_check "GPU line then CPU line in one start (L2)" 0 "$BOARD_GPU" "$BOARD_CPU"
+gc_check "CPU line then GPU line in one start" 0 "$BOARD_CPU" "$BOARD_GPU"
+gc_check "lower-case library=cuda (L2)" 0 "${CUDA_LINE/library=CUDA/library=cuda}"
+gc_check "quoted library=\"CUDA\" (L2)" 0 "${CUDA_LINE/library=CUDA/library=\"CUDA\"}"
+gc_check "library=CUDA at end of line" 0 'msg="inference compute" id=CUDA0 library=CUDA'
+gc_check "library=cudart_stub is not CUDA" 1 'msg="inference compute" id=x library=cudart_stub'
+gc_check "CUDA only in description=, library=cpu" 1 'msg="inference compute" id=cpu library=cpu description="no CUDA"'
+gc_check "two starts in one journal: CUDA, then a start with cpu" 1 'msg="server config"' "$CUDA_LINE" 'msg="server config"' "$CPU_LINE"
+gc_check "two starts in one journal: cpu, then a start with CUDA" 0 'msg="server config"' "$CPU_LINE" 'msg="server config"' "$CUDA_LINE"
+# L3: scoped by _SYSTEMD_INVOCATION_ID. Previous start CUDA, current start CPU, both in the same second.
+newds; strict_bins
+printf '%s\n' "$CUDA_LINE" '# --- restart ---' "$CPU_LINE" > "$DS/journal.txt"; echo 1 > "$DS/ollama.restarts"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" SINCE_SAME_SECOND=1 sh "$OG" check; rc=$?
+[ "$rc" = 1 ] && grep -q "_SYSTEMD_INVOCATION_ID=a1b2c3d4e5f60718293a4b5c6d7e8f91" "$DS/journalctl.log" && ! grep -q -- "--since" "$DS/journalctl.log" && ok=1 || ok=0
+result "ollama-gpu-check check: InvocationID scopes to this start (old CUDA line ignored, L3)" "$ok" "exit=$rc"
+newds; strict_bins
+printf '%s\n' "$CPU_LINE" '# --- restart ---' "$CUDA_LINE" > "$DS/journal.txt"; echo 1 > "$DS/ollama.restarts"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" INVOCATION_ID_EMPTY=1 sh "$OG" check; rc=$?
+[ "$rc" = 0 ] && grep -q -- "--since Mon 2026-10-19" "$DS/journalctl.log" && ok=1 || ok=0
+result "ollama-gpu-check check: no InvocationID -> falls back to --since ActiveEnterTimestamp" "$ok" "exit=$rc"
 # apply: already CUDA -> no restart
 newds; strict_bins
-echo 'msg="inference compute" id=CUDA0 library=CUDA compute=7.2' > "$DS/journal.txt"
+echo "$CUDA_LINE" > "$DS/journal.txt"
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG"; rc=$?
 [ "$rc" = 0 ] && [ ! -e "$DS/ollama.restarts" ] && [ ! -e "$DS/marker" ] && no_model_calls && ok=1 || ok=0
 result "ollama-gpu-check apply: already CUDA -> no restart" "$ok" "exit=$rc"
+# M1: the compute line shows up late (Ollama's discovery can take 30 s + 30 s); polling picks it up.
+newds; strict_bins; : > "$DS/journal.txt"
+( sleep 3; echo "$CUDA_LINE" >> "$DS/journal.txt" ) &
+SECONDS=0; og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=8 sh "$OG"; rc=$?; wait
+[ "$rc" = 0 ] && grep -q "GPU already in use" "$DS/out" && [ ! -e "$DS/ollama.restarts" ] && [ "$SECONDS" -ge 3 ] && ok=1 || ok=0
+result "ollama-gpu-check apply: compute line after 3 s -> found, no restart (M1)" "$ok" "exit=$rc ${SECONDS}s"
+grep -qx 'DEFAULT_WAIT=120' "$OG" && ok=1 || ok=0; result "ollama-gpu-check: default wait for the compute line is 120 s (M1)" "$ok" ""
 # apply: CPU, restart brings CUDA (Ollama before CUDA recovery)
 newds; strict_bins
-echo 'msg="inference compute" id=cpu library=cpu' > "$DS/journal.txt"
+echo "$CPU_LINE" > "$DS/journal.txt"
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 RESTART_BRINGS_CUDA=1 sh "$OG"; rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$DS/ollama.restarts")" = 1 ] && [ -e "$DS/marker" ] \
   && grep -q "after restart, library=CUDA" "$DS/out" && no_model_calls && ok=1 || ok=0
 result "ollama-gpu-check apply: CPU then CUDA after one restart" "$ok" "exit=$rc restarts=$(cat "$DS/ollama.restarts" 2>/dev/null)"
+# L3: same, with the real --since's same-second overlap simulated; InvocationID still reads only the new start.
+newds; strict_bins
+echo "$CPU_LINE" > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 SINCE_SAME_SECOND=1 RESTART_BRINGS_CUDA=1 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && grep -q "after restart, library=CUDA" "$DS/out" && ! grep -q "still not" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check apply: restart in the same second -> 'after restart, library=CUDA' (L3)" "$ok" "exit=$rc"
+# Restart delay: waits before the single restart, logged.
+newds; strict_bins
+echo "$CPU_LINE" > "$DS/journal.txt"
+SECONDS=0; og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 OLLAMA_GPU_CHECK_RESTART_DELAY_S=2 RESTART_BRINGS_CUDA=1 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && grep -q "waiting 2s before the single restart" "$DS/out" && [ "$SECONDS" -ge 2 ] && [ -e "$DS/marker" ] \
+  && [ "$(cat "$DS/ollama.restarts")" = 1 ] && ok=1 || ok=0
+result "ollama-gpu-check apply: OLLAMA_GPU_CHECK_RESTART_DELAY_S=2 -> waits, then one restart" "$ok" "exit=$rc ${SECONDS}s"
+grep -qx 'DEFAULT_DELAY=10' "$OG" && ok=1 || ok=0; result "ollama-gpu-check: default restart delay is 10 s" "$ok" ""
+for d in abc -1 010 1.5 301 1000; do
+  newds; strict_bins; echo "$CUDA_LINE" > "$DS/journal.txt"
+  og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 OLLAMA_GPU_CHECK_RESTART_DELAY_S="$d" sh "$OG"; rc=$?
+  [ "$rc" = 0 ] && grep -q "OLLAMA_GPU_CHECK_RESTART_DELAY_S must be a whole number of seconds from 0 to 300, got '$d'; using 10" "$DS/out" && ok=1 || ok=0
+  result "ollama-gpu-check: RESTART_DELAY_S='$d' -> warn, use 10" "$ok" "exit=$rc"
+done
 # apply: really no GPU — one restart, still CPU, no loop; second apply does not restart again
 newds; strict_bins
-echo 'msg="inference compute" id=cpu library=cpu' > "$DS/journal.txt"
+echo "$CPU_LINE" > "$DS/journal.txt"
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG"; rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$DS/ollama.restarts")" = 1 ] && [ -e "$DS/marker" ] \
   && grep -q "not restarting again" "$DS/out" && ok=1 || ok=0
@@ -346,7 +603,7 @@ og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_INACTIVE=1 OLLAMA_GPU_CHECK_WAIT_
 result "ollama-gpu-check apply: ollama inactive -> no restart" "$ok" "exit=$rc"
 # apply: restart fails -> marker kept, exit 0, no loop
 newds; strict_bins
-echo 'msg="inference compute" id=cpu library=cpu' > "$DS/journal.txt"
+echo "$CPU_LINE" > "$DS/journal.txt"
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 SYSTEMCTL_FAIL=1 sh "$OG"; rc=$?
 [ "$rc" = 0 ] && [ -e "$DS/marker" ] && [ ! -e "$DS/ollama.restarts" ] && grep -q "restart ollama.service failed" "$DS/out" && ok=1 || ok=0
 result "ollama-gpu-check apply: restart fails -> marker, exit 0" "$ok" "exit=$rc"
@@ -357,7 +614,7 @@ og OLLAMA_GPU_CHECK_MARKER="$DS/marker" sh "$OG" bogus; rc=$?
 result "ollama-gpu-check: unknown argument -> usage, exit 2" "$ok" "exit=$rc"
 # WAIT_S validation warning
 newds; strict_bins
-echo 'msg="inference compute" id=CUDA0 library=CUDA' > "$DS/journal.txt"
+echo "$CUDA_LINE" > "$DS/journal.txt"
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=abc sh "$OG" check; rc=$?
 [ "$rc" = 0 ] && grep -q "OLLAMA_GPU_CHECK_WAIT_S must be a positive whole number" "$DS/out" && ok=1 || ok=0
 result "ollama-gpu-check: bad OLLAMA_GPU_CHECK_WAIT_S -> warn, still works" "$ok" "exit=$rc"
@@ -367,10 +624,14 @@ SECONDS=0
 og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG"; rc=$?
 [ "$rc" = 0 ] && [ ! -e "$DS/ollama.restarts" ] && grep -q "no inference compute line" "$DS/out" && ok=1 || ok=0
 result "ollama-gpu-check apply: no compute line after wait -> exit 0, no restart" "$ok" "exit=$rc ${SECONDS}s"
-# Guarantee no model API calls across the ollama-gpu-check cases above (aggregate curl/ollama logs already per-ds).
-no_model_calls && ok=1 || ok=0
-result "ollama-gpu-check: no /api/generate|/api/pull|/api/chat and no ollama CLI" "$ok" ""
-
+# I2: no model API call or ollama CLI call in ANY gpu-check case above (aggregate log, written by every strict bin).
+[ ! -s "$ALL_MODEL_CALLS" ] && [ "$OG_CASES" -ge 30 ] && ok=1 || ok=0
+result "ollama-gpu-check: no /api/generate|/api/pull|/api/chat and no ollama CLI in all $OG_CASES cases (I2)" "$ok" "$(head -c 200 "$ALL_MODEL_CALLS")"
+# ...and the aggregate really catches a call: a strict bin called once writes to it.
+newds; strict_bins; saved=$ALL_MODEL_CALLS
+"$DS/strict/ollama" run qwen >/dev/null 2>&1; "$DS/strict/curl" -s localhost:11434/api/generate >/dev/null 2>&1
+[ "$(wc -l < "$saved")" = 2 ] && ok=1 || ok=0; : > "$saved"
+result "ollama-gpu-check: the aggregate log records forbidden calls (self-test)" "$ok" ""
 
 echo
 echo "passed=$PASS failed=$FAIL"

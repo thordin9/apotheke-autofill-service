@@ -49,26 +49,31 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   board, `dl-cap.service` ran and exited 0, then NetworkManager reset `eth0` a moment later and the ingress qdisc,
   and with it the cap, was silently gone until a manual `systemctl restart dl-cap`. New NetworkManager dispatcher
   hook `deploy/jetson/nm-dispatcher-90-dl-cap` (installed as `/etc/NetworkManager/dispatcher.d/90-dl-cap`, root,
-  mode 755) restarts `dl-cap.service` (`--no-block`) on `up`, `connectivity-change` and `dhcp4-change` for `eth0`
-  only, and not while the unit is disabled. `dl-cap.sh` now checks after applying that
-  `tc filter show dev eth0 parent ffff:` lists police filters for `ip` and `ipv6`, and exits 1 if not, so
-  `Restart=on-failure` retries. A new `dl-cap.sh check` mode exits 1 when the cap is missing, and an unknown
-  argument exits 2. The fake `tc` matches the board's iproute2-ss200127 `filter show` format (police on a separate
-  line from `protocol ip`/`ipv6`), with a verbatim fixture test. Fake `systemctl` covers the hook. CI shellchecks
-  the hook. `docs/deploy-jetson.md` covers why the hook exists, how to install it, and how to verify the cap,
-  including after a reboot.
+  mode 755) restarts `dl-cap.service` (`--no-block`) on `up` for `eth0`. On `dhcp4-change` for `eth0` and on
+  `connectivity-change` (empty interface), it runs `dl-cap.sh check` first and only restarts if the cap is missing,
+  so a lease renewal does not leave a gap or burn the start limit. Disabled units stay off. `dl-cap.sh` now checks
+  after applying that `tc filter show dev eth0 parent ffff:` lists police filters for `ip` and `ipv6`, and exits 1
+  if not, so `Restart=on-failure` retries. A new `dl-cap.sh check` mode exits 1 when the cap is missing, and an
+  unknown argument exits 2. The fake `tc` matches the board's iproute2-ss200127 `filter show` format (police on a
+  separate line from `protocol ip`/`ipv6`), with a verbatim fixture test. Fake `systemctl` covers the hook. CI
+  shellchecks the hook. `docs/deploy-jetson.md` covers why the hook exists, how to install it, and how to verify
+  the cap, including after a reboot.
 
 - **`deploy/jetson`: Ollama waits for CUDA at boot and restarts once if it came up on CPU.** After a reboot,
   `ollama.service` could start while `/dev/nvhost-ctrl-gpu` and `/dev/nvmap` already existed but GPU discovery still
-  logged only `library=cpu` until a manual restart. New `wait-cuda.sh` (`ExecStartPre` via
-  `ollama-wait-cuda.conf`) waits up to `CUDA_WAIT_S` (default 60) for the device nodes and an nvgpu/gv11b sysfs
-  path, then exits 0 even on timeout so the unit never fails forever. New `ollama-gpu-check.sh` /
-  `ollama-gpu-check.service` reads this start's journal for `inference compute` with `library=CUDA` and, if only
-  CPU was found, restarts `ollama.service` at most once per boot (`/run` marker). It never loops when there is
-  truly no GPU and never loads or pulls models. `ollama-gpu-check.sh check` exits 0 for GPU and 1 for CPU-only.
-  Harness covers both orderings, the at-most-once restart, a really-no-GPU box, timeout validation, and asserts no
-  `/api/generate` or `/api/pull` calls. Docs add install steps and a post-reboot checklist (`ollama ps` at 100% GPU,
-  `dl-cap.sh check`, both police filters).
+  logged only `library=cpu` until a manual restart (CUDA init race, not missing device nodes). New `wait-cuda.sh`
+  (`ExecStartPre` via `ollama-wait-cuda.conf`, `After=nv.service nvpmodel.service`, `TimeoutStartSec=180`) waits up
+  to `CUDA_WAIT_S` (default 60, capped at 150; `0` = skip) for the device nodes / nvgpu sysfs **and** a bounded
+  `cuInit` probe as the `ollama` user, logging every check with a timestamp and `+Ns` elapsed; exits 0 on timeout
+  so the unit never fails forever. New `ollama-gpu-check.sh` / `ollama-gpu-check.service` (`Requisite=`/`After=`,
+  `TimeoutStartSec=600`) scopes this start's journal by `_SYSTEMD_INVOCATION_ID`, treats any `library=cuda` line
+  (any case) as GPU, waits `OLLAMA_GPU_CHECK_WAIT_S` (default 120) for the compute line, then optionally delays
+  (`OLLAMA_GPU_CHECK_RESTART_DELAY_S`, default 10) and restarts `ollama.service` at most once per boot (`/run`
+  marker). Never loops when there is truly no GPU, never starts a disabled Ollama, never loads or pulls models.
+  `check` needs root or the journal group. Harness covers both orderings, cuInit fail-then-OK / missing python3 /
+  missing libcuda / hang, the dispatcher check-then-restart, Requisite, InvocationID scoping, board journal lines,
+  and an aggregate no-`/api/generate`|`/api/pull` assertion across every gpu-check case. Docs add install steps, a
+  post-reboot checklist, a QA race-reproduction override (`CUDA_WAIT_S=0`), and `docs/qa/pr17-boot-race-qa.md`.
 
 - **`deploy/jetson/run-service.sh`: refuse a switch when port 8080 is taken; wall-clock `WAIT_S`.** After the old
   container is stopped, the script refuses (and restores it) if `HEALTH_URL` still answers, because something else

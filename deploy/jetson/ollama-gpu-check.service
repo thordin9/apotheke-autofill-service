@@ -4,12 +4,18 @@
 [Unit]
 Description=Restart Ollama once if it came up on CPU (Jetson CUDA race at boot)
 After=ollama.service
-Wants=ollama.service
+# Requisite, not Wants: never start an Ollama an admin disabled or stopped. At boot, ollama.service's own start
+# job (from multi-user.target) satisfies this; if Ollama is not enabled, this unit fails at once with "dependency"
+# and does nothing.
+Requisite=ollama.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/ollama-gpu-check.sh
 RemainAfterExit=yes
+# Bound the boot delay even if journalctl hangs: 2 x OLLAMA_GPU_CHECK_WAIT_S (120 s) + the restart delay (10 s)
+# + one blocking restart (Ollama's TimeoutStartSec=180) = 430 s, plus margin.
+TimeoutStartSec=600
 
 [Install]
 WantedBy=multi-user.target
