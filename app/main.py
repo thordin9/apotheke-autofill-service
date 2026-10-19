@@ -87,12 +87,10 @@ def create_app() -> FastAPI:
                 snap = await asyncio.wait_for(health(), timeout=2.5)
             except Exception:
                 snap = None
-        if isinstance(snap, dict):
-            if snap.get("degraded") is True:
-                body["status"] = "degraded"
-                status = 503
-            if (models := sanitize_models(snap.get("models"))) is not None:
-                body["models"] = models
+        if isinstance(snap, dict) and snap.get("degraded") is True:
+            body["status"] = "degraded"
+            status = 503
+        # Model ids, state, VRAM and latency stay on authenticated /v1/info.
         return JSONResponse(body, status_code=status)
 
     @app.get("/v1/info")

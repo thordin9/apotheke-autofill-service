@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from pathlib import Path
 
 import pytest
 from conftest import JPEG, assert_contract, post_image
@@ -183,7 +184,9 @@ def test_identity_fields_trim_cap_and_aliases():
     assert clean_identity("n/a") == ""
     assert clean_identity("  " + ("x" * 300)) == "x" * 128
     weird = '\x01עברית\u200f🔧"q"'
-    assert clean_identity(f"  {weird}  ") == weird
+    assert clean_identity(f"  {weird}  ") == weird[1:]  # C0 control dropped, RLM kept
+    assert clean_identity("\u202eBosch\ud83d\x00") == "Bosch"  # override, lone surrogate, NUL
+    assert clean_identity("a" + "e\u0301" * 70) == "a" + "e\u0301" * 63  # no split cluster
     out = clamp(
         {
             "name": "drill",
@@ -316,6 +319,10 @@ def test_clamps_via_http(oclient, fake):
 
 def test_prompt_is_the_v3_lean_text():
     p = build_prompt({})
+    root = Path(__file__).parents[1]
+    bench = root / "bench/results/brandserial-2026-10-19/prompts/v3_lean.txt"
+    gpu = root / "bench/results/brandserial-gpu-retimes-2026-10-19/prompts/v3_lean.txt"
+    assert p == bench.read_text().rstrip("\n") == gpu.read_text().rstrip("\n")
     assert "locale 'en'" in p and "prefer:" not in p
     assert "exactly one of: General, Tools, Electronics, Kitchen, Documents, Hobby, " in p
     assert "Clothing, Shoes, Books, Lighting" in p
@@ -327,10 +334,15 @@ def test_prompt_is_the_v3_lean_text():
     assert len(p) < 800  # small models do better with short prompts
 
 
-def test_prompt_interpolates_only_the_locale():
+def test_prompt_interpolates_locale_and_client_categories():
     plain = build_prompt({})
     with_lists = build_prompt({"categories": ["Tools", "Kitchen"], "tags": ["bosch"]})
-    assert plain == with_lists
+    # The client's categories replace the v3_lean list (QA of #20); tags stay out.
+    assert with_lists == plain.replace(
+        "General, Tools, Electronics, Kitchen, Documents, Hobby, Clothing, Shoes, Books, Lighting",
+        "Tools, Kitchen",
+    )
+    assert "bosch" not in with_lists
     german = build_prompt({"locale": "de-DE"})
     assert "locale 'de-DE'" in german and "locale 'en'" not in german
 
@@ -343,8 +355,15 @@ def test_prompt_has_no_json_template_to_echo(ctx):
 
 
 def test_schema_is_the_v3_lean_schema():
-    s = build_schema({"categories": ["Tools", " ", "Kitchen", "Tools"]})
-    assert s == build_schema({})
+    bench = Path(__file__).parents[1] / "bench/results/brandserial-2026-10-19/schemas/v3_lean.json"
+    assert build_schema({}) == json.loads(bench.read_text())
+    client = build_schema({"categories": ["Tools", " ", "Kitchen", "Tools"]})
+    assert client["properties"]["category"]["enum"] == ["Tools", "Kitchen"]
+    s = build_schema({})
+    assert {
+        **client,
+        "properties": {**client["properties"], "category": s["properties"]["category"]},
+    } == s
     assert s["properties"]["category"]["enum"] == [
         "General",
         "Tools",
@@ -1015,3 +1034,18 @@ def test_info_latency_is_rounded_ms(oclient):
     c = oclient()
     c.app.state.backend._avg_s = 13.5404
     assert c.get("/v1/info").json()["avg_latency_ms"] == 13540
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"brand": ["ZQB"], "model_number": {"text": "ZQB"}, "name": ',
+        '{"Brand Name": "ZQB", "Model No": "ZQB", "Serial #": "ZQB", "name": ',
+        '{"brand": {"value": "x", "raw": "ZQB"}, "name": "drill"}',
+        '{"name": "drill", "serial_number": "ZQB", "desc',
+    ],
+)
+def test_redact_for_log_truncated_and_odd_shapes(text):
+    from app.identity import redact_for_log
+
+    assert "ZQB" not in redact_for_log(text)

@@ -19,7 +19,7 @@ paths:
   /healthz:
     get:
       operationId: healthz
-      summary: Liveness probe (never requires auth, never calls the backend)
+      summary: Liveness probe (never requires auth; status only, no model inventory)
       security: []
       responses:
         "200":
@@ -29,34 +29,27 @@ paths:
               schema:
                 type: object
                 required: [status]
+                additionalProperties: false
                 properties:
                   status:
                     type: string
                     const: ok
-                  models:
-                    type: array
-                    items: {$ref: "#/components/schemas/ModelInfo"}
-                    description: |
-                      Present when the server sets ALLOWED_MODELS. Same entries
-                      as /v1/info `models`, including `state` and `size_vram`,
-                      so cold → loading → warm is visible here too.
         "503":
           description: |
             Degraded. A model that is warm, or the loaded production model, is
             in Ollama's memory with size_vram 0 (no GPU memory — Ollama started
             before CUDA). The process is up; it is not healthy for inference.
+            The body is status only; model ids stay on /v1/info.
           content:
             application/json:
               schema:
                 type: object
                 required: [status]
+                additionalProperties: false
                 properties:
                   status:
                     type: string
                     const: degraded
-                  models:
-                    type: array
-                    items: {$ref: "#/components/schemas/ModelInfo"}
   /v1/info:
     get:
       operationId: getInfo
@@ -180,11 +173,12 @@ components:
           type: string
           enum: [cold, loading, warm]
           description: |
-            Added in v1.3. cold = not in /api/ps. loading = in /api/ps, but no
-            suggest for this model has finished successfully since it entered
-            /api/ps or since the last load. warm = at least one suggest has
-            finished successfully since that load. Clients must use `state`,
-            not `loaded`, to know when the model is ready for fast inference.
+            Added in v1.3. cold = not in /api/ps. loading = in /api/ps, and
+            neither a background load nor a suggest for this model has finished
+            successfully since it entered /api/ps. warm = a startup warm-up or
+            later background reload of this model finished successfully, or a
+            suggest for it finished successfully, since that residency. Clients
+            use `state` to know when the model is ready for fast inference.
             Absent when /api/ps could not be read.
         size_vram:
           type: integer

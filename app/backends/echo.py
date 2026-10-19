@@ -124,8 +124,10 @@ class EchoBackend(Backend):
         self._in_flight = 0
         self._waiting = 0
         self._current: str | None = None  # model of the request in flight
-        # model_key()s with a successful suggest since they became resident.
-        self._warm: set[str] = set()
+        # model_key()s ready for a fast answer. The default is already resident
+        # at startup (echo has no separate warm-up), so it starts warm. A model
+        # also joins after its suggest finishes. A switch in progress is absent.
+        self._warm: set[str] = {model_key(_default_model())}
 
     async def _take_turn(self, model: str, delay_ms: int) -> None:
         """Wait for the request in flight, with Ollama's queue rules."""

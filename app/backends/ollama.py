@@ -30,9 +30,11 @@ Env (read when the backend is created):
   OLLAMA_KEEP_ALIVE      how long Ollama keeps the model loaded after a request
                          (default 30m; -1 keeps it loaded forever)
   OLLAMA_JSON_FORMAT     schema (default, also 1) sends the v3_lean JSON schema as
-                         `format` (fixed category enum, plus brand / model_number /
-                         serial_number); json sends format=json; 0 lets the model
-                         answer freely
+                         `format`. The category enum is context.categories when the
+                         client sends them, otherwise the v3_lean list. Tags are at
+                         most 3 and the description at most 100 characters, plus
+                         brand / model_number / serial_number. json sends format=json;
+                         0 lets the model answer freely
   OLLAMA_PLAIN_RETRY     1 (default): if the JSON answer is unusable and less than 40%
                          of BACKEND_TIMEOUT_S was spent generating (model load time
                          does not count), ask once more with a short plain-text
@@ -92,7 +94,31 @@ MAX_NAME = 120
 MAX_CATEGORY = 80
 MAX_TAG = 40
 MAX_DESCRIPTION = 500
+MAX_CONTEXT_ITEMS = 50
 RAW_LOG_LIMIT = 2048
+# Feature 9 v3_lean category list; used when the client sends none.
+V3_CATEGORIES = [
+    "General",
+    "Tools",
+    "Electronics",
+    "Kitchen",
+    "Documents",
+    "Hobby",
+    "Clothing",
+    "Shoes",
+    "Books",
+    "Lighting",
+]
+
+
+def _context_list(context: dict[str, Any], key: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in context.get(key, []) or []:
+        if isinstance(v, str) and v.strip() and v.strip() not in seen:
+            seen.add(v.strip())
+            out.append(v.strip())
+    return out[:MAX_CONTEXT_ITEMS]
 
 
 class BackendError(BackendUnavailable):
@@ -104,16 +130,16 @@ class BackendError(BackendUnavailable):
 def build_prompt(context: dict[str, Any]) -> str:
     """Feature 9 v3_lean prompt. It names the fields in words and shows no JSON
     template: small models copy a template's placeholders back instead of
-    looking at the photo. The reply's shape comes from build_schema. Only the
-    locale is interpolated; category and tag lists stay as in the winning text."""
+    looking at the photo. The reply's shape comes from build_schema. The locale
+    and, when the client sent them, the category names are interpolated. With
+    no categories the text matches the winning v3_lean file. Tag hints stay out."""
     locale = context.get("locale") if isinstance(context.get("locale"), str) else ""
     locale = locale.strip() or "en"
     return "\n".join(
         [
             "What is the main object in this photo? Answer in JSON with:",
             "name (the kind of object in 1-4 plain words, never a brand or a person's name),",
-            "category (exactly one of: General, Tools, Electronics, Kitchen, Documents, "
-            "Hobby, Clothing, Shoes, Books, Lighting),",
+            "category (exactly one of: " + ", ".join(_categories(context)) + "),",
             "tags (up to 3 short lowercase tags for the item),",
             "description (under 12 words, about the object only),",
             "confidence (0 to 1, how sure you are).",
@@ -125,32 +151,27 @@ def build_prompt(context: dict[str, Any]) -> str:
     )
 
 
+def _categories(context: dict[str, Any]) -> list[str]:
+    """The client's categories (as before v1.3), else the v3_lean list. With the
+    v3_lean list the prompt and schema are byte-identical to the bench files."""
+    return _context_list(context, "categories") or V3_CATEGORIES
+
+
 def build_schema(context: dict[str, Any]) -> dict[str, Any]:
     """JSON schema for Ollama's `format`: the Feature 9 v3_lean schema.
 
-    The category enum is the fixed list from that schema (not the client's
-    categories). `context` is unused; the service still snaps a returned
-    category onto `context.categories` when the client sent them.
+    The category enum is the client's categories when they sent any, otherwise
+    the v3_lean list (the schema then matches the bench file). Tags are capped
+    at 3 and the description at 100 characters here; HTTP clamping is wider.
+    The service still snaps a returned category onto `context.categories`.
     """
-    del context
     return {
         "type": "object",
         "properties": {
             "name": {"type": "string", "minLength": 2, "maxLength": 40},
             "category": {
                 "type": "string",
-                "enum": [
-                    "General",
-                    "Tools",
-                    "Electronics",
-                    "Kitchen",
-                    "Documents",
-                    "Hobby",
-                    "Clothing",
-                    "Shoes",
-                    "Books",
-                    "Lighting",
-                ],
+                "enum": _categories(context),
             },
             "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
             "description": {"type": "string", "minLength": 10, "maxLength": 100},
@@ -850,6 +871,7 @@ class OllamaBackend(Backend):
                 r = httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
                 if r.status_code < 400:
                     self._record_load(time.monotonic() - t0)
+                    self._mark_load_done(self.model)
                     self.ready, self.warmup_error = True, None
                     return
                 self.warmup_error = f"HTTP {r.status_code}"
@@ -975,8 +997,17 @@ class OllamaBackend(Backend):
                 self._succeeded.discard(key)
         self._vram = vram
 
+    def _mark_load_done(self, model: str) -> None:
+        """A background load finished, so the model is warm before any suggest."""
+        self._succeeded.add(model_key(model))
+
     def _state_of(self, model: str) -> str | None:
-        """cold | loading | warm, or None when /api/ps has never answered."""
+        """cold | loading | warm, or None when /api/ps has never answered.
+
+        warm: a background load or a suggest for this model has finished
+        successfully since it last left /api/ps. Merely appearing in /api/ps
+        (the runner can still be starting) stays loading.
+        """
         if self._vram is None:
             return None
         key = model_key(model)
@@ -1067,6 +1098,7 @@ class OllamaBackend(Backend):
                 )
                 if r.status_code < 400:
                     self._record_load(time.monotonic() - t0, model)
+                    self._mark_load_done(model)
             except httpx.HTTPError as exc:
                 log.warning("ollama model reload failed (model=%s): %s", model, exc)
             finally:
@@ -1336,5 +1368,8 @@ class OllamaBackend(Backend):
         else:
             base = max(float(self.retry_after), avg * (self._waiting + 1))
         if not same_model(model, self._current):
-            base += self._load_estimate_s(model)
-        return max(1, math.ceil(base))
+            # Same load budget (estimate + max(2 s, 30%)) and cap as the
+            # cold-start Retry-After, so Apotheke's single retry stays valid.
+            base += self._load_budget_s(model)
+        cap = max(1, math.floor(get_settings().backend_timeout_s + CLIENT_TIMEOUT_EXTRA_S))
+        return min(cap, max(1, math.ceil(base)))

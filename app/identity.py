@@ -1,13 +1,15 @@
 """Brand, model number and serial number on a suggestion.
 
 The model is asked to copy only text printed on the item. These values are
-trimmed and hard-cut to 128 characters, and they are never written to logs.
+trimmed, stripped of controls and lone surrogates, hard-cut to 128
+characters, and they are never written to logs.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any
 
 IDENTITY_FIELDS = ("brand", "model_number", "serial_number")
@@ -42,8 +44,11 @@ _SECRET_KEY = (
     "serial_number|serialNumber|serial_no|serial_num|serial|sn"
 )
 _SECRET_STRING = r'"(?:\\.|[^"\\])*"'
+# Keys as the model may spell them ("Brand Name", "Serial #", "S/N"), any value
+# shape up to the next top-level comma or the end of a truncated answer.
 _REDACT_VALUE = re.compile(
-    rf'("(?:{_SECRET_KEY})"\s*:\s*)(?:{_SECRET_STRING}|-?\d+(?:\.\d+)?|null|true|false)',
+    r'("[^"]*?(?:brand|manufacturer|make|model|serial|s/?n)[^"]*"\s*:\s*)'
+    rf"(?:{_SECRET_STRING}|\[[^\]]*\]?|\{{[^}}]*\}}?|[^,}}\]]*)",
     re.IGNORECASE,
 )
 
@@ -68,15 +73,41 @@ def _as_text(value: Any, depth: int = 0) -> str | None:
     return None
 
 
+def _printable(text: str) -> str:
+    """Drop C0/C1 controls, lone surrogates (they made the response 500) and the
+    bidi embedding/override/isolate controls. RLM/LRM, ZWJ/ZWNJ stay."""
+    return "".join(
+        ch
+        for ch in text
+        if unicodedata.category(ch) not in ("Cc", "Cs")
+        and not ("\u202a" <= ch <= "\u202e" or "\u2066" <= ch <= "\u2069")
+    )
+
+
+def _cut(text: str, limit: int) -> str:
+    """At most `limit` code points, never ending inside a combining or ZWJ sequence."""
+    if len(text) <= limit:
+        return text
+    end = limit
+    while end > 0 and (
+        unicodedata.combining(text[end])
+        or text[end] == "\u200d"
+        or text[end - 1] == "\u200d"
+        or "\ufe00" <= text[end] <= "\ufe0f"
+    ):
+        end -= 1
+    return text[:end].rstrip()
+
+
 def clean_identity(value: Any) -> str:
     """Trim, drop unreadable placeholders, hard-cut to MAX_IDENTITY characters."""
     text = _as_text(value)
     if text is None:
         return ""
-    text = text.strip()
+    text = _printable(text).strip()
     if not text or text.casefold() in _UNREADABLE:
         return ""
-    return text[:MAX_IDENTITY]
+    return _cut(text, MAX_IDENTITY)
 
 
 def _sources(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -116,10 +147,7 @@ def _redact_inplace(obj: Any) -> None:
     if isinstance(obj, dict):
         for key, value in list(obj.items()):
             if _norm_key(key) in _SENSITIVE:
-                if isinstance(value, dict) and "value" in value:
-                    value["value"] = "[redacted]"
-                else:
-                    obj[key] = "[redacted]"
+                obj[key] = "[redacted]"
             else:
                 _redact_inplace(value)
     elif isinstance(obj, list):

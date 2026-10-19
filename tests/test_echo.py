@@ -128,32 +128,31 @@ def test_identity_missing_null_empty_long_and_unusual(make_client, monkeypatch):
         )
     ).json()
     assert nested["brand"] == "Bosch"
-    assert nested["model_number"] == weird
+    assert nested["model_number"] == weird[2:]  # C0 controls dropped, RLM kept
     assert nested["serial_number"] == ""
 
 
-def test_echo_state_cold_loading_warm_on_info_and_healthz(make_client):
+def test_echo_state_warm_when_idle_and_loading_during_a_switch(make_client):
     c = make_client(ALLOWED_MODELS="moondream")
     info = c.get("/v1/info").json()
     health = c.get("/healthz")
-    assert health.status_code == 200 and health.json()["status"] == "ok"
+    assert health.status_code == 200 and health.json() == {"status": "ok"}
 
     def states(body):
         return {m["id"]: m["state"] for m in body["models"]}
 
-    assert states(info) == states(health.json()) == {"echo": "loading", "moondream": "cold"}
+    # The default is already resident, so it is warm before the first suggest.
+    assert states(info) == {"echo": "warm", "moondream": "cold"}
     assert info["models"][0]["loaded"] is True
     post_image(c)
     assert states(c.get("/v1/info").json())["echo"] == "warm"
-    assert states(c.get("/healthz").json())["echo"] == "warm"
-    # Never warm before the answer: a switch still loading is "loading".
+    # A switch still loading stays "loading" until that suggest finishes.
     slow = make_client(ALLOWED_MODELS="moondream", ECHO_LOAD_MS="5000", BACKEND_TIMEOUT_S="2")
     assert post_image(slow, context=json.dumps({"model": "moondream"})).status_code == 503
     during = {m["id"]: m for m in slow.get("/v1/info").json()["models"]}
     assert during["moondream"]["state"] == "loading" and during["moondream"]["loaded"] is False
     assert during["echo"]["state"] == "cold"
-    assert states(slow.get("/healthz").json())["moondream"] == "loading"
+    assert slow.get("/healthz").json() == {"status": "ok"}
     slow.app.state.backend._ready_at = 0.0
     assert post_image(slow, context=json.dumps({"model": "moondream"})).status_code == 200
     assert states(slow.get("/v1/info").json())["moondream"] == "warm"
-    assert states(slow.get("/healthz").json())["moondream"] == "warm"

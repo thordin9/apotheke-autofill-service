@@ -220,7 +220,7 @@ def test_echo_info_models(make_client):
     body = assert_contract(c.get("/v1/info"), "/v1/info")
     assert body["ready"] is True
     assert body["models"] == [
-        {"id": QWEN, "default": True, "loaded": True, "state": "loading"},
+        {"id": QWEN, "default": True, "loaded": True, "state": "warm"},
         {"id": MOON, "default": False, "loaded": False, "state": "cold"},
     ]
 
@@ -930,34 +930,37 @@ def _states(body):
     return {m["id"]: m for m in body["models"]}
 
 
-def test_state_is_loading_while_resident_and_warm_only_after_suggest(oclient, fake):
-    # F4: /api/ps lists the model while it is still loading. loaded may be
-    # true; state must not be warm until a suggest for that model finishes.
+def test_state_is_loading_while_resident_until_a_load_or_suggest_finishes(oclient, fake):
+    # F4: /api/ps lists the model while it is still loading. With warm-up off
+    # and no background load of our own, loaded may be true and state stays
+    # loading until a suggest for that model finishes.
     fake.loaded = [QWEN]
     fake.release.clear()
     c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45")
     before = _states(c.get("/v1/info").json())
     assert before[QWEN]["loaded"] is True and before[QWEN]["state"] == "loading"
     assert before[MOON]["state"] == "cold" and before[MOON]["loaded"] is False
-    assert _states(c.get("/healthz").json())[QWEN]["state"] == "loading"
+    assert c.get("/healthz").json() == {"status": "ok"}
     results: list = []
     t = _post_in_thread(c, results, ctx())
     assert _wait(lambda: len(fake.chats()) == 1)
     mid = _states(c.get("/v1/info").json())
     assert mid[QWEN]["loaded"] is True and mid[QWEN]["state"] == "loading"
-    assert _states(c.get("/healthz").json())[QWEN]["state"] == "loading"
+    assert "models" not in c.get("/healthz").json()
     fake.release.set()
     t.join(5)
     assert results[0].status_code == 200
     warm = _states(c.get("/v1/info").json())
     assert warm[QWEN]["state"] == "warm" and warm[QWEN]["loaded"] is True
-    assert _states(c.get("/healthz").json())[QWEN]["state"] == "warm"
     fake.loaded = []
     assert _states(c.get("/v1/info").json())[QWEN]["state"] == "cold"
+    # That read starts a background reload. Once it finishes, the model is warm
+    # when /api/ps lists it again, without another suggest.
+    b = c.app.state.backend
+    assert _wait(lambda: model_key(QWEN) in b._succeeded and b._loading is None)
     fake.loaded = [QWEN]
     again = _states(c.get("/v1/info").json())[QWEN]
-    assert again["loaded"] is True and again["state"] == "loading"
-    assert _states(c.get("/healthz").json())[QWEN]["state"] == "loading"
+    assert again["loaded"] is True and again["state"] == "warm"
 
 
 def test_size_vram_zero_degrades_healthz_for_the_production_model(oclient, fake):
@@ -971,7 +974,7 @@ def test_size_vram_zero_degrades_healthz_for_the_production_model(oclient, fake)
     health = c.get("/healthz")
     assert health.status_code == 503
     assert assert_contract(health, "/healthz")["status"] == "degraded"
-    assert _states(health.json())[QWEN]["size_vram"] == 0
+    assert health.json() == {"status": "degraded"}
     fake.size_vram = 4_000_000_000
     health = c.get("/healthz")
     assert health.status_code == 200 and health.json()["status"] == "ok"
@@ -1053,8 +1056,8 @@ def test_f6_queue_full_retry_after_includes_switch_load(oclient, fake):
     assert _wait(lambda: b._waiting == 1)
     r = post_image(c, context=ctx(model=MOON))
     assert r.status_code == 503 and "queue full" in r.json()["error"]["message"]
-    # avg 10 s x (waiting + 1) + 15 s load floor = 35
-    assert r.headers["Retry-After"] == "35"
+    # avg 10 s x (waiting + 1) + load budget 15 s + max(2 s, 30%) = 39.5 -> 40
+    assert r.headers["Retry-After"] == "40"
     fake.release.set()
     t1.join(5)
     t2.join(5)
@@ -1076,3 +1079,57 @@ def test_f6_echo_queue_full_includes_switch_load(make_client):
     assert r.headers["Retry-After"] == "4"
     t1.join(5)
     t2.join(5)
+
+
+def test_f6_queue_full_retry_after_is_capped(oclient, fake):
+    # avg 20 s x 2 + budget(22.4 s) 29.12 = 69.12 -> capped at BACKEND_TIMEOUT_S + 5.
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45", OLLAMA_QUEUE_SIZE="1")
+    b = c.app.state.backend
+    b._record(20.0)
+    b._record_load(22.4, MOON)
+    fake.release.clear()
+    results: list = []
+    t1 = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: b._in_flight == 1)
+    t2 = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: b._waiting == 1)
+    r = post_image(c, context=ctx(model=MOON))
+    fake.release.set()
+    t1.join(5)
+    t2.join(5)
+    assert r.status_code == 503 and "queue full" in r.json()["error"]["message"]
+    assert r.headers["Retry-After"] == "50"
+
+
+def test_healthz_does_not_list_models(oclient):
+    c = oclient(ALLOWED_MODELS=MOON, AUTOFILL_TOKEN="secret")
+    assert c.get("/healthz").json() == {"status": "ok"}
+    assert c.get("/v1/info").status_code == 401
+
+
+def test_warmup_marks_a_resident_model_warm_without_a_suggest(oclient, fake):
+    fake.warm_delay = 0.2
+    c = oclient(ALLOWED_MODELS=MOON, OLLAMA_WARMUP="1")
+    b = c.app.state.backend
+    b.start()
+    assert b.ready is False
+    assert _wait(lambda: b.ready)
+    entry = _states(c.get("/v1/info").json())[QWEN]
+    assert entry["loaded"] is True and entry["state"] == "warm"
+    assert fake.chats() == []
+
+
+def test_background_reload_marks_the_model_warm_when_it_finishes(oclient, fake):
+    fake.loaded = []
+    fake.track_loads = True
+    fake.warm_delay = 0.4
+    c = oclient(ALLOWED_MODELS=MOON)
+    b = c.app.state.backend
+    assert c.get("/v1/info").json()["ready"] is False
+    assert _wait(lambda: b._loading is not None)
+    assert _wait(lambda: _states(c.get("/v1/info").json())[QWEN]["loaded"] is True)
+    assert _states(c.get("/v1/info").json())[QWEN]["state"] == "loading"
+    assert _wait(lambda: model_key(QWEN) in b._succeeded and b._loading is None)
+    done = _states(c.get("/v1/info").json())[QWEN]
+    assert done["state"] == "warm" and done["loaded"] is True
+    assert fake.chats() == []

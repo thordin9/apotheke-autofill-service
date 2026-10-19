@@ -3,31 +3,38 @@
 All notable changes to this service. The HTTP contract is versioned
 separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
-## Unreleased
+## [1.3.0]
 
 ### Added
 
 - **Suggest `brand`, `model_number`, `serial_number` (API v1.3).** The Ollama
-  prompt and `format` schema are the Feature 9 v3_lean text: the chosen
-  prompt and schema for these fields, with accuracy unchanged versus the
-  Feature 9 sweep. Successful suggestions include the three strings (trimmed,
-  hard-cut to 128 characters, `""` when missing or unreadable). Name, category,
-  tags and description are unchanged. The values are never logged, including
-  with `OLLAMA_LOG_RAW=1`. GPU-confirmed warm medians for the production model
-  `qwen2.5vl-jetson:3b`, 19 photos each: base-560 8.58 s, v3_lean-560 9.27 s
-  (+0.69 s); base-1024 13.89 s, v3_lean-1024 14.62 s (+0.73 s).
-  Echo exposes them through `ECHO_BRAND`, `ECHO_MODEL_NUMBER` and
-  `ECHO_SERIAL_NUMBER` (`json:` prefix for null or a nested value).
+  prompt and `format` schema are the Feature 9 v3_lean text when the client
+  sends no `context.categories`: that prompt matches the winning bench file,
+  and the schema caps tags at 3 and the description at 100 characters.
+  Client categories replace that bench list in the prompt and the schema enum
+  (trimmed, de-duplicated, at most 50). HTTP response clamps stay name ≤120,
+  category ≤80, at most 10 tags of ≤40 characters, and description ≤500.
+  Successful suggestions include the three strings (trimmed, controls and lone
+  surrogates dropped, hard-cut to 128 characters, `""` when missing or
+  unreadable). The values are never logged, including with `OLLAMA_LOG_RAW=1`
+  and when the raw answer is truncated or uses spaced keys. GPU-confirmed warm
+  medians for the production model `qwen2.5vl-jetson:3b`, 19 photos each:
+  base-560 8.58 s, v3_lean-560 9.27 s (+0.69 s); base-1024 13.89 s,
+  v3_lean-1024 14.62 s (+0.73 s). Echo exposes them through `ECHO_BRAND`,
+  `ECHO_MODEL_NUMBER` and `ECHO_SERIAL_NUMBER` (`json:` prefix for null or a
+  nested value).
 
-- **Per-model `state` and `size_vram`.** `models` entries gain `state`
-  (`cold` | `loading` | `warm`). `loaded` still means "listed in `/api/ps`"
-  (resident or still loading). `state` is `warm` only after a suggest for that
-  model has finished successfully since the last load. `size_vram` is the
-  byte count from `/api/ps`, the source of truth for GPU residency.
-  `/healthz` lists the same model entries when `ALLOWED_MODELS` is set, and
-  answers `503` `{"status":"degraded"}` when a warm model or the loaded
-  production model has `size_vram` 0, which is what a CPU-only runner looks
-  like after Ollama starts before CUDA.
+- **Per-model `state` and `size_vram`.** `models` entries on `GET /v1/info`
+  gain `state` (`cold` | `loading` | `warm`). `loaded` still means "listed in
+  `/api/ps`" (resident or still loading). `state` is `warm` after a background
+  load of that model finishes successfully (startup warm-up or a later reload)
+  or after a suggest for it finishes successfully. A model that is only listed
+  in `/api/ps` stays `loading`. `size_vram` is the byte count from `/api/ps`,
+  the source of truth for GPU residency. `/healthz` stays status-only
+  (`{"status":"ok"}` or `503 {"status":"degraded"}`) and does not list models.
+  It answers degraded when a warm model or the loaded production model has
+  `size_vram` 0, which is what a CPU-only runner looks like after Ollama
+  starts before CUDA.
 
 ### Fixed
 
@@ -36,7 +43,8 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   with `503` and `Retry-After` when the remaining load would push it past 90%
   of `BACKEND_TIMEOUT_S`, instead of being admitted and later timing out.
 - **Queue-full / switch-busy `Retry-After` omitted the switch load (F6).**
-  That value now adds the load estimate of the model being switched to.
+  That value now adds the load budget of the model being switched to (estimate
+  plus max(2 s, 30%)) and is capped at `BACKEND_TIMEOUT_S` + 5 s.
 
 ### Documentation
 

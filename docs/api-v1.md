@@ -28,17 +28,16 @@ token returns `401` JSON `{"error":{"code":"unauthorized",...}}`. If
 No auth. → `200 {"status":"ok"}` when the process can serve.
 
 Ollama reads `GET /api/ps` for this probe (a failure leaves the probe at
-`ok`, so a down Ollama does not by itself fail liveness). When `ALLOWED_MODELS`
-is set the body also lists `models`, the same entries as `/v1/info` (`loaded`,
-`state`, `size_vram`), so a client can see **cold → loading → warm** here as
-well as on `/v1/info`.
+`ok`, so a down Ollama does not by itself fail liveness). The body is
+`{"status":"ok"}` or `{"status":"degraded"}` only. Model ids, `state`,
+`size_vram` and latency are on `GET /v1/info`, which requires auth when
+`AUTOFILL_TOKEN` is set.
 
-`503 {"status":"degraded"}` (models included when they are listed) means a
-model that is **warm**, or the loaded production model, is in Ollama's memory
-with `size_vram` **0**. The runner has no GPU memory. That is what happens
-when Ollama starts before CUDA and falls back to CPU. `size_vram` is the
-source of truth; a missing `size_vram` does not degrade the probe. Echo never
-reports degraded.
+`503 {"status":"degraded"}` means a model that is **warm**, or the loaded
+production model, is in Ollama's memory with `size_vram` **0**. The runner
+has no GPU memory. That is what happens when Ollama starts before CUDA and
+falls back to CPU. `size_vram` is the source of truth; a missing `size_vram`
+does not degrade the probe. Echo never reports degraded.
 
 ### `GET /v1/info`
 Used by Apotheke's "Test connection". Requires auth when enabled, so a wrong
@@ -92,12 +91,14 @@ load (finding F4). Clients **must use `state`**, not `loaded`:
 | `state` | Meaning |
 |---|---|
 | `cold` | Not in `/api/ps`. |
-| `loading` | In `/api/ps`, but no `/v1/suggest` for this model has finished successfully since it entered `/api/ps` or since the last load. `loaded` may already be `true`. |
-| `warm` | At least one suggest for this model has finished successfully since that load. |
+| `loading` | In `/api/ps`, and this process has not yet finished a background load or a `/v1/suggest` for this model since it entered `/api/ps`. `loaded` may already be `true` while the runner is still starting. |
+| `warm` | A background load of this model finished successfully (startup warm-up or a later reload), or a `/v1/suggest` for it finished successfully, since that residency. |
 
-`state` is absent when `/api/ps` could not be read. It is never `warm` before
-that first successful answer. `size_vram: 0` on a warm model, or on the loaded
-production model, makes `/healthz` **degraded** (see above).
+`state` is absent when `/api/ps` could not be read. A row in `/api/ps` by
+itself leaves the model `loading`. Echo starts its default model `warm`
+because that model is already resident; a switch stays `loading` until the
+suggest that loaded it finishes. `size_vram: 0` on a warm model, or on the
+loaded production model, makes `/healthz` **degraded** (see above).
 
 ### `POST /v1/suggest`
 `multipart/form-data`:
@@ -127,20 +128,31 @@ Response `200`, every field optional; `confidence` is in `[0,1]` and optional:
 Old clients ignore it.
 
 `brand`, `model_number` and `serial_number` (v1.3, optional strings) are text
-printed on the item and clearly readable in the photo. Each is trimmed and
-hard-cut to 128 characters. Missing or unreadable is `""`, not an omitted
+printed on the item and clearly readable in the photo. Each is trimmed,
+stripped of C0/C1 controls, lone surrogates and bidi embedding, override and
+isolate characters, and hard-cut to 128 characters without ending inside a
+combining sequence. Missing or unreadable is `""`, not an omitted
 field, on a suggestion that has other fields. They are absent on a `{}` "no
 suggestions" body. Old clients ignore them. The service never writes these
-values to its logs, including when `OLLAMA_LOG_RAW=1`. The Ollama prompt and
-`format` schema are the Feature 9 **v3_lean** text (fixed category list, tags
-at most 3, these three fields required with schema `maxLength` 30). v3_lean is
-the chosen prompt and schema for brand, model number and serial; accuracy is
-unchanged versus the Feature 9 sweep. GPU-confirmed warm medians for the
-production model `qwen2.5vl-jetson:3b`, 19 photos each: base-560 8.58 s,
-v3_lean-560 9.27 s (+0.69 s); base-1024 13.89 s, v3_lean-1024 14.62 s
-(+0.73 s). The HTTP fields stay additive: name, category, tags and description
-keep their shape, and a category is still snapped to `context.categories` when
-the client sent them.
+values to its logs, including when `OLLAMA_LOG_RAW=1`. Logged text drops
+identity values even when the key has spaces (`"Brand Name"`), the JSON is
+truncated, or the value is an object. The Ollama prompt and `format` schema
+are the Feature 9 **v3_lean** text when the client sends no
+`context.categories`: that prompt matches
+`bench/results/brandserial-2026-10-19/prompts/v3_lean.txt` once that file's
+trailing newline is removed. The schema then asks for at most
+3 tags and a description of at most 100 characters, and requires `brand`,
+`model_number` and `serial_number` with schema `maxLength` 30. When the client
+sends `context.categories`, that list (trimmed, de-duplicated, at most 50)
+replaces the bench list in the category line and in the schema enum. v3_lean
+is the chosen prompt and schema for brand, model number and serial; accuracy
+matches the Feature 9 sweep. GPU-confirmed warm medians for the production
+model `qwen2.5vl-jetson:3b`, 19 photos each: base-560 8.58 s, v3_lean-560
+9.27 s (+0.69 s); base-1024 13.89 s, v3_lean-1024 14.62 s (+0.73 s). HTTP
+clamps on the response stay name ≤120, category ≤80, at most 10 tags of ≤40
+characters, and description ≤500. The tighter tag and description caps apply
+to the schema sent to Ollama when `OLLAMA_JSON_FORMAT=schema`. A category is
+still snapped to `context.categories` when the client sent them.
 
 ### Choosing a model (v1.2)
 
@@ -204,8 +216,10 @@ the client sent them.
   `Retry-After` instead.
 - **Queue-full and switch-busy `Retry-After` includes the switch load (F6).**
   It is the in-flight model's average generation time times (requests ahead),
-  plus the refused request's load estimate when that request is for a
-  different model. It is no longer only `avg × (waiting + 1)`.
+  plus the refused request's load budget when that request is for a different
+  model: the load estimate (at least 15 s) plus a margin of max(2 s, 30%).
+  The value is capped at `BACKEND_TIMEOUT_S` + 5 s, the same cap as a cold
+  start, so a client timeout of 50 s still retries a 45 s backend.
 - Timings (`avg_latency_ms`, the recent-answer window, the load estimate) are
   kept **per model**. The top-level `avg_latency_ms` stays the default model's.
 - Image size is the client's choice from `image_sizes`; the service never
@@ -243,13 +257,16 @@ being absent.
   requests without `context.model` behave as before.
 - **v1.3:** optional `brand`, `model_number` and `serial_number` strings on
   `POST /v1/suggest` (empty string when unreadable; ignored by older clients,
-  including Apotheke 2.4.1). The Ollama prompt and schema are Feature 9
-  v3_lean (accuracy unchanged versus that sweep). GPU-confirmed warm medians
-  for `qwen2.5vl-jetson:3b`, 19 photos each: base-560 8.58 s, v3_lean-560
-  9.27 s (+0.69 s); base-1024 13.89 s, v3_lean-1024 14.62 s (+0.73 s).
-  Optional per-model `state` (`cold` | `loading` | `warm`) and `size_vram`
-  (bytes from Ollama `/api/ps`) on `models` entries.
-  Use `state`, not `loaded`, to tell when a model is ready for fast inference.
-  `GET /healthz` lists those model entries when `ALLOWED_MODELS` is set, and
-  answers `503` `{"status":"degraded"}` when a warm model or the loaded
-  production model has `size_vram` 0 (Ollama started before CUDA and is on CPU).
+  including Apotheke 2.4.1). With no `context.categories`, the Ollama prompt
+  and schema are Feature 9 v3_lean (accuracy matches that sweep); client
+  categories replace the bench list in the prompt and schema enum when sent.
+  The schema caps tags at 3 and description at 100 characters. HTTP clamps
+  stay name ≤120, category ≤80, 10 tags, description ≤500. GPU-confirmed warm
+  medians for `qwen2.5vl-jetson:3b`, 19 photos each: base-560 8.58 s,
+  v3_lean-560 9.27 s (+0.69 s); base-1024 13.89 s, v3_lean-1024 14.62 s
+  (+0.73 s). Optional per-model `state` (`cold` | `loading` | `warm`) and
+  `size_vram` (bytes from Ollama `/api/ps`) on `models` entries in
+  `GET /v1/info`. `state` is `warm` after a successful background load or a
+  successful suggest. `GET /healthz` answers `503` `{"status":"degraded"}`
+  when a warm model or the loaded production model has `size_vram` 0 (Ollama
+  started before CUDA and is on CPU) and does not list models.
