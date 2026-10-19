@@ -66,7 +66,8 @@ jobs:
           tar -xzf "$tmp/$file" -C "$tmp" gitleaks
           install -m 0755 "$tmp/gitleaks" "$RUNNER_TEMP/gitleaks"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-          gitleaks version
+          # GITHUB_PATH applies only to later steps.
+          "$RUNNER_TEMP/gitleaks" version
 
       - name: Scan git history
         run: gitleaks detect --source . --config .gitleaks.toml --redact --exit-code 1
