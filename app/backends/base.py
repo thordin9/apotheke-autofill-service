@@ -28,8 +28,13 @@ class Backend(ABC):
 
 
 class Busy(BackendUnavailable):
-    """Not now: warming up, loading a model or busy (503 + Retry-After)."""
+    """Not now: warming up, loading a model or busy (503 + Retry-After).
 
-    def __init__(self, message: str, retry_after: int):
+    `reason` is "cold" for warm-up and model load, and "busy" for a full queue
+    or a request that would time out waiting. Failover treats those differently.
+    """
+
+    def __init__(self, message: str, retry_after: int, *, reason: str = "busy"):
         super().__init__(message)
         self.headers = {"Retry-After": str(retry_after)}
+        self.reason = reason

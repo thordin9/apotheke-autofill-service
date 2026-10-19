@@ -27,11 +27,16 @@ token returns `401` JSON `{"error":{"code":"unauthorized",...}}`. If
 ### `GET /healthz`
 No auth. → `200 {"status":"ok"}` when the process can serve.
 
-Ollama reads `GET /api/ps` for this probe (a failure leaves the probe at
-`ok`, so a down Ollama does not by itself fail liveness). The body is
-`{"status":"ok"}` or `{"status":"degraded"}` only. Model ids, `state`,
-`size_vram` and latency are on `GET /v1/info`, which requires auth when
-`AUTOFILL_TOKEN` is set.
+Ollama reads `GET /api/ps` for this probe. A failed read keeps the last
+result: the probe stays `ok` when it has not already seen a degraded
+residency, and it stays `degraded` when that was the last successful read.
+A down Ollama therefore does not by itself flip a healthy probe. The body
+is `{"status":"ok"}` or `{"status":"degraded"}`. When the primary is
+degraded and a configured fallback can serve, the body is
+`{"status":"degraded","serving":"fallback"}` and the status is still 503
+(a deploy check that treats 503 as unhealthy keeps working). Model ids,
+`state`, `size_vram` and latency are on `GET /v1/info`, which requires auth
+when `AUTOFILL_TOKEN` is set.
 
 `503 {"status":"degraded"}` means a model that is **warm**, or the loaded
 production model, is in Ollama's memory with `size_vram` **0**. The runner
@@ -61,7 +66,8 @@ its typical generation time:
 | `name` | yes | Human-readable service/backend name, e.g. `moondream-jetson` |
 | `version` | yes | Always `"1"` |
 | `capabilities` | yes | Subset of `name`, `tags`, `category`, `description` |
-| `backend` | no | Adapter id (`echo`, `ollama`, …) |
+| `backend` | no | Adapter id of the primary (`echo`, `ollama`, `cloudflare`, …) |
+| `backends` | no | *Added in v1.4, optional.* `primary` (`id`, `state` of `ok`, `warming`, `degraded`, `unavailable`) and `fallback` (`id` of `none` or `cloudflare`, `state` of `off` or `ready`, `can_serve`). `can_serve` is true only when a fallback is configured. Absent on servers older than v1.4. |
 | `max_image_bytes` | no | Upload limit; clients may skip the call for larger images |
 | `ready` | no | `false` while the backend is still loading its model (e.g. Ollama warm-up); `/v1/suggest` then answers `503` with `Retry-After`. Also `false` when Ollama has since unloaded the model: the service then reloads it in the background, and `/v1/suggest` still works but its first answer is slower. Absent or `true` means ready. |
 | `avg_latency_ms` | no | *Added in v1.1, optional; clients MUST tolerate its absence.* Non-negative integer: the **default model's** typical time in milliseconds for one `/v1/suggest` generation on the loaded model, model load time excluded. Ollama reports a moving average of recent requests (70% previous, 30% latest), so the field is **absent until the first suggestion has finished** after a service start. Echo reports `ECHO_DELAY_MS` when it is above 0. Meant for estimated progress bars: fill by elapsed time against this value, hold below 100% until the answer arrives, and fall back to an indeterminate spinner when absent. It is not a deadline: cold starts (model load), queueing and the plain-text retry can take longer. |
@@ -125,7 +131,11 @@ Response `200`, every field optional; `confidence` is in `[0,1]` and optional:
 ```
 
 `model_used` (v1.2, optional string) names the model that produced the answer.
-Old clients ignore it.
+When Cloudflare served the request it is that Cloudflare model id, not the
+Ollama tag. Old clients ignore it.
+
+`backend_used` (v1.4, optional string, `ollama` or `cloudflare`) names which
+backend produced the answer. Echo omits it. Old clients ignore it.
 
 `brand`, `model_number` and `serial_number` (v1.3, optional strings) are text
 printed on the item and clearly readable in the photo. Each is trimmed,
@@ -255,6 +265,13 @@ being absent.
   `context.model` in `POST /v1/suggest`, answered with optional `model_used`.
   Without `ALLOWED_MODELS` / `IMAGE_SIZES` set, `/v1/info` is unchanged, and
   requests without `context.model` behave as before.
+- **v1.4:** optional `backend_used` (`ollama` or `cloudflare`) on
+  `POST /v1/suggest`. `model_used` is the Cloudflare model id when Cloudflare
+  answered. Optional `backends` on `GET /v1/info` lists the primary and the
+  fallback (`can_serve` is false when no fallback is configured). `GET /healthz`
+  is unchanged except when the primary is degraded and the fallback can serve:
+  the body is `{"status":"degraded","serving":"fallback"}` with HTTP 503.
+  `version` stays `"1"`.
 - **v1.3:** optional `brand`, `model_number` and `serial_number` strings on
   `POST /v1/suggest` (empty string when unreadable; ignored by older clients,
   including Apotheke 2.4.1). With no `context.categories`, the Ollama prompt

@@ -3,7 +3,39 @@
 All notable changes to this service. The HTTP contract is versioned
 separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
-## [1.3.0]
+## [1.4.0] - 2026-10-19
+
+### Added
+
+- **Optional Cloudflare Workers AI backend (API v1.4).** `BACKEND=cloudflare`
+  calls the Workers AI REST API directly. `FALLBACK_BACKEND=cloudflare` (default
+  `none`) fails over from Ollama on unreachable, degraded GPU residency (warm
+  model or the loaded production model at `size_vram` 0), timeout, upstream
+  5xx, and busy/queue-full. Cold/loading fails over only when
+  `FAILOVER_ON_COLD=true` (default false); Ollama warm-up keeps running and
+  traffic returns to Ollama once it is warm. Client 4xx never fails over. The
+  Ollama wait plus the Cloudflare call stays under `BACKEND_TIMEOUT_S` + 5 s.
+  Provisional default model `@cf/google/gemma-4-26b-a4b-it` (Apache 2.0, free
+  plan, vision, `response_format` JSON schema), pending ITAdvisor's accuracy
+  comparison. `CF_MODEL` stays configurable. Llama 3.2 Vision and Llama 4 Scout
+  are rejected. See [docs/cloudflare-backend.md](docs/cloudflare-backend.md).
+- **Contract.** `/v1/suggest` gains optional `backend_used` (`ollama` or
+  `cloudflare`). `model_used` is the Cloudflare model id when Cloudflare
+  served. `/v1/info` gains `backends` (primary and fallback state, and whether
+  the fallback can serve). `/healthz` stays a local probe: `503`
+  `{"status":"degraded"}`, or `{"status":"degraded","serving":"fallback"}`
+  when the primary is degraded and the fallback can serve. `version` stays
+  `"1"`.
+
+### Fixed
+
+- **Health-probe wording.** An Ollama error during `/healthz` keeps the last
+  result. It does not always leave the probe at `ok`.
+- **Category names.** Newlines in a client category are folded onto one prompt
+  line so the name cannot break the prompt.
+- **v3_lean latency.** The changelog's v3_lean cost is the measured +0.7 s.
+
+## [1.3.0] - 2026-10-19
 
 ### Added
 
@@ -50,7 +82,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 - **Brand/model/serial prompt variants and small-VLM shortlist (2026-10-19).** `docs/benchmarks.md`
   adds Feature 9 results: four prompt/schema variants on `qwen2.5vl-jetson:3b` at 560 and 1024 px.
-  Winner **`v3_lean`** (+0.8 s, fewest invented values). `v2_omit` invents heavily — do not use.
+  Winner **`v3_lean`** (+0.7 s, fewest invented values). `v2_omit` invents heavily — do not use.
   Small-model pulls: MiniCPM-V4 runs but category accuracy lags; library `gemma3:4b` needs a newer
   Ollama. InternVL3/SmolVLM2 are not inherently CPU-only. The earlier ~80–110 s/photo was the
   18:22–19:28 CPU-only Ollama boot window; after CUDA restore they run on GPU (~19.5 s InternVL,

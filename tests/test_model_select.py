@@ -17,7 +17,8 @@ from app.settings import parse_image_sizes, parse_models
 QWEN = "qwen2.5vl-jetson:3b"
 MOON = "moondream"
 QWEN3 = "qwen3-vl:2b"
-OLD_INFO_KEYS = {"name", "version", "capabilities", "backend", "max_image_bytes"}
+# v1.4 always includes `backends`. `models` and `image_sizes` stay off until configured.
+OLD_INFO_KEYS = {"name", "version", "capabilities", "backend", "max_image_bytes", "backends"}
 
 
 def ctx(**extra):

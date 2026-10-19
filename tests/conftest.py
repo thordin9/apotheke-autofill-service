@@ -44,6 +44,12 @@ _ENV = [
     "OLLAMA_JSON_FORMAT",
     "OLLAMA_LOG_RAW",
     "OLLAMA_PLAIN_RETRY",
+    "FALLBACK_BACKEND",
+    "FAILOVER_ON_COLD",
+    "CF_ACCOUNT_ID",
+    "CF_API_TOKEN",
+    "CF_MODEL",
+    "CF_TIMEOUT_S",
 ]
 
 

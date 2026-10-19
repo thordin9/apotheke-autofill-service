@@ -17,10 +17,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .backends import BackendUnavailable, create_backend
 from .backends.base import CAPABILITIES
 from .backends.echo import MalformedOutput
+from .backends.failover import CLIENT_TIMEOUT_EXTRA_S
 from .errors import ApiError, error_response
 from .identity import identity_fields
 from .imagetype import accepted_mime
-from .settings import get_settings
+from .settings import Settings, get_settings
 
 
 def create_app() -> FastAPI:
@@ -68,8 +69,13 @@ def create_app() -> FastAPI:
         return error_response(400, "bad_request", "invalid request")
 
     async def call_backend(coro):
+        # A failover router owns a budget of BACKEND_TIMEOUT_S + 5 s, which is
+        # Apotheke's client timeout, and finishes a second early itself.
+        timeout = get_settings().backend_timeout_s
+        if getattr(backend, "owns_deadline", False):
+            timeout += CLIENT_TIMEOUT_EXTRA_S
         try:
-            return await asyncio.wait_for(coro, timeout=get_settings().backend_timeout_s)
+            return await asyncio.wait_for(coro, timeout=timeout)
         except TimeoutError:
             raise ApiError(504, "backend_timeout", "backend timed out") from None
         except BackendUnavailable as exc:
@@ -90,6 +96,8 @@ def create_app() -> FastAPI:
         if isinstance(snap, dict) and snap.get("degraded") is True:
             body["status"] = "degraded"
             status = 503
+            if _fallback_can_serve(get_settings()):
+                body["serving"] = "fallback"
         # Model ids, state, VRAM and latency stay on authenticated /v1/info.
         return JSONResponse(body, status_code=status)
 
@@ -113,6 +121,7 @@ def create_app() -> FastAPI:
             out["models"] = models
         if sizes := get_settings().image_sizes:
             out["image_sizes"] = [{"long_edge": n, "recommended": rec} for n, rec in sizes]
+        out["backends"] = backend_listing(backend, data, get_settings())
         return out
 
     @app.post("/v1/suggest")
@@ -177,6 +186,36 @@ def _ms(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
 
 
+def _fallback_can_serve(settings: Settings) -> bool:
+    return settings.fallback_backend == "cloudflare"
+
+
+def _primary_state(backend: Any, info: dict[str, Any]) -> str:
+    if info.get("unavailable") is True:
+        return "unavailable"
+    degraded = getattr(backend, "degraded", None)
+    if callable(degraded) and degraded():
+        return "degraded"
+    if info.get("ready") is False:
+        return "warming"
+    return "ok"
+
+
+def backend_listing(backend: Any, info: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Primary and fallback as /v1/info reports them. No secrets."""
+    if _fallback_can_serve(settings):
+        fallback: dict[str, Any] = {"id": "cloudflare", "state": "ready", "can_serve": True}
+    else:
+        fallback = {"id": "none", "state": "off", "can_serve": False}
+    return {
+        "primary": {
+            "id": str(getattr(backend, "id", "unknown")),
+            "state": _primary_state(backend, info),
+        },
+        "fallback": fallback,
+    }
+
+
 def sanitize_models(models: Any) -> list[dict[str, Any]] | None:
     """Keep well-formed `models` entries from a backend's info, or None."""
     if not isinstance(models, list):
@@ -224,6 +263,9 @@ def sanitize(result: Any) -> dict[str, Any]:
     model_used = result.get("model_used")
     if isinstance(model_used, str) and model_used.strip():
         out["model_used"] = model_used
+    backend_used = result.get("backend_used")
+    if backend_used in ("ollama", "cloudflare"):
+        out["backend_used"] = backend_used
     idents = identity_fields(result)
     # Keep a body that had no suggestion fields as {}. Empty identity strings
     # are added on a real suggestion so old clients still see the same shape

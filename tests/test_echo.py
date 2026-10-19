@@ -15,8 +15,10 @@ from app.backends.echo import EchoBackend
 from app.main import sanitize
 
 
-def test_registry():
-    assert set(REGISTRY) == {"echo", "ollama", "clip"}
+def test_registry(monkeypatch):
+    monkeypatch.setenv("CF_ACCOUNT_ID", "acct-example-id")
+    monkeypatch.setenv("CF_API_TOKEN", "token-example-value")
+    assert set(REGISTRY) == {"echo", "ollama", "clip", "cloudflare"}
     assert all(isinstance(create_backend(n), Backend) for n in REGISTRY)
 
 

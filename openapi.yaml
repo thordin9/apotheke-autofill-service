@@ -39,7 +39,9 @@ paths:
             Degraded. A model that is warm, or the loaded production model, is
             in Ollama's memory with size_vram 0 (no GPU memory — Ollama started
             before CUDA). The process is up; it is not healthy for inference.
-            The body is status only; model ids stay on /v1/info.
+            The body is status only, plus optional `serving` when a fallback
+            can take requests. Model ids stay on /v1/info. HTTP status stays
+            503 so a deploy rollback still sees a failed probe.
           content:
             application/json:
               schema:
@@ -50,6 +52,12 @@ paths:
                   status:
                     type: string
                     const: degraded
+                  serving:
+                    type: string
+                    const: fallback
+                    description: |
+                      Added in v1.4. Present only when the primary is degraded
+                      and the configured fallback can serve. Absent otherwise.
   /v1/info:
     get:
       operationId: getInfo
@@ -152,6 +160,11 @@ components:
             IMAGE_SIZES. Long-edge presets the client may resize photos to
             before upload, ascending, exactly one `recommended: true`. The
             service does not resize; it only advertises the presets.
+        backends:
+          $ref: "#/components/schemas/Backends"
+          description: |
+            Added in v1.4 (additive). The primary backend and the optional
+            fallback, each with a state, plus whether the fallback can serve.
     ModelInfo:
       type: object
       required: [id, default]
@@ -246,6 +259,41 @@ components:
           type: string
           maxLength: 128
           description: Same rules as `brand`. Values are never written to service logs.
+        backend_used:
+          type: string
+          enum: [ollama, cloudflare]
+          description: |
+            Added in v1.4, optional. Which backend produced this answer.
+            `model_used` is that backend's model id (the Cloudflare model id
+            when `backend_used` is `cloudflare`).
+    Backends:
+      type: object
+      additionalProperties: false
+      required: [primary, fallback]
+      properties:
+        primary:
+          type: object
+          additionalProperties: false
+          required: [id, state]
+          properties:
+            id: {type: string, examples: [ollama, cloudflare, echo]}
+            state:
+              type: string
+              enum: [ok, warming, degraded, unavailable]
+        fallback:
+          type: object
+          additionalProperties: false
+          required: [id, state, can_serve]
+          properties:
+            id: {type: string, examples: [none, cloudflare]}
+            state:
+              type: string
+              enum: ["off", ready, unavailable]
+            can_serve:
+              type: boolean
+              description: |
+                True only when a fallback is configured and allowed to take
+                requests. False when FALLBACK_BACKEND is none.
     Error:
       type: object
       required: [error]
