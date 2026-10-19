@@ -26,7 +26,7 @@
 # starts: the lock wait and the settle wait share it and stop 2 s before it (kept for the check and the restart),
 # and every systemctl/tc call is bounded by `timeout` to the time left (at least 1 s). Worst case is about
 # BUDGET + 3 s (about 11 s at the default 8 s): after a slow is-enabled, show, check and restart each still get the
-# 1 s minimum. DL_CAP_HOOK_BUDGET_S must be 1-60 without a leading zero (else 8; above 60 -> 60).
+# 1 s minimum. DL_CAP_HOOK_BUDGET_S must be 1-60 without a leading zero (61-99 -> 60; anything else, incl. 3+ digits -> 8).
 # When the time runs out the fall-through is the same as above: the lock wait gives up and goes on unlocked; a
 # unit still busy or with a job is left alone; otherwise check, then restart. A systemctl call that times out
 # (PID 1 busy) counts as "don't know", and the hook leaves dl-cap alone rather than risk killing a start; so does a
@@ -62,11 +62,14 @@ t 0 systemctl is-enabled --quiet "$UNIT" 2>/dev/null; rc=$?
 
 # Serialise. The lock is released when the hook exits (fd 9 closes). If the lock can't be opened, flock is missing
 # or the lock isn't free in time, carry on unlocked; steps 2-3 still catch most duplicates.
+# 0600 (umask 077 for both opens): flock(2) works on a read-only fd, so a 0644 lock could be held by any local user.
+um=$(umask); umask 077
 if (exec 9>>"$LOCK") 2>/dev/null && command -v flock >/dev/null 2>&1; then
-  exec 9>>"$LOCK"
+  exec 9>>"$LOCK"; umask "$um"
   l=$(left "$RESERVE_S")
   if [ "$l" -lt 1 ] || ! flock -w "$l" 9; then log "lock busy until the time limit, going on unlocked"; fi
 fi
+umask "$um"
 
 # Sets $state (ActiveState) and $job (job id, empty if none) of dl-cap.service; returns 1 if systemctl timed out
 # or failed (unknown state).

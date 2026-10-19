@@ -342,6 +342,18 @@ bound "bad DL_CAP_HOOK_BUDGET_S=abc + unit stuck activating" 0 0 0 "still activa
 d1=$(sed -n 's/^DEV=\${DEV:-\([^}]*\)}.*/\1/p' "$DC"); d2=$(sed -n 's/^DEV=\([^ ]*\).*/\1/p' "$NMD")
 [ -n "$d1" ] && [ "$d1" = "$d2" ] && ok=1 || ok=0; result "nm-dispatcher: interface matches DEV in dl-cap.sh" "$ok" "dl-cap=$d1 hook=$d2"
 
+# QA #24 N1: the lock file is created 0600 by both scripts, even with a permissive umask.
+newds; sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$NMD" > "$DS/hook"; touch "$DS/tc.qdisc"; printf 'ip\nipv6\n' > "$DS/tc.filters"
+( umask 022; env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DLCAP_SH="$DC" sh "$DS/hook" eth0 up > "$DS/out" 2>&1 )
+m=$(stat -c %a "$DS/hook.lock" 2>/dev/null); [ "$m" = 600 ] && ok=1 || ok=0; result "nm-dispatcher: lock file created 0600 under umask 022" "$ok" "mode=$m"
+newds; sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$JET/dl-cap-check.sh" > "$DS/dcc"; touch "$DS/tc.qdisc"; printf 'ip\nipv6\n' > "$DS/tc.filters"
+( umask 022; env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DL_CAP_CHECK_FAILED_MARKER="$DS/failed-logged" DLCAP_SH="$DC" sh "$DS/dcc" > "$DS/out" 2>&1 )
+m=$(stat -c %a "$DS/hook.lock" 2>/dev/null); [ "$m" = 600 ] && ok=1 || ok=0; result "dl-cap-check: lock file created 0600 under umask 022" "$ok" "mode=$m"
+# QA #24 N2: an unwritable failed-unit marker must not end dl-cap-check.sh before the restart.
+newds; sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$JET/dl-cap-check.sh" > "$DS/dcc"
+env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DL_CAP_CHECK_FAILED_MARKER="$DS/no-such-dir/failed" DLCAP_SH="$DC" DLCAP_STATE=failed sh "$DS/dcc" > "$DS/out" 2>&1; rc=$?
+n=$(grep -c "restart dl-cap.service" "$DS/systemctl.log" 2>/dev/null); n=${n:-0}
+[ "$rc" = 0 ] && [ "$n" = 1 ] && ok=1 || ok=0; result "dl-cap-check: unwritable marker, unit failed -> still 1 restart, exit 0" "$ok" "exit=$rc restarts=$n"
 echo "== dl-cap-check.sh (dl-cap-check.timer safety net)"
 DCC=$JET/dl-cap-check.sh
 # dcc EXP_RC EXP_RESTARTS CAP NAME [ENV...]: run a copy of dl-cap-check.sh (DL_CAP -> repo dl-cap.sh) with the fakes.
@@ -441,7 +453,7 @@ env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DL_CAP_CHECK_FAILED_MARK
 result "  ...cap back -> marker removed, no restart (next failure is logged again)" "$ok" "exit=$rc"
 # The harness never writes the real marker (DL_CAP_CHECK_FAILED_MARKER is set in every dl-cap-check run).
 # shellcheck disable=SC2016  # literal $DS in the grep patterns
-[ "$(grep -c 'sh "$DS/dcc"' "$0")" = "$(grep -c 'DL_CAP_CHECK_FAILED_MARKER="$DS/failed-logged"' "$0")" ] && ok=1 || ok=0
+[ "$(grep -c 'sh "$DS/dcc"' "$0")" = "$(grep -c 'DL_CAP_CHECK_FAILED_MARKER="$DS/' "$0")" ] && ok=1 || ok=0
 result "dl-cap-check: every harness run sets DL_CAP_CHECK_FAILED_MARKER (no real /run)" "$ok" ""
 # L4: budget validation. 08 / 010 / 999: fall back to 8 s, logged, bounded, exit 0 (dash used to abort on 08).
 for b in 08 010 999; do

@@ -431,8 +431,8 @@ deadline, `DL_CAP_HOOK_BUDGET_S` (default 8 s) after it starts: the lock wait an
 2 s before the deadline, which is kept for the check and the restart, and every `systemctl` and `dl-cap.sh check`
 call runs under `timeout` with the time left (at least 1 s). The worst case is about the budget plus 3 s (about
 11 s at the default 8 s; 10.9 s measured), because after a slow `is-enabled` the later calls each still get the
-1 s minimum. `DL_CAP_HOOK_BUDGET_S` must be a whole number from 1 to 60 without a leading zero; anything else falls
-back to 8 s and a value above 60 is capped at 60, both with a log line. When the time runs out, the hook falls
+1 s minimum. `DL_CAP_HOOK_BUDGET_S` must be a whole number from 1 to 60 without a leading zero; 61–99 is capped at 60;
+anything else (a leading zero, 3 or more digits, not a number) falls back to 8 s, both with a log line. When the time runs out, the hook falls
 through as above: no lock means it goes on unlocked, a unit still busy or with a job is left alone,
 and otherwise it checks and restarts with `--no-block`. A `systemctl` call that times out (PID 1 busy, as in QA's
 boot observation O4) counts as unknown, and the hook leaves dl-cap alone rather than risk killing a start; the

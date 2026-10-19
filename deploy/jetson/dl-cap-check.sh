@@ -32,13 +32,16 @@ timeout "$CALL_S" systemctl is-enabled --quiet "$UNIT" 2>/dev/null; rc=$?
 [ "$rc" = 124 ] && log "systemctl is-enabled timed out; trying again next run"
 [ "$rc" = 0 ] || exit 0
 
+# 0600 (umask 077 for both opens): flock(2) works on a read-only fd, so a 0644 lock could be held by any local user.
+um=$(umask); umask 077
 if (exec 9>>"$LOCK") 2>/dev/null && command -v flock >/dev/null 2>&1; then
-  exec 9>>"$LOCK"
+  exec 9>>"$LOCK"; umask "$um"
   if ! flock -w "$LOCK_WAIT_S" 9; then
     log "lock $LOCK busy for ${LOCK_WAIT_S}s (NetworkManager hook running); trying again next run"
     exit 0
   fi
 fi
+umask "$um"
 
 if ! props=$(timeout "$CALL_S" systemctl show -p ActiveState -p Job "$UNIT" 2>/dev/null); then
   log "systemctl show timed out or failed; trying again next run"
@@ -60,7 +63,8 @@ if [ "$state" = failed ] && [ -e "$FAILED_MARKER" ]; then
   timeout "$CALL_S" systemctl --no-block restart "$UNIT" || exit 1
   exit 0
 fi
-[ "$state" = failed ] && { : > "$FAILED_MARKER"; } 2>/dev/null
+# Subshell: under dash a failed redirection on `:` would end the script before the restart.
+[ "$state" = failed ] && { ( : > "$FAILED_MARKER" ) 2>/dev/null || :; }
 log "30 Mbit/s inbound cap missing on $DEV (dl-cap.service $state); restarting dl-cap.service"
 if ! timeout "$CALL_S" systemctl --no-block restart "$UNIT"; then
   log "systemctl restart dl-cap.service failed or timed out"

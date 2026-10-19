@@ -29,7 +29,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   dropped) on a guess; both log `dl-cap.sh check timed out`. L3: the lock moved from world-writable `/run/lock` to
   root-only `/run/dl-cap-hook.lock` in both scripts. L4: `DL_CAP_HOOK_BUDGET_S` must be 1–60 without a leading
   zero; `08`, `010` or long values used to abort the hook under dash or be read as octal, now they fall back to
-  8 s (above 60 is capped) with a log line. L5: a `dl-cap.service` stuck in `failed` is still restarted on every
+  8 s (61–99 is capped at 60, 100 and up fall back to 8 s) with a log line. The lock file is now created 0600. L5: a `dl-cap.service` stuck in `failed` is still restarted on every
   timer run but logged once per boot (marker `/run/dl-cap-check.failed-logged`, configurable with
   `DL_CAP_CHECK_FAILED_MARKER`, removed once the cap is back). L6: the docs no longer say a reboot shows a hook
   restart of dl-cap; a normal boot has none. Harness tests for each.
