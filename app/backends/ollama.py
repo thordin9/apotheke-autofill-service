@@ -1014,6 +1014,17 @@ class OllamaBackend(Backend):
         """A background load finished, so the model is warm before any suggest."""
         self._succeeded.add(model_key(model))
 
+    def residency(self) -> str:
+        """cold, loading, or warm for the configured model.
+
+        `/api/ps` has never answered, or the model is absent: cold. Failover
+        reserves the cold budget for cold and for loading.
+        """
+        state = self._state_of(self.model)
+        if state in ("warm", "loading", "cold"):
+            return state
+        return "cold"
+
     def _state_of(self, model: str) -> str | None:
         """cold | loading | warm, or None when /api/ps has never answered.
 

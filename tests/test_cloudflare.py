@@ -191,7 +191,8 @@ def test_missing_credentials_do_not_echo_values(monkeypatch):
 def test_rejected_llama_models_refuse_startup(monkeypatch):
     monkeypatch.setenv("CF_ACCOUNT_ID", ACCOUNT)
     monkeypatch.setenv("CF_API_TOKEN", TOKEN)
-    for model in (LLAMA_32, LLAMA_4, f"@cf/meta/llama-4-scout-{TOKEN}"):
+    mixed = "@CF/META/Llama-4-Scout-17b-16e-instruct"
+    for model in (LLAMA_32, LLAMA_4, mixed, f"@cf/meta/llama-4-scout-{TOKEN}"):
         monkeypatch.setenv("CF_MODEL", model)
         with pytest.raises(RuntimeError) as exc:
             create_backend("cloudflare")
@@ -225,7 +226,7 @@ def test_structured_modes_and_rejected_prefixes():
     assert structured_mode(MODEL) == "response_format"
     assert structured_mode(QWEN) == "response_format"
     assert structured_mode("@cf/qwen/qwen3-vl-2b") == "response_format"
-    assert structured_mode(MISTRAL) == "guided_json"
+    assert structured_mode(MISTRAL) == "response_format"
     assert structured_mode(UNLISTED) is None
     assert structured_mode(LLAMA_32) is None
     assert structured_mode(LLAMA_4) is None
@@ -247,6 +248,59 @@ def test_encode_long_edge_and_byte_cap():
     assert encode_for_cloudflare(JPEG) is None
     assert encode_for_cloudflare(WIDE) is not None
     assert len(encode_for_cloudflare(WIDE)) <= CF_IMAGE_MAX_BYTES
+
+
+def test_exif_orientation_is_applied_before_the_long_edge():
+    from PIL import ImageOps
+
+    image = Image.new("RGB", (30, 80), (10, 20, 30))
+    image.putpixel((0, 0), (255, 0, 0))
+    exif = Image.Exif()
+    exif[0x0112] = 6  # right side is the top of the scene
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", exif=exif)
+    raw = buf.getvalue()
+    upright = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
+    assert upright is not None and upright.size == (80, 30)
+    encoded = encode_for_cloudflare(raw)
+    assert encoded is not None
+    out = Image.open(io.BytesIO(encoded))
+    out.load()
+    assert out.size == upright.size
+    assert out.getpixel((0, 0)) == upright.convert("RGB").getpixel((0, 0))
+
+
+def test_child_logger_secrets_are_scrubbed(monkeypatch, caplog):
+    monkeypatch.setenv("CF_ACCOUNT_ID", ACCOUNT)
+    monkeypatch.setenv("CF_API_TOKEN", TOKEN)
+    CloudflareBackend()
+    child = logging.getLogger("app.backends.child_probe")
+    with caplog.at_level(logging.INFO):
+        child.info("outbound failed token=%s account=%s", TOKEN, ACCOUNT)
+    assert TOKEN not in caplog.text
+    assert ACCOUNT not in caplog.text
+    assert "***" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("CF_TIMEOUT_S", "0"),
+        ("CF_TIMEOUT_S", "-3"),
+        ("CF_TIMEOUT_S", "nan"),
+        ("CF_TIMEOUT_S", "inf"),
+        ("REQUEST_DEADLINE_S", "0"),
+        ("REQUEST_DEADLINE_S", "nan"),
+        ("OLLAMA_WARM_RESERVE_S", "inf"),
+        ("OLLAMA_COLD_RESERVE_S", "-1"),
+    ],
+)
+def test_timeout_and_deadline_reject_non_positive_and_non_finite(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(RuntimeError, match=name) as caught:
+        get_settings()
+    if value in ("nan", "inf"):
+        assert value not in str(caught.value).lower()
 
 
 def test_attempt_budgets_stay_under_the_client_timeout():
@@ -271,7 +325,12 @@ def test_primary_info_and_suggest(make_client, cf_route):
     info = assert_contract(client.get("/v1/info"), "/v1/info")
     assert info["version"] == "1"
     assert info["backend"] == "cloudflare"
-    assert info["backends"]["primary"] == {"id": "cloudflare", "state": "ok"}
+    assert info["backends"]["primary"]["id"] == "cloudflare"
+    assert info["backends"]["primary"]["state"] == "ok"
+    assert info["backends"]["primary"]["model"] == MODEL
+    assert info["backends"]["primary"]["budget"]["limit"] == 6000
+    assert info["backends"]["primary"]["budget"]["remaining"] == 6000
+    assert "reason" not in info["backends"]["primary"]["budget"]
     assert info["backends"]["fallback"] == {"id": "none", "state": "off", "can_serve": False}
     assert client.get("/healthz").json() == {"status": "ok"}
 
@@ -289,6 +348,8 @@ def test_primary_info_and_suggest(make_client, cf_route):
     assert "guided_json" not in payload
     assert payload["response_format"]["type"] == "json_schema"
     assert payload["response_format"]["json_schema"] == build_schema({})
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["max_tokens"] == 1024
     text = payload["messages"][0]["content"][0]["text"]
     assert "JSON schema:" not in text
     image = _jpeg_from(call)
@@ -304,13 +365,14 @@ def test_png_is_reencoded_to_jpeg(make_client, cf_route):
     assert max(image.size) == CF_LONG_EDGE
 
 
-def test_guided_json_payload(make_client, cf_route):
+def test_mistral_uses_response_format_not_guided_json(make_client, cf_route):
     cf_route.return_value = _ok()
     client = make_client(BACKEND="cloudflare", **_cf_env(CF_MODEL=MISTRAL))
     assert post_image(client, data=PHOTO).status_code == 200
     payload = _body(cf_route.calls.last)
-    assert payload["guided_json"] == build_schema({})
-    assert "response_format" not in payload
+    assert payload["response_format"]["json_schema"] == build_schema({})
+    assert "guided_json" not in payload
+    assert "chat_template_kwargs" not in payload
 
 
 def test_unknown_model_repairs_once(make_client, cf_route):
@@ -389,10 +451,16 @@ def test_upstream_5xx_counts_as_transient(make_client, cf_route):
 
 
 @pytest.mark.parametrize(
-    "payload",
-    [b"not-json", {"success": True, "result": {}}, {"result": {"response": "  "}}, {"result": ""}],
+    ("payload", "calls"),
+    [
+        (b"not-json", 1),
+        ({"success": True, "result": {}}, 2),
+        ({"result": {"response": "  "}}, 2),
+        ({"result": ""}, 2),
+    ],
 )
-def test_malformed_or_empty_is_one_call(make_client, cf_route, payload):
+def test_empty_reply_is_repaired_once(make_client, cf_route, payload, calls):
+    """A non-JSON body cannot be repaired. An empty reply gets exactly one repair."""
     if isinstance(payload, bytes):
         cf_route.return_value = httpx.Response(200, content=payload)
     else:
@@ -402,7 +470,7 @@ def test_malformed_or_empty_is_one_call(make_client, cf_route, payload):
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "backend_error"
     assert "unusable" in response.json()["error"]["message"]
-    assert cf_route.call_count == 1
+    assert cf_route.call_count == calls
     assert client.app.state.backend.transient_failures == 0
 
 
@@ -456,6 +524,9 @@ def test_usage_counts_are_logged_and_brand_is_not(make_client, cf_route, caplog)
     assert body["model_number"] == ""
     assert body["serial_number"] == "sn-should-not-log"
     assert "neurons=29" in caplog.text
+    usage_logs = [rec for rec in caplog.records if "cloudflare usage" in rec.getMessage()]
+    assert usage_logs and usage_logs[0].levelno == logging.INFO
+    assert MODEL in usage_logs[0].getMessage()
     assert "secret-text" not in caplog.text
     assert "AcmeHidden" not in caplog.text
     assert "sn-should-not-log" not in caplog.text
@@ -708,7 +779,13 @@ def test_healthz_and_info_contract(oclient, fake, cf_route):
     assert client.get("/healthz").json() == {"status": "ok"}
     info = assert_contract(client.get("/v1/info"), "/v1/info")
     assert info["backends"]["primary"] == {"id": "ollama", "state": "ok"}
-    assert info["backends"]["fallback"] == {"id": "cloudflare", "state": "ready", "can_serve": True}
+    fallback = info["backends"]["fallback"]
+    assert fallback["id"] == "cloudflare"
+    assert fallback["state"] == "ready"
+    assert fallback["can_serve"] is True
+    assert fallback["model"] == MODEL
+    assert fallback["budget"]["limit"] == 6000
+    assert fallback["budget"]["remaining"] == 6000
     fake.size_vram = 0
     degraded = client.get("/healthz")
     assert degraded.status_code == 503
@@ -745,10 +822,12 @@ def test_docs_reject_llama_and_do_not_offer_it():
     assert "They are not an opt-in." in folded
     assert "/agree" not in text
     assert "opt-in-only" not in text
-    assert "provisional" in text.lower()
+    assert "provisional" not in text.lower()
+    assert "confirmed default" in text.lower()
     assert MODEL in text
     assert QWEN in text and MISTRAL in text
-    assert "only if image input is confirmed" in text.lower()
+    assert "not recommended" in text.lower()
+    assert "image input was confirmed" in text.lower()
     assert "2026-07-28-models-require-workers-paid" in text
     assert "estimate" in text
     assert "29 Neurons" not in text or "estimate" in text

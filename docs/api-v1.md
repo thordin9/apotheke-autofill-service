@@ -31,10 +31,14 @@ Ollama reads `GET /api/ps` for this probe. A failed read keeps the last
 result: the probe stays `ok` when it has not already seen a degraded
 residency, and it stays `degraded` when that was the last successful read.
 A down Ollama therefore does not by itself flip a healthy probe. The body
-is `{"status":"ok"}` or `{"status":"degraded"}`. When the primary is
-degraded and a configured fallback can serve, the body is
-`{"status":"degraded","serving":"fallback"}` and the status is still 503
-(a deploy check that treats 503 as unhealthy keeps working). Model ids,
+is `{"status":"ok"}` or `{"status":"degraded"}`. When the local Ollama
+probe is degraded and Cloudflare can serve, the body adds `serving`:
+`"fallback"` if Ollama is primary, or `"primary"` if Cloudflare is primary.
+The status is still 503 (a deploy check that treats 503 as unhealthy keeps
+working). `serving` is omitted after a Cloudflare 401, 403, or Workers Paid
+error, when the daily Neuron budget cannot pay, and when Cloudflare is not
+configured. A later successful Cloudflare call, or a new UTC day after the
+budget was used up, puts `serving` back. Model ids,
 `state`, `size_vram` and latency are on `GET /v1/info`, which requires auth
 when `AUTOFILL_TOKEN` is set.
 
@@ -67,7 +71,7 @@ its typical generation time:
 | `version` | yes | Always `"1"` |
 | `capabilities` | yes | Subset of `name`, `tags`, `category`, `description` |
 | `backend` | no | Adapter id of the primary (`echo`, `ollama`, `cloudflare`, …) |
-| `backends` | no | *Added in v1.4, optional.* `primary` (`id`, `state` of `ok`, `warming`, `degraded`, `unavailable`) and `fallback` (`id` of `none` or `cloudflare`, `state` of `off` or `ready`, `can_serve`). `can_serve` is true only when a fallback is configured. Absent on servers older than v1.4. |
+| `backends` | no | *Added in v1.4, optional.* `primary` (`id`, `state` of `ok`, `warming`, `degraded`, `unavailable`) and `fallback` (`id` of `none`, `cloudflare`, or `ollama`, `state`, `can_serve`). Cloudflare entries add `model` and `budget` (`limit`, `used`, `remaining`, `resets_at`, optional `reason`). When Cloudflare is primary and Ollama is the fallback, the primary also has `request_deadline_s`, `cf_slice_s`, `ollama_reserve_s`, and `ollama_state`. `can_serve` is false when Cloudflare cannot take a call (budget, missing credentials, or the last call was 401, 403, or Workers Paid). Absent on servers older than v1.4. |
 | `max_image_bytes` | no | Upload limit; clients may skip the call for larger images |
 | `ready` | no | `false` while the backend is still loading its model (e.g. Ollama warm-up); `/v1/suggest` then answers `503` with `Retry-After`. Also `false` when Ollama has since unloaded the model: the service then reloads it in the background, and `/v1/suggest` still works but its first answer is slower. Absent or `true` means ready. |
 | `avg_latency_ms` | no | *Added in v1.1, optional; clients MUST tolerate its absence.* Non-negative integer: the **default model's** typical time in milliseconds for one `/v1/suggest` generation on the loaded model, model load time excluded. Ollama reports a moving average of recent requests (70% previous, 30% latest), so the field is **absent until the first suggestion has finished** after a service start. Echo reports `ECHO_DELAY_MS` when it is above 0. Meant for estimated progress bars: fill by elapsed time against this value, hold below 100% until the answer arrives, and fall back to an indeterminate spinner when absent. It is not a deadline: cold starts (model load), queueing and the plain-text retry can take longer. |
@@ -266,12 +270,14 @@ being absent.
   Without `ALLOWED_MODELS` / `IMAGE_SIZES` set, `/v1/info` is unchanged, and
   requests without `context.model` behave as before.
 - **v1.4:** optional `backend_used` (`ollama` or `cloudflare`) on
-  `POST /v1/suggest`. `model_used` is the Cloudflare model id when Cloudflare
+  `POST /v1/suggest`. `model_used` is the model id of whichever backend
   answered. Optional `backends` on `GET /v1/info` lists the primary and the
-  fallback (`can_serve` is false when no fallback is configured). `GET /healthz`
-  is unchanged except when the primary is degraded and the fallback can serve:
-  the body is `{"status":"degraded","serving":"fallback"}` with HTTP 503.
-  `version` stays `"1"`.
+  fallback, including a Cloudflare `budget` and, for Cloudflare primary with
+  an Ollama fallback, the effective `cf_slice_s` and `ollama_reserve_s`.
+  `can_serve` follows the live Cloudflare state. `GET /healthz` still probes
+  local Ollama. When that probe is degraded and Cloudflare can serve, the body
+  is `{"status":"degraded","serving":"fallback"}` or `"serving":"primary"`,
+  HTTP 503. `version` stays `"1"`.
 - **v1.3:** optional `brand`, `model_number` and `serial_number` strings on
   `POST /v1/suggest` (empty string when unreadable; ignored by older clients,
   including Apotheke 2.4.1). With no `context.categories`, the Ollama prompt

@@ -24,7 +24,7 @@ case "$cmd" in
     case "$f" in *Health*) echo "$h";; *) echo "$s";; esac ;;
   run)
     name=""; img=""
-    while [ $# -gt 0 ]; do case "$1" in --name) name=$2; shift 2;; --network|--runtime|--restart|--env-file) shift 2;; -d) shift;; *) img=$1; shift;; esac; done
+    while [ $# -gt 0 ]; do case "$1" in --name) name=$2; shift 2;; --network|--runtime|--restart|--env-file|-v|--volume) shift 2;; -d) shift;; *) img=$1; shift;; esac; done
     [ -f "$DS/c/$name" ] && { echo "conflict" >&2; exit 125; }
     line="$img running ${NEW_HEALTH:-healthy} ${NEW_HTTP:-0}"
     [ -n "${RUN_SLEEP:-}" ] && { echo "$line" > "$DS/c/$name"; sleep "$RUN_SLEEP"; }

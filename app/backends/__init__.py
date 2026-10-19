@@ -29,6 +29,8 @@ def create_backend(name: str) -> Backend:
         ) from None
     if settings.fallback_backend == "cloudflare":
         return FailoverBackend(backend, CloudflareBackend())
+    if settings.fallback_backend == "ollama":
+        return FailoverBackend(backend, OllamaBackend())
     return backend
 
 

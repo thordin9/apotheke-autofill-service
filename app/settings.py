@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -95,6 +96,13 @@ class Secret:
         return "***"
 
 
+def _positive(name: str, value: float) -> float:
+    """Reject NaN, infinities, zero, and negatives. The message does not echo the value."""
+    if not math.isfinite(value) or value <= 0:
+        raise RuntimeError(f"{name} must be a positive number")
+    return value
+
+
 def _flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name, "").strip().lower()
     if not raw:
@@ -127,12 +135,24 @@ class Settings:
     cf_api_token: Secret = Secret("")
     cf_model: str = "@cf/google/gemma-4-26b-a4b-it"
     cf_timeout_s: float = 20.0
+    cf_daily_neuron_budget: float = 6000.0
+    cf_budget_state_file: str = "/var/lib/autofill/cf-neuron-budget.json"
+    request_deadline_s: float = 45.0
+    ollama_warm_reserve_s: float = 15.0
+    ollama_cold_reserve_s: float = 35.0
 
 
 def get_settings() -> Settings:
-    cf_timeout_s = _float("CF_TIMEOUT_S", 20.0)
-    if cf_timeout_s <= 0:
-        raise RuntimeError("CF_TIMEOUT_S must be a positive number")
+    from .backends.budget import DEFAULT_BUDGET_PATH
+
+    cf_timeout_s = _positive("CF_TIMEOUT_S", _float("CF_TIMEOUT_S", 20.0))
+    budget = _float("CF_DAILY_NEURON_BUDGET", 6000.0)
+    if not math.isfinite(budget) or budget < 0:
+        raise RuntimeError("CF_DAILY_NEURON_BUDGET must be zero or positive")
+    deadline = _positive("REQUEST_DEADLINE_S", _float("REQUEST_DEADLINE_S", 45.0))
+    warm_reserve = _positive("OLLAMA_WARM_RESERVE_S", _float("OLLAMA_WARM_RESERVE_S", 15.0))
+    cold_reserve = _positive("OLLAMA_COLD_RESERVE_S", _float("OLLAMA_COLD_RESERVE_S", 35.0))
+    state_file = os.environ.get("CF_BUDGET_STATE_FILE", "").strip() or DEFAULT_BUDGET_PATH
     return Settings(
         backend=os.environ.get("BACKEND", "echo").strip().lower() or "echo",
         token=os.environ.get("AUTOFILL_TOKEN", "").strip(),
@@ -140,12 +160,17 @@ def get_settings() -> Settings:
         backend_timeout_s=_float("BACKEND_TIMEOUT_S", 25.0),
         allowed_models=parse_models(os.environ.get("ALLOWED_MODELS", "")),
         image_sizes=parse_image_sizes(os.environ.get("IMAGE_SIZES", "")),
-        fallback_backend=_choice("FALLBACK_BACKEND", "none", ("none", "cloudflare")),
+        fallback_backend=_choice("FALLBACK_BACKEND", "none", ("none", "cloudflare", "ollama")),
         failover_on_cold=_flag("FAILOVER_ON_COLD", False),
         cf_account_id=Secret(os.environ.get("CF_ACCOUNT_ID", "").strip()),
         cf_api_token=Secret(os.environ.get("CF_API_TOKEN", "").strip()),
         cf_model=os.environ.get("CF_MODEL", "").strip() or "@cf/google/gemma-4-26b-a4b-it",
         cf_timeout_s=cf_timeout_s,
+        cf_daily_neuron_budget=budget,
+        cf_budget_state_file=state_file,
+        request_deadline_s=deadline,
+        ollama_warm_reserve_s=warm_reserve,
+        ollama_cold_reserve_s=cold_reserve,
     )
 
 
@@ -162,7 +187,14 @@ def validate_runtime(settings: Settings, backend_name: str) -> None:
     needs_cf = backend_name == "cloudflare" or fallback == "cloudflare"
     if fallback == "cloudflare" and backend_name != "ollama":
         raise RuntimeError("FALLBACK_BACKEND=cloudflare requires BACKEND=ollama")
-    if needs_cf and (not settings.cf_account_id or not settings.cf_api_token):
+    if fallback == "ollama" and backend_name != "cloudflare":
+        raise RuntimeError("FALLBACK_BACKEND=ollama requires BACKEND=cloudflare")
+    # A zero budget never calls Cloudflare, so credentials are not required.
+    if (
+        needs_cf
+        and settings.cf_daily_neuron_budget > 0
+        and (not settings.cf_account_id or not settings.cf_api_token)
+    ):
         raise RuntimeError(
             "CF_ACCOUNT_ID and CF_API_TOKEN must be set when cloudflare is "
             "the primary backend or the fallback"
@@ -171,3 +203,36 @@ def validate_runtime(settings: Settings, backend_name: str) -> None:
         raise RuntimeError(
             "CF_MODEL is not allowed: Llama 3.2 Vision and Llama 4 Scout are rejected"
         )
+    if backend_name == "cloudflare" and fallback == "ollama":
+        _check_cf_ollama_deadline(settings)
+
+
+def _check_cf_ollama_deadline(settings: Settings) -> None:
+    """Refuse a Cloudflare-primary config that cannot finish before the client.
+
+    The check runs only for BACKEND=cloudflare with FALLBACK_BACKEND=ollama.
+    REQUEST_DEADLINE_S must be under Apotheke's 50 s client timeout and must
+    fit in BACKEND_TIMEOUT_S. Each Ollama reserve must leave at least 5 s for
+    the Cloudflare slice.
+    """
+    from .backends.failover import APOTHEKE_CLIENT_TIMEOUT_S, MIN_CF_SLICE_S
+
+    deadline = settings.request_deadline_s
+    if deadline >= APOTHEKE_CLIENT_TIMEOUT_S:
+        raise RuntimeError("REQUEST_DEADLINE_S must be under Apotheke's 50 s client timeout")
+    if deadline > settings.backend_timeout_s:
+        raise RuntimeError(
+            "REQUEST_DEADLINE_S must fit within BACKEND_TIMEOUT_S so the "
+            "Cloudflare slice, a repair, and the Ollama fallback finish "
+            "inside the service timeout"
+        )
+    for name, reserve in (
+        ("OLLAMA_WARM_RESERVE_S", settings.ollama_warm_reserve_s),
+        ("OLLAMA_COLD_RESERVE_S", settings.ollama_cold_reserve_s),
+    ):
+        if deadline - reserve < MIN_CF_SLICE_S:
+            raise RuntimeError(
+                f"{name} leaves less than {int(MIN_CF_SLICE_S)} s for Cloudflare "
+                "inside REQUEST_DEADLINE_S. Lower the reserve or raise "
+                "REQUEST_DEADLINE_S, and keep REQUEST_DEADLINE_S under 50 s"
+            )

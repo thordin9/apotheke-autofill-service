@@ -206,12 +206,17 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `OLLAMA_JSON_FORMAT` | `schema` | Ollama only: `schema` (or `1`) sends the Feature 9 v3_lean JSON schema as `format`. The category enum is `context.categories` when the client sends them, otherwise the v3_lean list. Tags are at most 3 and the description at most 100 characters, plus `brand`, `model_number`, `serial_number`. The prompt shows no JSON template, because small models copy a template back instead of answering. `json` sends `format: "json"`. `0` lets the model answer freely; the service still extracts the first JSON object, or derives fields from plain text. |
 | `OLLAMA_PLAIN_RETRY` | `1` | Ollama only: if the answer to the JSON prompt is unusable, ask once more with a short plain-text prompt and derive a low-confidence name and description from the text. It retries when generating took at most 40% of `BACKEND_TIMEOUT_S` (time Ollama spent loading the model does not count) and enough time is left. `0` disables the retry. |
 | `OLLAMA_LOG_RAW` | `0` | Ollama only: `1` logs every raw model answer at DEBUG. Answers that cannot be used are always logged at WARNING. Logged text is cut to 2 KB; the image, the request token, and `brand` / `model_number` / `serial_number` values are never logged. |
-| `FALLBACK_BACKEND` | `none` | `none` or `cloudflare`. `cloudflare` fails over from Ollama only, and requires `CF_ACCOUNT_ID` and `CF_API_TOKEN`. Default `none` sends nothing to Cloudflare. |
+| `FALLBACK_BACKEND` | `none` | `none`, `cloudflare`, or `ollama`. `cloudflare` fails over from Ollama and requires `BACKEND=ollama`. `ollama` fails over from Cloudflare and requires `BACKEND=cloudflare`. Default `none` sends nothing to Cloudflare. |
 | `FAILOVER_ON_COLD` | `false` | When the fallback is Cloudflare, also fail over on Ollama warm-up or a cold model load. The load keeps running. Default `false`: those requests stay a local 503 + `Retry-After`. |
-| `CF_ACCOUNT_ID` | *(unset)* | Cloudflare account id. Required when Cloudflare is primary or fallback. Never logged. |
+| `CF_ACCOUNT_ID` | *(unset)* | Cloudflare account id. Required when Cloudflare is selected and the daily budget is above 0. Never logged. |
 | `CF_API_TOKEN` | *(unset)* | API token scoped to Workers AI. Required with the account id. Never logged, never returned, never put in an error. |
-| `CF_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | Workers AI model id. Provisional default (Gemma 4 26B, Apache 2.0, free plan) until ITAdvisor compares accuracy. Fully configurable. Llama 3.2 Vision and Llama 4 Scout are rejected. |
-| `CF_TIMEOUT_S` | `20` | Timeout for the Cloudflare call itself. With a fallback, Ollama's wait and this call share a budget under `BACKEND_TIMEOUT_S` + 5 s. |
+| `CF_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | Workers AI model id. Confirmed default: Gemma 4 26B, thinking off, Apache 2.0, free plan. Llama 3.2 Vision and Llama 4 Scout are rejected (case-insensitive). |
+| `CF_TIMEOUT_S` | `20` | Per-attempt Cloudflare timeout. Must be a finite number greater than 0. With Ollama as the fallback the effective slice shrinks so the request stays inside `REQUEST_DEADLINE_S`. |
+| `CF_DAILY_NEURON_BUDGET` | `6000` | Neurons this process may spend per UTC day. About 930 Gemma 4 photos at 6.4 Neurons. `0` disables Cloudflare. |
+| `CF_BUDGET_STATE_FILE` | `/var/lib/autofill/cf-neuron-budget.json` | Persistent counter. Not `/tmp`. A corrupt or unwritable file spends the day. |
+| `REQUEST_DEADLINE_S` | `45` | Total deadline when Cloudflare is primary and Ollama is the fallback. Must be under Apotheke's 50 s client timeout and fit in `BACKEND_TIMEOUT_S`. |
+| `OLLAMA_WARM_RESERVE_S` | `15` | Seconds held for a warm Ollama fallback. The Jetson warm p95 at 560 px is about 11 s. |
+| `OLLAMA_COLD_RESERVE_S` | `35` | Seconds held when the local model is cold or loading (measured cold Qwen 25–32 s). |
 
 `ECHO_*` are read on every request (as is `ALLOWED_MODELS` on echo; the Ollama backend reads it at startup). Example: `ECHO_MODE=slow BACKEND_TIMEOUT_S=2 uvicorn app.main:app --port 8080`.
 

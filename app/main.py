@@ -96,8 +96,9 @@ def create_app() -> FastAPI:
         if isinstance(snap, dict) and snap.get("degraded") is True:
             body["status"] = "degraded"
             status = 503
-            if _fallback_can_serve(get_settings()):
-                body["serving"] = "fallback"
+            serving = _serving_role(backend, get_settings())
+            if serving is not None:
+                body["serving"] = serving
         # Model ids, state, VRAM and latency stay on authenticated /v1/info.
         return JSONResponse(body, status_code=status)
 
@@ -186,8 +187,38 @@ def _ms(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
 
 
-def _fallback_can_serve(settings: Settings) -> bool:
-    return settings.fallback_backend == "cloudflare"
+def _cloudflare_of(backend: Any) -> Any:
+    found = getattr(backend, "cloudflare_backend", None)
+    if found is not None:
+        return found
+    if getattr(backend, "id", None) == "cloudflare" and hasattr(backend, "budget"):
+        return backend
+    return None
+
+
+def _cf_can_serve(backend: Any) -> bool:
+    cf = _cloudflare_of(backend)
+    if cf is None:
+        return False
+    return bool(cf.can_serve())
+
+
+def _serving_role(backend: Any, settings: Settings) -> str | None:
+    """Who answers while the local Ollama probe is degraded.
+
+    Ollama primary: `fallback` when Cloudflare can take the request.
+    Cloudflare primary: `primary` when Cloudflare can take it. The probe
+    itself stays the local model, and the status stays 503.
+    """
+    if settings.fallback_backend == "cloudflare" and _cf_can_serve(backend):
+        return "fallback"
+    if (
+        settings.backend == "cloudflare"
+        and settings.fallback_backend == "ollama"
+        and _cf_can_serve(backend)
+    ):
+        return "primary"
+    return None
 
 
 def _primary_state(backend: Any, info: dict[str, Any]) -> str:
@@ -201,19 +232,33 @@ def _primary_state(backend: Any, info: dict[str, Any]) -> str:
     return "ok"
 
 
+def _attach_cloudflare(entry: dict[str, Any], info: dict[str, Any]) -> None:
+    model = info.get("model")
+    if isinstance(model, str) and model.strip():
+        entry["model"] = model
+    budget = info.get("budget")
+    if isinstance(budget, dict):
+        entry["budget"] = budget
+
+
 def backend_listing(backend: Any, info: dict[str, Any], settings: Settings) -> dict[str, Any]:
     """Primary and fallback as /v1/info reports them. No secrets."""
-    if _fallback_can_serve(settings):
+    custom = info.get("_backends")
+    if isinstance(custom, dict):
+        return custom
+    primary: dict[str, Any] = {
+        "id": str(getattr(backend, "id", "unknown")),
+        "state": _primary_state(backend, info),
+    }
+    if getattr(backend, "id", None) == "cloudflare":
+        _attach_cloudflare(primary, info)
+    if settings.fallback_backend == "cloudflare" and _cf_can_serve(backend):
         fallback: dict[str, Any] = {"id": "cloudflare", "state": "ready", "can_serve": True}
+    elif settings.fallback_backend == "none":
+        fallback = {"id": "none", "state": "off", "can_serve": False}
     else:
         fallback = {"id": "none", "state": "off", "can_serve": False}
-    return {
-        "primary": {
-            "id": str(getattr(backend, "id", "unknown")),
-            "state": _primary_state(backend, info),
-        },
-        "fallback": fallback,
-    }
+    return {"primary": primary, "fallback": fallback}
 
 
 def sanitize_models(models: Any) -> list[dict[str, Any]] | None:

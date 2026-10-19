@@ -86,7 +86,7 @@ if url_ok; then
 fi
 NEW_STARTED=1
 if ! docker run -d --name "$NAME" --network host --runtime nvidia --restart unless-stopped \
-    --env-file "$ENV_FILE" "$IMAGE" >/dev/null; then
+    --env-file "$ENV_FILE" -v /opt/autofill/data:/var/lib/autofill "$IMAGE" >/dev/null; then
   echo "docker run failed" >&2; trap '' INT TERM; restore_prev; exit 1
 fi
 if ! wait_ready; then

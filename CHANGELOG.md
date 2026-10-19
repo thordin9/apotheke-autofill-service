@@ -7,25 +7,33 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Added
 
-- **Optional Cloudflare Workers AI backend (API v1.4).** `BACKEND=cloudflare`
-  calls the Workers AI REST API directly. `FALLBACK_BACKEND=cloudflare` (default
-  `none`) fails over from Ollama on unreachable, degraded GPU residency (warm
-  model or the loaded production model at `size_vram` 0), timeout, upstream
-  5xx, and busy/queue-full. Cold/loading fails over only when
-  `FAILOVER_ON_COLD=true` (default false); Ollama warm-up keeps running and
-  traffic returns to Ollama once it is warm. Client 4xx never fails over. The
-  Ollama wait plus the Cloudflare call stays under `BACKEND_TIMEOUT_S` + 5 s.
-  Provisional default model `@cf/google/gemma-4-26b-a4b-it` (Apache 2.0, free
-  plan, vision, `response_format` JSON schema), pending ITAdvisor's accuracy
-  comparison. `CF_MODEL` stays configurable. Llama 3.2 Vision and Llama 4 Scout
-  are rejected. See [docs/cloudflare-backend.md](docs/cloudflare-backend.md).
+- **Optional Cloudflare Workers AI backend (API v1.4).** Calls the Workers AI
+  REST API directly. Confirmed default `@cf/google/gemma-4-26b-a4b-it` with
+  thinking off and `response_format` JSON schema, from the bench in
+  `bench/results/cf-workers-ai-2026-10-19` (6.4 Neurons/photo). Mistral Small
+  3.1 uses `response_format` too (`guided_json` is ignored on image messages).
+  Qwen 3.8 is not recommended. Llama 3.2 Vision and Llama 4 Scout are rejected,
+  case-insensitively. The recommended opt-in is `BACKEND=cloudflare` with
+  `FALLBACK_BACKEND=ollama`; Ollama-primary with `FALLBACK_BACKEND=cloudflare`
+  still works. Code default and the Jetson env stay off.
+- **Deadline.** `REQUEST_DEADLINE_S` (default 45, must be under Apotheke's 50 s)
+  plus a warm reserve (15 s) or a cold/loading reserve (35 s). The Cloudflare
+  slice is 20 s when Ollama is warm and about 10 s when it is cold. Startup
+  refuses a config that does not fit. A fallback that would miss the deadline
+  is 503 with `Retry-After`.
+- **Daily Neuron budget.** `CF_DAILY_NEURON_BUDGET` defaults to 6000 (about 930
+  Gemma 4 photos). `usage.neurons` is charged when present; otherwise token
+  rates; otherwise a conservative estimate. The state file lives on
+  `/var/lib/autofill` (Jetson host dir `/opt/autofill/data`). A corrupt,
+  unreadable, or unwritable file spends the rest of the UTC day.
 - **Contract.** `/v1/suggest` gains optional `backend_used` (`ollama` or
-  `cloudflare`). `model_used` is the Cloudflare model id when Cloudflare
-  served. `/v1/info` gains `backends` (primary and fallback state, and whether
-  the fallback can serve). `/healthz` stays a local probe: `503`
-  `{"status":"degraded"}`, or `{"status":"degraded","serving":"fallback"}`
-  when the primary is degraded and the fallback can serve. `version` stays
-  `"1"`.
+  `cloudflare`). `model_used` is the model that answered. `/v1/info` gains
+  `backends`, the Cloudflare budget, and the effective slice and reserve.
+  `can_serve` is false after 401/403, Workers Paid, a used-up budget, or
+  missing config, and recovers on a later success or the UTC reset. `/healthz`
+  still probes local Ollama: `503` `{"status":"degraded"}`, plus
+  `"serving":"fallback"` or `"serving":"primary"` only while Cloudflare can
+  serve. `version` stays `"1"`.
 
 ### Fixed
 

@@ -54,7 +54,8 @@ RUN curl -fsSL "${PYTHON_STANDALONE_URL}" -o /tmp/python.tgz \
     && python3.11 --version \
     && python3.11 -m pip --version \
     && python3.11 -m pip install --no-cache-dir -r requirements-jetson.txt \
-    && python3.11 -c "import fastapi, pydantic, uvicorn, multipart; print('jetson deps', fastapi.__version__, pydantic.VERSION, uvicorn.__version__)"
+    && python3.11 -c "import fastapi, pydantic, uvicorn, multipart; print('jetson deps', fastapi.__version__, pydantic.VERSION, uvicorn.__version__)" \
+    && mkdir -p /var/lib/autofill
 
 COPY app ./app
 

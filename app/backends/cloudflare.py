@@ -11,13 +11,18 @@ import base64
 import io
 import json
 import logging
+import re
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageOps
+from starlette.concurrency import run_in_threadpool
 
 from ..settings import Secret, get_settings
 from .base import CAPABILITIES, Backend, BackendUnavailable
+from .budget import GEMMA_MODEL, NeuronBudget, seconds_until_reset
 from .ollama import BackendError, build_prompt, build_schema, parse_suggestion
 
 log = logging.getLogger(__name__)
@@ -29,23 +34,26 @@ DEFAULT_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 CF_IMAGE_MAX_BYTES = 1_500_000
 CF_LONG_EDGE = 560
 PAID_PLAN_CODE = 5035
+# The bench capped completion at 1024. A reply that spends that many tokens
+# with finish_reason "length" is cut off and takes the one repair.
+MAX_OUTPUT_TOKENS = 1024
+BUDGET_USED_UP = "daily Cloudflare budget used up, resets 00:00 UTC"
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 # Structured output, by model id. Anything else gets the schema in the prompt
 # and one repair retry. Llama vision models are absent on purpose: they are
 # rejected (EU multimodal license) and refused at startup.
+# Mistral Small 3.1 ignores guided_json once the message contains an image
+# (the bench got fenced Markdown). response_format is what the bench used.
 RESPONSE_FORMAT_MODELS = frozenset(
     {
         "@cf/google/gemma-4-26b-a4b-it",
         "@cf/qwen/qwen3.8-27b",
-    }
-)
-# guided_json where Cloudflare documents it. Mistral Small 3.1 has no confirmed
-# image input, so it is not the default; the id stays configurable.
-GUIDED_JSON_MODELS = frozenset(
-    {
         "@cf/mistralai/mistral-small-3.1-24b-instruct",
     }
 )
+# Kept so a future id can opt into guided_json. Empty: Mistral does not.
+GUIDED_JSON_MODELS: frozenset[str] = frozenset()
 REJECTED_MODEL_PREFIXES = (
     "@cf/meta/llama-3.2-11b-vision",
     "@cf/meta/llama-4-scout",
@@ -84,19 +92,30 @@ def _scrub(text: str, secrets: set[str]) -> str:
     return text
 
 
+def _attach_redaction(logger: logging.Logger) -> None:
+    # A filter on a logger does not run for records created on a child logger.
+    # Handlers do, including the ones uvicorn installs before the app loads.
+    if _REDACT not in logger.filters:
+        logger.addFilter(_REDACT)
+    for handler in logger.handlers:
+        if _REDACT not in handler.filters:
+            handler.addFilter(_REDACT)
+
+
 def install_redaction(*values: str) -> None:
     for value in values:
         _REDACT.add(value)
-    root = logging.getLogger()
-    if _REDACT not in root.filters:
-        root.addFilter(_REDACT)
+    _attach_redaction(logging.getLogger())
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        _attach_redaction(logging.getLogger(name))
     # httpx logs the request URL (it contains the account id) and headers at DEBUG.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def model_rejected(model: str) -> bool:
-    return any(model == prefix or model.startswith(prefix) for prefix in REJECTED_MODEL_PREFIXES)
+    low = model.strip().lower()
+    return any(low.startswith(prefix) for prefix in REJECTED_MODEL_PREFIXES)
 
 
 def structured_mode(model: str) -> str | None:
@@ -135,6 +154,16 @@ class RateLimited(BackendUnavailable):
             self.headers = {"Retry-After": str(retry_after)}
 
 
+class BudgetExhausted(BackendUnavailable):
+    """The daily Neuron budget cannot pay for another Cloudflare call."""
+
+    code = "backend_unavailable"
+
+    def __init__(self) -> None:
+        super().__init__(BUDGET_USED_UP)
+        self.headers = {"Retry-After": str(seconds_until_reset())}
+
+
 def encode_for_cloudflare(
     data: bytes,
     *,
@@ -147,6 +176,13 @@ def encode_for_cloudflare(
         image.load()
     except Exception:
         return None
+    try:
+        transposed = ImageOps.exif_transpose(image)
+    except Exception:
+        return None
+    if transposed is None:
+        return None
+    image = transposed
     if image.mode != "RGB":
         image = image.convert("RGB")
     width, height = image.size
@@ -180,7 +216,7 @@ def _prompt_for(context: dict[str, Any], *, repair: bool) -> str:
     return f"{prompt}\n{lead}JSON schema: {schema}"
 
 
-def _payload(prompt: str, jpeg: bytes, context: dict[str, Any]) -> dict[str, Any]:
+def _payload(prompt: str, jpeg: bytes, context: dict[str, Any], model: str) -> dict[str, Any]:
     encoded = base64.b64encode(jpeg).decode("ascii")
     body: dict[str, Any] = {
         "messages": [
@@ -194,15 +230,73 @@ def _payload(prompt: str, jpeg: bytes, context: dict[str, Any]) -> dict[str, Any
                     },
                 ],
             }
-        ]
+        ],
+        "max_tokens": MAX_OUTPUT_TOKENS,
     }
+    # enable_thinking is not on Gemma 4's model page. The bench verified that
+    # thinking off is what the endpoint accepts, and thinking on spent the
+    # token cap on reasoning for one photo. Gemma 4 only.
+    if model == GEMMA_MODEL:
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     schema = build_schema(context)
-    mode = structured_mode(get_settings().cf_model)
+    mode = structured_mode(model)
     if mode == "response_format":
         body["response_format"] = {"type": "json_schema", "json_schema": schema}
     elif mode == "guided_json":
         body["guided_json"] = schema
     return body
+
+
+def _strip_fence(text: str) -> str:
+    return _FENCE.sub("", text.strip()).strip()
+
+
+def _finish_reason(data: dict[str, Any]) -> str | None:
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return None
+    reason = result.get("finish_reason")
+    if isinstance(reason, str):
+        return reason
+    choices = result.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        choice_reason = choices[0].get("finish_reason")
+        if isinstance(choice_reason, str):
+            return choice_reason
+    return None
+
+
+def _completion_tokens(data: dict[str, Any]) -> float | None:
+    blobs = []
+    if isinstance(data.get("usage"), dict):
+        blobs.append(data["usage"])
+    result = data.get("result")
+    if isinstance(result, dict) and isinstance(result.get("usage"), dict):
+        blobs.append(result["usage"])
+    for usage in blobs:
+        for key in ("completion_tokens", "output_tokens"):
+            value = usage.get(key)
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                continue
+            return float(value)
+    return None
+
+
+def _truncated(data: dict[str, Any] | None, text: str | None) -> bool:
+    if text is None or not text.strip():
+        return True
+    if not isinstance(data, dict):
+        return False
+    if _finish_reason(data) == "length":
+        return True
+    completion = _completion_tokens(data)
+    return completion is not None and completion >= MAX_OUTPUT_TOKENS
+
+
+@dataclass
+class _Reply:
+    text: str | None
+    truncated: bool
 
 
 def _error_codes(data: Any) -> set[int]:
@@ -291,19 +385,43 @@ class CloudflareBackend(Backend):
         self.model = settings.cf_model
         self.timeout_s = settings.cf_timeout_s
         # HTTP 5xx only. A Workers Paid 403 (code 5035) must not move this.
+        # HTTP 408 is a timeout and does move it.
         self.transient_failures = 0
         self.plan_rejections = 0
+        # Set after 401/403 or Workers Paid. Cleared when a later call works.
+        # Budget exhaustion is separate and clears when the UTC day rolls.
+        self._serve_block: str | None = None
+        self.budget = NeuronBudget(
+            settings.cf_budget_state_file,
+            settings.cf_daily_neuron_budget,
+            self.model,
+        )
         install_redaction(self.account_id.reveal(), self.token.reveal())
 
     def __repr__(self) -> str:
         return f"CloudflareBackend(model={self.model!r})"
 
+    def can_serve(self) -> bool:
+        """False when creds are missing, the budget cannot pay, or the last call was rejected."""
+        if not self.account_id or not self.token:
+            return False
+        if self._serve_block:
+            return False
+        return self.budget.can_call()
+
     async def info(self) -> dict[str, Any]:
-        return {
+        view = await self.budget.snapshot()
+        ready = self.can_serve()
+        out: dict[str, Any] = {
             "name": f"cloudflare-{self.model}",
             "capabilities": list(CAPABILITIES),
-            "ready": True,
+            "ready": ready,
+            "model": self.model,
+            "budget": view.as_dict(),
         }
+        if not ready:
+            out["unavailable"] = True
+        return out
 
     async def suggest(
         self,
@@ -313,22 +431,55 @@ class CloudflareBackend(Backend):
         *,
         timeout_s: float | None = None,
     ) -> Any:
-        jpeg = encode_for_cloudflare(image_bytes)
+        jpeg = await run_in_threadpool(encode_for_cloudflare, image_bytes)
         if jpeg is None:
             raise ImageNotAccepted
-        mode = structured_mode(self.model)
-        text = await self._complete(jpeg, context, repair=False, timeout_s=timeout_s)
-        try:
-            out = self._validate(text, context)
-        except BackendError:
-            if mode is not None:
-                raise
-            text = await self._complete(jpeg, context, repair=True, timeout_s=timeout_s)
-            out = self._validate(text, context)
+        limit = self.timeout_s if timeout_s is None else timeout_s
+        phase_deadline = time.monotonic() + max(0.05, limit)
+        reply = await self._complete(jpeg, context, repair=False, phase_deadline=phase_deadline)
+        if self._should_repair(reply, context):
+            can_repair = self._repair_fits(phase_deadline) and self.budget.can_call()
+            if can_repair:
+                reply = await self._complete(
+                    jpeg, context, repair=True, phase_deadline=phase_deadline
+                )
+                if not self._parses(reply.text, context):
+                    raise BackendError("cloudflare returned an unusable response")
+            elif not self._parses(reply.text, context):
+                raise BackendError("cloudflare returned an unusable response")
+        elif not self._parses(reply.text, context):
+            raise BackendError("cloudflare returned an unusable response")
+        out = self._validate(reply.text or "", context)
+        self._serve_block = None
         return {**out, "model_used": self.model, "backend_used": "cloudflare"}
 
+    def _should_repair(self, reply: _Reply, context: dict[str, Any]) -> bool:
+        """One repair for a cut-off reply, and for an unstructured parse failure.
+
+        A structured model that returned complete but invalid JSON is not
+        repaired. Empty text and finish_reason "length" are cut off for every
+        model, including structured ones.
+        """
+        if reply.truncated:
+            return True
+        if structured_mode(self.model) is not None:
+            return False
+        return not self._parses(reply.text, context)
+
+    def _repair_fits(self, phase_deadline: float) -> bool:
+        return phase_deadline - time.monotonic() >= 1.0
+
+    def _parses(self, text: str | None, context: dict[str, Any]) -> bool:
+        if text is None or not text.strip():
+            return False
+        try:
+            self._validate(text, context)
+        except BackendError:
+            return False
+        return True
+
     def _validate(self, text: str, context: dict[str, Any]) -> dict[str, Any]:
-        out, _how = parse_suggestion(text, context)
+        out, _how = parse_suggestion(_strip_fence(text), context)
         return out
 
     async def _complete(
@@ -337,16 +488,37 @@ class CloudflareBackend(Backend):
         context: dict[str, Any],
         *,
         repair: bool,
-        timeout_s: float | None,
-    ) -> str:
+        phase_deadline: float,
+    ) -> _Reply:
         prompt = _prompt_for(context, repair=repair)
-        return await self._post(_payload(prompt, jpeg, context), timeout_s=timeout_s)
+        return await self._post(
+            _payload(prompt, jpeg, context, self.model),
+            phase_deadline=phase_deadline,
+        )
 
-    async def _post(self, payload: dict[str, Any], *, timeout_s: float | None) -> str:
+    async def _post(self, payload: dict[str, Any], *, phase_deadline: float) -> _Reply:
+        if not await self.budget.begin():
+            raise BudgetExhausted
+        hold: dict[str, Any] = {}
+        try:
+            return await self._exchange(payload, phase_deadline, hold)
+        finally:
+            data = hold.get("data")
+            await self.budget.finish(data if isinstance(data, dict) else None)
+
+    async def _exchange(
+        self,
+        payload: dict[str, Any],
+        phase_deadline: float,
+        hold: dict[str, Any],
+    ) -> _Reply:
         account = self.account_id.reveal()
         token = self.token.reveal()
         url = f"{API_HOST}/client/v4/accounts/{account}/ai/run/{self.model}"
-        timeout = self.timeout_s if timeout_s is None else timeout_s
+        remaining = phase_deadline - time.monotonic()
+        if remaining <= 0.05:
+            raise TimeoutError
+        timeout = min(self.timeout_s, remaining)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
@@ -362,15 +534,24 @@ class CloudflareBackend(Backend):
             data = response.json()
         except ValueError:
             data = None
+        hold["data"] = data
         if response.status_code == 403 and PAID_PLAN_CODE in _error_codes(data):
             self.plan_rejections += 1
+            self._serve_block = "paid"
             log.warning("cloudflare model %s requires Workers Paid", self.model)
             raise PaidPlanRequired
         if isinstance(data, dict):
             counts = _usage_counts(data)
             if counts:
                 rendered = " ".join(f"{key}={counts[key]}" for key in sorted(counts))
-                log.debug("cloudflare usage %s", rendered)
+                log.info("cloudflare usage model=%s %s", self.model, rendered)
+        if response.status_code in (401, 403):
+            self._serve_block = "auth"
+        # 408 (Workers AI code 3046 is one of these) is a timeout, and it
+        # counts as transient. A body with no usage is charged the estimate.
+        if response.status_code == 408:
+            self.transient_failures += 1
+            raise TimeoutError from None
         if response.status_code >= 500:
             self.transient_failures += 1
             raise BackendError("cloudflare returned an upstream error", status=response.status_code)
@@ -386,6 +567,4 @@ class CloudflareBackend(Backend):
         if not isinstance(data, dict):
             raise BackendError("cloudflare returned an unusable response")
         text = _result_text(data)
-        if text is None:
-            raise BackendError("cloudflare returned an unusable response")
-        return text
+        return _Reply(text=text, truncated=_truncated(data, text))

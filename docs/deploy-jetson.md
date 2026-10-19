@@ -230,10 +230,19 @@ and the container reads it with `--env-file`, so the token never appears on a co
 | `IMAGE_SIZES` | `448,560*,1024` | Image-size presets offered to Apotheke, 560 px recommended. See [Model and image size choice](#model-and-image-size-choice-allowed_models-and-image_sizes) |
 | `ALLOWED_MODELS` | `qwen2.5vl-jetson:3b` | Lists only the default model, so `/v1/info` gets a `models` field (Apotheke v2.4's model dropdown) with no extra model and no model switches. See the same section |
 
-Cloudflare is not enabled by this file. An optional Workers AI fallback is documented in
-[docs/cloudflare-backend.md](cloudflare-backend.md), including the env vars and the DevOps steps for
-putting a token in this file (root, mode 600, never on a command line or in a label). Leave
-`FALLBACK_BACKEND` unset or `none` until that opt-in is deliberate. The primary stays `ollama`.
+Cloudflare is not enabled by this file. The recommended opt-in, once the owner asks for it, is
+`BACKEND=cloudflare` with `FALLBACK_BACKEND=ollama`. It is documented in
+[docs/cloudflare-backend.md](cloudflare-backend.md), including the env block, the 45 s deadline, and the
+DevOps steps for a token in this file (root, mode 600, never on a command line or in a label). Leave the
+primary `ollama` until that opt-in is deliberate. The Neuron counter needs a host directory that survives
+`docker run` recreating the container:
+
+```bash
+install -d -m 755 /opt/autofill/data
+```
+
+`run-service.sh` mounts it at `/var/lib/autofill`. The default state file is
+`/var/lib/autofill/cf-neuron-budget.json` inside the container.
 
 **45 rather than 25.** A warm Qwen request takes about 13.5 s, and loading the model about 15 s. The service admits
 a request only if load (if needed) plus answer fits in 90% of the timeout, judged by the slowest of the last 5
@@ -323,7 +332,9 @@ The new container is started with:
 
 ```bash
 docker run -d --name autofill --network host --runtime nvidia --restart unless-stopped \
-  --env-file /opt/autofill/service.env apotheke-autofill:jetson-<sha>
+  --env-file /opt/autofill/service.env \
+  -v /opt/autofill/data:/var/lib/autofill \
+  apotheke-autofill:jetson-<sha>
 ```
 
 - `--network host`: the service listens on port 8080 of the board and reaches Ollama on `127.0.0.1:11434`.
