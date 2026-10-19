@@ -4,7 +4,8 @@
 #   status: running|exited, health: healthy|starting|unhealthy|none, http: 1 if it answers /healthz when running.
 # Knobs (env): RUN_FAIL=1 (docker run fails), RUN_SLEEP=<s> (docker run hangs after creating the container),
 #   NEW_HEALTH=<health> (default healthy), NEW_HTTP=1 (new container answers /healthz),
-#   SLOW_<subcommand>=<s> (sleep before that subcommand), RENAME_BACK_SLEEP=<s> (sleep after renaming to autofill).
+#   SLOW_<subcommand>=<s> (sleep before that subcommand), RENAME_BACK_SLEEP=<s> (sleep after renaming to autofill),
+#   LOGS_TEXT=<text> (extra line printed by `docker logs`).
 set -u
 DS=${DS:?}; mkdir -p "$DS/c"; echo "docker $*" >> "$DS/log"
 cmd=$1; shift
@@ -17,7 +18,7 @@ case "$cmd" in
   stop) [ -f "$DS/c/$1" ] || exit 1; read -r i _ _ x < "$DS/c/$1"; echo "$i exited none $x" > "$DS/c/$1"; echo "$1" ;;
   start) [ -f "$DS/c/$1" ] || exit 1; read -r i _ _ x < "$DS/c/$1"; echo "$i running healthy $x" > "$DS/c/$1"; echo "$1" ;;
   rm) shift; [ -f "$DS/c/$1" ] && rm "$DS/c/$1" || exit 1 ;;
-  logs) echo "(fake logs)" ;;
+  logs) echo "(fake logs)"; [ -n "${LOGS_TEXT:-}" ] && echo "$LOGS_TEXT"; exit 0 ;;
   inspect)
     f=$2; n=$3; [ -f "$DS/c/$n" ] || exit 1; read -r _ s h _ < "$DS/c/$n"
     case "$f" in *Health*) echo "$h";; *) echo "$s";; esac ;;

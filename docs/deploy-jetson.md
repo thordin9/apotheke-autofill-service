@@ -191,12 +191,19 @@ only runs after 30 s, and the old container is already stopped by then. On the b
 Docker's health status and took 36 s from start to finish. With `/healthz` polled directly, later switches took
 8–10 s, which includes stopping the old container. The fast poll uses `curl` on the host (L4T has it). Without
 `curl`, or with `HEALTH_URL` set to empty, the script falls back to Docker's health status. `WAIT_S` counts
-wall-clock time, so a hanging `/healthz` (each poll times out after 3 s) can't stretch the wait.
+wall-clock time, so a hanging `/healthz` (each poll times out after 3 s) can't stretch the wait. It must be a
+positive whole number of seconds with no leading zero and at most 6 digits (up to 999999); anything else (`abc`,
+`1.5`, `0`, a 7-digit or larger number) stops the script with a clear message before it touches any container.
 
 **Port check.** Once the old container is stopped, nothing should answer `HEALTH_URL`. If something still does,
 another process or container is holding port 8080, and its answer would be mistaken for the new container's. The
 script then refuses to switch: it starts nothing and puts `autofill-prev` back. On a first deploy, with no old
 container, it just refuses. Find what holds the port with `ss -ltnp 'sport = :8080'` before trying again.
+The check only sees a process that answers `HEALTH_URL` with a 2xx status. One that holds the port but answers
+404 or 500 gets past it; the new container then fails to bind, and the script rolls back as usual. In that
+case the new container's log lines, which the script prints before the rollback, show a bind error
+(`address already in use`), and the script adds a hint to check `ss -ltnp 'sport = :8080'` for the process
+holding the port.
 
 On success it removes `autofill-prev`. If `docker run` fails, or the new container exits or isn't healthy in time, it prints the
 new container's last log lines, removes it, and renames and starts `autofill-prev` again, so the old version keeps
@@ -212,10 +219,11 @@ resolve it:
 - otherwise (the new `autofill` works): `docker rm autofill-prev`.
 
 The script's behaviour is covered by [`deploy/jetson/tests/run-tests.sh`](../deploy/jetson/tests/run-tests.sh),
-which runs CI's `deploy-scripts` job. It uses fake `docker`, `curl` and `tc` commands (no Docker, network or root
+which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl` and `tc` commands (no Docker, network or root
 needed) and checks: switches, rollbacks, signals before and during a rollback, the `/healthz` poll, the port check,
-the wall-clock `WAIT_S`, `build-image.sh` refs and `dl-cap.sh`. Run it locally the same way. It takes about two
-minutes, because the signal cases use real timing.
+the wall-clock `WAIT_S` and its validation, the bind-error hint, `build-image.sh` refs and `dl-cap.sh`. Run it
+locally the same way. It takes about 1 min 30 s, because the signal cases use real timing, and removes its
+temporary files when it exits, also when interrupted with Ctrl-C.
 
 The new container is started with:
 

@@ -14,12 +14,17 @@
 # Env: ENV_FILE (default /opt/autofill/service.env), NAME (default autofill), WAIT_S (default 120),
 #      HEALTH_URL (default http://127.0.0.1:8080/healthz; polled with curl so the switch doesn't wait for
 #      Docker's first 30 s health interval; empty, or no curl on the host = Docker's health status only).
+# WAIT_S must be a positive whole number of seconds (no leading zero, at most 6 digits); anything else exits 1 before Docker is touched.
 set -euo pipefail
 IMAGE=${1:?usage: run-service.sh apotheke-autofill:jetson-<sha>}
 ENV_FILE=${ENV_FILE:-/opt/autofill/service.env}
 NAME=${NAME:-autofill}
 PREV="$NAME-prev"
 WAIT_S=${WAIT_S:-120}
+# Checked before anything else touches Docker: a non-integer would only fail later, in the health wait's `-lt`.
+case "$WAIT_S" in
+  ''|*[!0-9]*|0*|???????*) echo "WAIT_S must be a positive whole number of seconds, at most 6 digits (e.g. 120), got '$WAIT_S'" >&2; exit 1 ;;
+esac
 HEALTH_URL=${HEALTH_URL-http://127.0.0.1:8080/healthz}
 [ -r "$ENV_FILE" ] || { echo "missing $ENV_FILE (copy deploy/jetson/service.env.example)" >&2; exit 1; }
 docker image inspect "$IMAGE" >/dev/null || { echo "image $IMAGE not found; build it first (build-image.sh)" >&2; exit 1; }
@@ -85,7 +90,13 @@ if ! docker run -d --name "$NAME" --network host --runtime nvidia --restart unle
   echo "docker run failed" >&2; trap '' INT TERM; restore_prev; exit 1
 fi
 if ! wait_ready; then
-  docker logs --tail 50 "$NAME" >&2 2>&1 || true
+  logs=$(docker logs --tail 50 "$NAME" 2>&1 || true)
+  printf '%s\n' "$logs" >&2
+  # A foreign process on port 8080 that doesn't answer HEALTH_URL with 2xx passes the port check above; the new
+  # container then fails to bind. Say so instead of leaving only the generic "not healthy" message.
+  if grep -qi 'address already in use' <<<"$logs"; then
+    echo "hint: the new container could not bind its port; find what holds it with: ss -ltnp 'sport = :8080'" >&2
+  fi
   trap '' INT TERM; restore_prev; exit 1
 fi
 trap - INT TERM

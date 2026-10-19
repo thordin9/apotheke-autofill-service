@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for deploy/jetson/*.sh with fake docker/curl/tc on PATH (no Docker, no network, no root).
-# Usage: deploy/jetson/tests/run-tests.sh        (about 2 minutes; the signal cases use real timing)
+# Usage: deploy/jetson/tests/run-tests.sh        (about 1 min 30 s; the signal cases use real timing)
 # Exit code: number of failed cases (0 = all passed).
 set -u
 set -m   # job control: background jobs keep default SIGINT handling, so the signal cases can send it
@@ -9,13 +9,22 @@ JET=$(cd "$HERE/.." && pwd)
 RS=$JET/run-service.sh
 FAKE=$HERE/fake-bin
 PASS=0; FAIL=0
+# Every case's scratch dir lives under one parent, removed on exit (also on Ctrl-C / SIGTERM / SIGHUP).
+TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/run-tests.XXXXXX") || { echo "cannot create a temp dir under ${TMPDIR:-/tmp}" >&2; exit 1; }
+trap 'rm -rf "$TMPROOT"' EXIT
+CASE_PID=""   # a case runs in its own process group (set -m): stop it before cleaning up, or it recreates its dir
+# shellcheck disable=SC2317  # called from the traps
+stop_case() { [ -n "$CASE_PID" ] && kill -TERM -- "-$CASE_PID" 2>/dev/null; [ -n "$CASE_PID" ] && wait "$CASE_PID" 2>/dev/null; exit "$1"; }
+trap 'stop_case 130' INT
+trap 'stop_case 143' TERM
+trap 'stop_case 129' HUP   # terminal closed
 OLD="autofill=old:img:running"; NEW="autofill=new:img:running"
 
 state() { local o="" f; for f in "$DS"/c/*; do [ -e "$f" ] && o="$o $(basename "$f")=$(cut -d' ' -f1,2 "$f" | tr ' ' :)"; done; echo "${o# }"; }
 result() { # name ok detail
   if [ "$2" = 1 ]; then PASS=$((PASS+1)); printf 'PASS  %-58s %s\n' "$1" "$3"
   else FAIL=$((FAIL+1)); printf 'FAIL  %-58s %s\n' "$1" "$3"; sed 's/^/      | /' "$DS/out"; fi; }
-newds() { DS=$(mktemp -d); export DS; mkdir -p "$DS/c"; touch "$DS/env"; }
+newds() { DS=$(mktemp -d "$TMPROOT/ds.XXXXXX"); export DS; mkdir -p "$DS/c"; touch "$DS/env"; }
 
 # rs NAME EXP_EXIT EXP_STATE FIRST SIGNALS [ENV...]
 #   FIRST=1: no previous container. SIGNALS: space-separated SIG@seconds, e.g. "INT@3 TERM@4", or "".
@@ -24,10 +33,13 @@ rs() {
   newds
   [ "$first" = 1 ] || echo "old:img running healthy 1" > "$DS/c/autofill"
   env PATH="$FAKE:$PATH" ENV_FILE="$DS/env" "$@" bash "$RS" new:img > "$DS/out" 2>&1 &
-  pid=$!
+  pid=$!; CASE_PID=$pid
   for s in $sigs; do sig=${s%@*}; d=${s#*@}
-    sleep "$(awk -v a="$d" -v b="$t" 'BEGIN{print a-b}')"; t=$d; kill -"$sig" "$pid" 2>/dev/null; done
-  wait "$pid"; rc=$?; st=$(state)
+    # sleep as a background job + wait: with set -m a foreground sleep would get its own process group and the
+    # terminal, so Ctrl-C would only kill the sleep; this way the harness stays in the foreground and gets it.
+    sleep "$(awk -v a="$d" -v b="$t" 'BEGIN{print a-b}')" & wait $!
+    t=$d; kill -"$sig" "$pid" 2>/dev/null; done
+  wait "$pid"; rc=$?; CASE_PID=""; st=$(state)
   [ "$rc" = "$ee" ] && [ "$st" = "$es" ] && ok=1 || ok=0
   result "run-service: $name" "$ok" "exit=$rc state=[$st]"
 }
@@ -79,6 +91,21 @@ SECONDS=0
 # (t += 2) needed 5 polls, ~25 s measured.
 rs "hanging /healthz (3 s per poll), WAIT_S=10" 1 "$OLD" 0 "" CURL_HANG=3 NEW_HEALTH=starting WAIT_S=10
 [ "$SECONDS" -le 18 ] && ok=1 || ok=0; result "  ...gives up within WAIT_S + one poll + pre-check" "$ok" "${SECONDS}s (old counter: ~25 s)"
+echo "== run-service.sh: bind-error hint (I1 of #14)"
+rs "unhealthy, logs say address in use -> hint" 1 "$OLD" 0 "" NEW_HEALTH=unhealthy \
+  LOGS_TEXT="ERROR: [Errno 98] error while attempting to bind on address ('0.0.0.0', 8080): address already in use"
+grep -qF "ss -ltnp 'sport = :8080'" "$DS/out" && grep -q "address already in use" "$DS/out" && ok=1 || ok=0
+result "  ...logs and the ss hint are shown" "$ok" ""
+rs "unhealthy, other error -> no hint"         1 "$OLD" 0 "" NEW_HEALTH=unhealthy LOGS_TEXT="boom"
+! grep -q "ss -ltnp" "$DS/out" && ok=1 || ok=0; result "  ...no hint" "$ok" ""
+echo "== run-service.sh: WAIT_S validation"
+for w in abc 1.5 0 -5 010 " 5" "5s" 9223372036854775808; do
+  rs "WAIT_S='$w' -> refused, nothing touched" 1 "$OLD" 0 "" WAIT_S="$w"
+  grep -q "WAIT_S must be a positive whole number" "$DS/out" && [ ! -e "$DS/log" ] && ok=1 || ok=0
+  result "  ...clear message, docker never called" "$ok" ""
+done
+rs "WAIT_S=1 (smallest valid) -> times out, rolls back" 1 "$OLD" 0 "" NEW_HEALTH=starting WAIT_S=1
+grep -q "not healthy after 1s" "$DS/out" && ok=1 || ok=0; result "  ...normal timeout message" "$ok" ""
 echo "== run-service.sh: refusals"
 newds; echo "old:img running healthy 1" > "$DS/c/autofill"; echo "x:img exited none 0" > "$DS/c/autofill-prev"
 env PATH="$FAKE:$PATH" ENV_FILE="$DS/env" bash "$RS" new:img > "$DS/out" 2>&1; rc=$?
