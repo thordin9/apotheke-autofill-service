@@ -46,9 +46,26 @@ jobs:
 
       - name: Install gitleaks 8.28.0
         run: |
+          set -euo pipefail
+          if [ "$(uname -m)" != "x86_64" ]; then
+            echo "pinned gitleaks build is linux x64; this runner is $(uname -m)" >&2
+            exit 1
+          fi
           version=8.28.0
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
+          file="gitleaks_${version}_linux_x64.tar.gz"
+          sums="gitleaks_${version}_checksums.txt"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${version}"
+          # From the official gitleaks_8.28.0_checksums.txt (linux_x64 line).
+          expected="a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb"
+          tmp="$RUNNER_TEMP/gitleaks-install"
+          mkdir -p "$tmp"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$file" "$url/$file"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$sums" "$url/$sums"
+          grep -qxF "${expected}  ${file}" "$tmp/$sums"
+          echo "${expected}  $tmp/$file" | sha256sum -c -
+          tar -xzf "$tmp/$file" -C "$tmp" gitleaks
+          install -m 0755 "$tmp/gitleaks" "$RUNNER_TEMP/gitleaks"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           gitleaks version
 
       - name: Scan git history

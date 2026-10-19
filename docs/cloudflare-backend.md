@@ -449,7 +449,8 @@ A missing or unreadable file is not a crash.
 - Do not commit `service.env`, the token file, or the account file. `.gitignore`
   ignores `service.env`, `*.env` (the tracked `.env` and `*.env.example` stay
   tracked), `*.pem`, and `*.key`. CI runs gitleaks 8.28.0 over the full git
-  history (`.gitleaks.toml` allowlists only test sentinels and placeholders).
+  history. `.gitleaks.toml` turns on the default rules and allowlists only
+  the historical placeholders `generate-a-random-token` and `Bearer ci-token`.
 - Create the budget directory and leave it mounted:
   `install -d -m 755 /opt/autofill/data`, then the `-v
   /opt/autofill/data:/var/lib/autofill` that `run-service.sh` already passes.

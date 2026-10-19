@@ -131,7 +131,7 @@ fails at once with a dependency error (the system shows as degraded) and does no
 **Forced-race boot (QA, R1b).** The race happened once and may not recur, so to exercise the once-per-boot restart
 path on purpose, make Ollama's first start of one boot CPU-only and skip the wait. (An empty `After=` in a drop-in
 can't do this: systemd ignores it, so `After=nv.service nvpmodel.service` stays.) For one boot only, the first start
-runs with `CUDA_VISIBLE_DEVICES=-1` and `CUDA_WAIT_S=0`. On xavier12 (2026-10-19, 21:07 EEST) this gave
+runs with `CUDA_VISIBLE_DEVICES=-1` and `CUDA_WAIT_S=0`. On `<jetson-host>` (2026-10-19, 21:07 EEST) this gave
 `library=cpu`, and `ollama-gpu-check.sh check` exited 1 with `CPU-only`; without it Ollama logs `library=CUDA` again,
 so `OLLAMA_LLM_LIBRARY` isn't needed.
 

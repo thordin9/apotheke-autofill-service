@@ -177,7 +177,7 @@ failure does not block merging. Build on the Xavier for a result you can run.
 
 All variables are plain env vars and work with `uvicorn` directly; Docker is not required.
 
-Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history. `.gitleaks.toml` allowlists only the test sentinels `acct-sentinel-9f3a-not-real` and `tok-sentinel-aa11-not-real`, plus the documented placeholders `<account-id>`, `<workers-ai-token>`, and `<generate-a-random-token>`.
+Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history, with the default rules enabled. The download is checksum-pinned. `.gitleaks.toml` allowlists only two historical placeholders: `generate-a-random-token` and `Bearer ci-token`.
 
 | Variable | Default | Meaning |
 |---|---|---|
