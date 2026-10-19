@@ -258,11 +258,15 @@ class FailoverBackend(Backend):
             blocked = not cf_ready
             state = await self._ollama_state()
             plan = self._plan(state)
+            budget = view.as_dict()
+            if not (cf.account_id and cf.token):
+                budget["reason"] = "Cloudflare is not configured"
             primary: dict[str, Any] = {
                 "id": "cloudflare",
                 "state": "unavailable" if blocked else "ok",
+                "can_serve": cf_ready,
                 "model": cf.model,
-                "budget": view.as_dict(),
+                "budget": budget,
                 "request_deadline_s": _public_seconds(plan["request_deadline_s"]),
                 "cf_slice_s": _public_seconds(plan["cf_slice_s"]),
                 "ollama_reserve_s": _public_seconds(plan["ollama_reserve_s"]),
@@ -297,7 +301,11 @@ class FailoverBackend(Backend):
         deadline = time.monotonic() + settings.request_deadline_s
         state = await self._ollama_state()
         plan = self._plan(state)
-        if not self.primary.budget.can_call():
+        # Missing credentials, an unreadable budget file, or a used-up budget:
+        # do not call Cloudflare. A 401/403 or Workers Paid block still tries,
+        # so a later success can clear can_serve.
+        creds = bool(self.primary.account_id and self.primary.token)
+        if not creds or not self.primary.budget.can_call():
             return await self._ollama_only(image_bytes, mime, context, deadline)
         try:
             return await asyncio.wait_for(

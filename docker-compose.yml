@@ -1,6 +1,6 @@
 # Local stacks.
-# Default (`docker compose up`) is the echo profile, selected by COMPOSE_PROFILES
-# in .env. `docker compose --profile ollama up` replaces that profile.
+# Default (`docker compose up`) ships BACKEND=cloudflare and FALLBACK_BACKEND=ollama.
+# `docker compose --profile ollama up` is the local Ollama-only stack.
 services:
   autofill:
     profiles: ["echo"]
@@ -11,7 +11,9 @@ services:
     ports:
       - "${PORT:-8080}:8080"
     environment:
-      BACKEND: echo
+      BACKEND: cloudflare
+      FALLBACK_BACKEND: ollama
+      OLLAMA_URL: http://ollama:11434
       # Optional bearer token; leave empty to disable auth.
       AUTOFILL_TOKEN: "${AUTOFILL_TOKEN:-}"
       # QA failure-mode switches (echo only): ok|error|malformed|slow
@@ -20,7 +22,7 @@ services:
       ECHO_MODEL: "${ECHO_MODEL:-}"
       ECHO_LOAD_MS: "${ECHO_LOAD_MS:-0}"
       ECHO_INSTALLED_MODELS: "${ECHO_INSTALLED_MODELS:-}"
-      BACKEND_TIMEOUT_S: "${BACKEND_TIMEOUT_S:-25}"
+      BACKEND_TIMEOUT_S: "${BACKEND_TIMEOUT_S:-45}"
       # Model / image size choice (API v1.2); empty = not offered.
       ALLOWED_MODELS: "${ALLOWED_MODELS:-}"
       IMAGE_SIZES: "${IMAGE_SIZES:-}"
@@ -85,6 +87,7 @@ services:
       - "${PORT:-8080}:8080"
     environment:
       BACKEND: ollama
+      FALLBACK_BACKEND: none
       # The app reads OLLAMA_URL. OLLAMA_HOST is the server/CLI variable.
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-moondream}

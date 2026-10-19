@@ -1,0 +1,17 @@
+# Allowlist for gitleaks. Only test fixtures and documented placeholders.
+# Real tokens, account ids, keys, and private hostnames are not listed here.
+# CI runs: gitleaks detect --source . --config .gitleaks.toml --redact
+
+title = "apotheke-autofill-service"
+
+[allowlist]
+description = "Sentinels in tests and placeholders in examples. Not real credentials."
+
+regexTarget = "match"
+regexes = [
+  '''acct-sentinel-9f3a-not-real''',
+  '''tok-sentinel-aa11-not-real''',
+  '''<account-id>''',
+  '''<workers-ai-token>''',
+  '''<generate-a-random-token>''',
+]

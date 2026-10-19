@@ -1,10 +1,11 @@
 # Cloudflare Workers AI backend
 
-Optional backend for the autofill service. It is **off by default**. The code
-default is `BACKEND=echo` and `FALLBACK_BACKEND=none`. The Jetson image stays
-`BACKEND=ollama` and does not set a Cloudflare token. Turning Cloudflare on
-sends every photo, and the brand, model number, and serial number the model
-reads, off the premises. Do that only as an explicit opt-in by the owner.
+Shipped default for the autofill service: `BACKEND=cloudflare` and
+`FALLBACK_BACKEND=ollama`. When `CF_API_TOKEN` and `CF_ACCOUNT_ID` are set, every
+photo, and the brand, model number, and serial number the model reads, goes to
+Cloudflare. When either value is missing, or the budget state file is missing or
+unreadable, the process does not crash: it logs one warning and serves from Ollama.
+`BACKEND=ollama` with `FALLBACK_BACKEND=none` stays local and makes no Cloudflare call.
 
 The service calls the Workers AI REST API itself:
 
@@ -105,13 +106,14 @@ models.
 
 ## Environment
 
-### Recommended: Cloudflare primary, Ollama fallback
+### Shipped default: Cloudflare primary, Ollama fallback
 
-This is the setup to opt into on the Jetson. Cloudflare answers when it can.
-Ollama stays loaded (`OLLAMA_KEEP_ALIVE=-1` on the board) and takes the
-request when Cloudflare cannot. The shipped `service.env` does **not** enable
-this. Copy it only when the owner has opted in, with real values replaced by
-the board's own secret file.
+This is what the service starts with. Cloudflare answers when a token is set
+and the budget can pay. Ollama stays loaded (`OLLAMA_KEEP_ALIVE=-1` on the
+board) and takes the request when Cloudflare cannot, including when the token
+or account id is missing or the budget state file is missing or unreadable.
+`deploy/jetson/service.env.example` ships these two backend values. Replace
+the placeholders with the board's own secret file; do not commit that file.
 
 ```bash
 BACKEND=cloudflare
@@ -200,8 +202,9 @@ CF_TIMEOUT_S=20
 CF_DAILY_NEURON_BUDGET=6000
 ```
 
-`FALLBACK_BACKEND=cloudflare` is valid only with `BACKEND=ollama`. The default
-`FALLBACK_BACKEND` is `none`. With that default the service does not call
+`FALLBACK_BACKEND=cloudflare` is valid only with `BACKEND=ollama`. The shipped
+default `FALLBACK_BACKEND` is `ollama`, which requires `BACKEND=cloudflare`.
+`FALLBACK_BACKEND=none` with `BACKEND=ollama` does not call
 Cloudflare at all.
 
 From Ollama to Cloudflare, only when `FALLBACK_BACKEND=cloudflare`:
@@ -414,31 +417,39 @@ Rejected models are not licensed to us for EU use. Do not enable them.
 
 ## Privacy
 
-In the recommended setup (`BACKEND=cloudflare`, `FALLBACK_BACKEND=ollama`)
-**every** photo, plus brand, model number, and serial number, goes to
-Cloudflare by default. Inference is not kept in Greece. Workers AI
-sub-processors include CoreWeave in the US and Nebius in the UK. Cloudflare's
-own docs describe standard inference as not used for training; logs, AI
-Gateway payload logs, and anything we store would be a copy. This path does
-not enable those.
+The shipped default is `BACKEND=cloudflare` with `FALLBACK_BACKEND=ollama`.
+When a token and an account id are set, **every** photo, plus brand, model
+number, and serial number, is sent to Cloudflare. Inference is not kept in
+Greece. Workers AI sub-processors include CoreWeave in the US and Nebius in
+the UK. Cloudflare's own docs describe standard inference as not used for
+training; logs, AI Gateway payload logs, and anything we store would be a
+copy. This path does not enable those.
 
-The path is opt-in. The code default and the Jetson `service.env` stay off
-until the owner opts in. The alternative, Ollama primary with
-`FAILOVER_ON_COLD` left false, sends a photo only on a real failure (down,
-degraded, timeout, upstream 5xx, busy). A cold model stays a local 503.
+When the token or account id is missing, or the budget state file is missing
+or unreadable, nothing is sent: the service logs one warning and answers from
+Ollama. `BACKEND=ollama` with `FALLBACK_BACKEND=none` never calls Cloudflare.
+Ollama primary with `FALLBACK_BACKEND=cloudflare` and `FAILOVER_ON_COLD` left
+false sends a photo only on a real failure (down, degraded, timeout, upstream
+5xx, busy). A cold model stays a local 503.
 
 ## DevOps
 
-This section is for DevOps. The application code does not read a token from
-anywhere except the environment.
+This section is for DevOps. The service reads `CF_API_TOKEN` and
+`CF_ACCOUNT_ID` from the environment, or the files named by
+`CF_API_TOKEN_FILE` and `CF_ACCOUNT_ID_FILE` when the direct value is empty.
+A missing or unreadable file is not a crash.
 
-- Put `CF_API_TOKEN` and `CF_ACCOUNT_ID` in `/opt/autofill/service.env` on the
-  board, the same file as `AUTOFILL_TOKEN`.
+- Put the token and account id in files such as `/opt/autofill/cf-api-token`
+  and `/opt/autofill/cf-account-id`, and point `service.env` at those paths.
+  `deploy/jetson/service.env.example` uses those placeholder paths. A direct
+  `CF_API_TOKEN` / `CF_ACCOUNT_ID` in the env file also works and wins.
 - Owner root, mode `600`. The container must keep receiving it with
   `docker run --env-file`. Never as `-e` on the command line, never in a
   compose label, never in `ps`.
-- Do not commit the file. `deploy/jetson/service.env.example` stays a template
-  without a real token, and it does not enable Cloudflare.
+- Do not commit `service.env`, the token file, or the account file. `.gitignore`
+  ignores `service.env`, `*.env` (the tracked `.env` and `*.env.example` stay
+  tracked), `*.pem`, and `*.key`. CI runs gitleaks 8.28.0 over the full git
+  history (`.gitleaks.toml` allowlists only test sentinels and placeholders).
 - Create the budget directory and leave it mounted:
   `install -d -m 755 /opt/autofill/data`, then the `-v
   /opt/autofill/data:/var/lib/autofill` that `run-service.sh` already passes.
@@ -447,5 +458,6 @@ anywhere except the environment.
   not in the container logs. An INFO line may show usage numbers and the model
   id. It must not show the token, the account id, the image, or brand / model
   / serial values.
-- Leave Cloudflare unset until that check is done. The Jetson primary stays
-  `BACKEND=ollama` until the owner opts in.
+- The shipped primary is `BACKEND=cloudflare` with `FALLBACK_BACKEND=ollama`.
+  Leave the token empty until the log check above is done; an empty token
+  serves from Ollama and does not call Cloudflare.

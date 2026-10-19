@@ -251,13 +251,13 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
 | 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or loading the model a client picked with `context.model`, when loading plus answering would not fit in the timeout (otherwise the request waits for the load), or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading, model-loading and busy responses carry `Retry-After: <seconds>` (for a cold start, the model's remaining load time; see [Choosing a model](#choosing-a-model-v12)) |
 | 503 | `backend_error` | backend answered but its output was unusable (e.g. model returned invalid/empty JSON, upstream HTTP error) |
-| 504 | `backend_timeout` | backend exceeded `BACKEND_TIMEOUT_S` (default 25 s; 45 s in the Jetson image) |
+| 504 | `backend_timeout` | backend exceeded `BACKEND_TIMEOUT_S` (default 45 s) |
 
 Check order: auth → missing image → size → type → context → backend.
 Recommended client timeout: the server's `BACKEND_TIMEOUT_S` plus 5 s, so the
-server answers `504` before the client gives up: 30 s for the generic 25 s
-default, 50 s for the Jetson image (45 s, sized so a Qwen request can wait for
-a model load of about 15 s plus about 13.5 s to answer).
+server answers `504` before the client gives up: 50 s for the 45 s
+default, sized so a Qwen request can wait for
+a model load of about 15 s plus about 13.5 s to answer.
 
 ## Changes within v1
 

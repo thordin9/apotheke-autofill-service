@@ -178,6 +178,7 @@ def test_default_model_is_gemma():
 
 
 def test_missing_credentials_do_not_echo_values(monkeypatch):
+    monkeypatch.setenv("FALLBACK_BACKEND", "none")
     monkeypatch.setenv("CF_ACCOUNT_ID", ACCOUNT)
     monkeypatch.delenv("CF_API_TOKEN", raising=False)
     with pytest.raises(RuntimeError) as exc:

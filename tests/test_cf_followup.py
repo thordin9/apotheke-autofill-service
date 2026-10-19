@@ -831,6 +831,142 @@ def test_used_up_budget_clears_can_serve_until_the_utc_day_resets(
     assert client.get("/healthz").json() == {"status": "degraded", "serving": "fallback"}
 
 
+def test_shipped_defaults_are_cloudflare_and_ollama(monkeypatch):
+    monkeypatch.delenv("BACKEND", raising=False)
+    monkeypatch.delenv("FALLBACK_BACKEND", raising=False)
+    monkeypatch.delenv("BACKEND_TIMEOUT_S", raising=False)
+    settings = get_settings()
+    assert settings.backend == "cloudflare"
+    assert settings.fallback_backend == "ollama"
+    assert settings.backend_timeout_s == 45.0
+
+
+@pytest.mark.parametrize("value", ["none", "ollama", "cloudflare"])
+def test_fallback_backend_accepts_none_ollama_and_cloudflare(monkeypatch, value):
+    monkeypatch.setenv("FALLBACK_BACKEND", value)
+    assert get_settings().fallback_backend == value
+
+
+def test_configured_cloudflare_is_primary_with_ollama_fallback(make_client, fake, cf_route):
+    cf_route.return_value = _ok()
+    client = make_client(**_primary(fake))
+    response = post_image(client, data=PHOTO)
+    assert response.status_code == 200
+    assert response.json()["backend_used"] == "cloudflare"
+    info = assert_contract(client.get("/v1/info"), "/v1/info")
+    assert info["backends"]["primary"]["id"] == "cloudflare"
+    assert info["backends"]["primary"]["can_serve"] is True
+    assert info["backends"]["primary"]["state"] == "ok"
+    assert info["backends"]["fallback"]["id"] == "ollama"
+    assert cf_route.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "creds",
+    [{}, {"CF_API_TOKEN": TOKEN}, {"CF_ACCOUNT_ID": ACCOUNT}],
+)
+def test_missing_cloudflare_credentials_serve_from_ollama(
+    make_client, fake, cf_route, caplog, creds
+):
+    with caplog.at_level(logging.WARNING):
+        client = make_client(
+            BACKEND="cloudflare",
+            FALLBACK_BACKEND="ollama",
+            OLLAMA_URL=fake.url,
+            OLLAMA_WARMUP="0",
+            BACKEND_TIMEOUT_S="45",
+            REQUEST_DEADLINE_S="45",
+            **creds,
+        )
+    warnings = [rec for rec in caplog.records if "not configured" in rec.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    _secrets_absent(caplog.text)
+    response = post_image(client, data=PHOTO)
+    assert response.status_code == 200
+    assert response.json()["backend_used"] == "ollama"
+    assert cf_route.call_count == 0
+    info = assert_contract(client.get("/v1/info"), "/v1/info")
+    primary = info["backends"]["primary"]
+    assert primary["id"] == "cloudflare"
+    assert primary["can_serve"] is False
+    assert primary["state"] == "unavailable"
+    assert primary["budget"]["reason"] == "Cloudflare is not configured"
+
+
+def test_credential_files_configure_cloudflare_and_a_missing_file_does_not(
+    make_client, fake, cf_route, tmp_path, caplog
+):
+    account = tmp_path / "cf-account-id"
+    token = tmp_path / "cf-api-token"
+    account.write_text(ACCOUNT + "\n", encoding="utf-8")
+    token.write_text(TOKEN + "\n", encoding="utf-8")
+    cf_route.return_value = _ok()
+    with caplog.at_level(logging.DEBUG):
+        client = make_client(
+            BACKEND="cloudflare",
+            FALLBACK_BACKEND="ollama",
+            OLLAMA_URL=fake.url,
+            OLLAMA_WARMUP="0",
+            BACKEND_TIMEOUT_S="45",
+            REQUEST_DEADLINE_S="45",
+            CF_ACCOUNT_ID_FILE=str(account),
+            CF_API_TOKEN_FILE=str(token),
+        )
+        response = post_image(client, data=PHOTO)
+    assert response.status_code == 200
+    assert response.json()["backend_used"] == "cloudflare"
+    assert cf_route.call_count == 1
+    _secrets_absent(caplog.text)
+    _secrets_absent(response.text)
+    missing = make_client(
+        BACKEND="cloudflare",
+        FALLBACK_BACKEND="ollama",
+        OLLAMA_URL=fake.url,
+        OLLAMA_WARMUP="0",
+        BACKEND_TIMEOUT_S="45",
+        REQUEST_DEADLINE_S="45",
+        CF_ACCOUNT_ID_FILE=str(tmp_path / "missing-account"),
+        CF_API_TOKEN_FILE=str(tmp_path / "missing-token"),
+    )
+    stayed = post_image(missing, data=PHOTO)
+    assert stayed.status_code == 200
+    assert stayed.json()["backend_used"] == "ollama"
+    assert cf_route.call_count == 1
+    info = missing.get("/v1/info").json()
+    assert info["backends"]["primary"]["can_serve"] is False
+    assert info["backends"]["primary"]["budget"]["reason"] == "Cloudflare is not configured"
+
+
+def test_unreadable_budget_file_serves_from_ollama(make_client, fake, cf_route, tmp_path):
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    cf_route.return_value = _ok()
+    client = make_client(
+        **_primary(fake),
+        CF_BUDGET_STATE_FILE=str(blocker / "cf.json"),
+    )
+    response = post_image(client, data=PHOTO)
+    assert response.status_code == 200
+    assert response.json()["backend_used"] == "ollama"
+    assert cf_route.call_count == 0
+    info = client.get("/v1/info").json()
+    assert info["backends"]["primary"]["can_serve"] is False
+
+
+def test_ollama_only_makes_no_cloudflare_call(make_client, fake, cf_route):
+    client = make_client(
+        BACKEND="ollama",
+        FALLBACK_BACKEND="none",
+        OLLAMA_URL=fake.url,
+        OLLAMA_WARMUP="0",
+    )
+    response = post_image(client, data=PHOTO)
+    assert response.status_code == 200
+    assert response.json()["backend_used"] == "ollama"
+    assert cf_route.call_count == 0
+
+
 def test_missing_cloudflare_config_cannot_serve(oclient, fake):
     fake.size_vram = 0
     client = oclient(FALLBACK_BACKEND="cloudflare", CF_DAILY_NEURON_BUDGET="0")

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
+
+log = logging.getLogger("app.settings")
 
 DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
@@ -154,16 +158,16 @@ def get_settings() -> Settings:
     cold_reserve = _positive("OLLAMA_COLD_RESERVE_S", _float("OLLAMA_COLD_RESERVE_S", 35.0))
     state_file = os.environ.get("CF_BUDGET_STATE_FILE", "").strip() or DEFAULT_BUDGET_PATH
     return Settings(
-        backend=os.environ.get("BACKEND", "echo").strip().lower() or "echo",
+        backend=os.environ.get("BACKEND", "cloudflare").strip().lower() or "cloudflare",
         token=os.environ.get("AUTOFILL_TOKEN", "").strip(),
         max_image_bytes=_int("MAX_IMAGE_BYTES", DEFAULT_MAX_IMAGE_BYTES),
-        backend_timeout_s=_float("BACKEND_TIMEOUT_S", 25.0),
+        backend_timeout_s=_float("BACKEND_TIMEOUT_S", 45.0),
         allowed_models=parse_models(os.environ.get("ALLOWED_MODELS", "")),
         image_sizes=parse_image_sizes(os.environ.get("IMAGE_SIZES", "")),
-        fallback_backend=_choice("FALLBACK_BACKEND", "none", ("none", "cloudflare", "ollama")),
+        fallback_backend=_choice("FALLBACK_BACKEND", "ollama", ("none", "cloudflare", "ollama")),
         failover_on_cold=_flag("FAILOVER_ON_COLD", False),
-        cf_account_id=Secret(os.environ.get("CF_ACCOUNT_ID", "").strip()),
-        cf_api_token=Secret(os.environ.get("CF_API_TOKEN", "").strip()),
+        cf_account_id=_credential("CF_ACCOUNT_ID", "CF_ACCOUNT_ID_FILE"),
+        cf_api_token=_credential("CF_API_TOKEN", "CF_API_TOKEN_FILE"),
         cf_model=os.environ.get("CF_MODEL", "").strip() or "@cf/google/gemma-4-26b-a4b-it",
         cf_timeout_s=cf_timeout_s,
         cf_daily_neuron_budget=budget,
@@ -174,11 +178,36 @@ def get_settings() -> Settings:
     )
 
 
-def validate_runtime(settings: Settings, backend_name: str) -> None:
-    """Fail startup when Cloudflare is selected without credentials.
+def _credential(env_name: str, file_name: str) -> Secret:
+    """Read a secret from the environment, or from a file path in another variable.
 
-    The message names the missing variables and never includes their values,
-    the token, or the account id.
+    A direct value wins. A missing, empty, or unreadable file is an empty
+    secret. This does not raise and does not log the path or the contents.
+    """
+    direct = os.environ.get(env_name, "").strip()
+    if direct:
+        return Secret(direct)
+    path = os.environ.get(file_name, "").strip()
+    if not path:
+        return Secret("")
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return Secret("")
+    return Secret(text.strip())
+
+
+def cloudflare_configured(settings: Settings) -> bool:
+    """True when both Cloudflare credentials are present. Values are not logged."""
+    return bool(settings.cf_account_id and settings.cf_api_token)
+
+
+def validate_runtime(settings: Settings, backend_name: str) -> None:
+    """Check the Cloudflare pair.
+
+    Missing credentials do not crash when Ollama can answer. One warning names
+    the missing variables and never includes their values. A Cloudflare primary
+    with no Ollama fallback still refuses to start without credentials.
     """
     # Imported lazily: the cloudflare module imports settings.
     from .backends.cloudflare import model_rejected
@@ -189,17 +218,22 @@ def validate_runtime(settings: Settings, backend_name: str) -> None:
         raise RuntimeError("FALLBACK_BACKEND=cloudflare requires BACKEND=ollama")
     if fallback == "ollama" and backend_name != "cloudflare":
         raise RuntimeError("FALLBACK_BACKEND=ollama requires BACKEND=cloudflare")
+    configured = cloudflare_configured(settings)
     # A zero budget never calls Cloudflare, so credentials are not required.
-    if (
-        needs_cf
-        and settings.cf_daily_neuron_budget > 0
-        and (not settings.cf_account_id or not settings.cf_api_token)
-    ):
-        raise RuntimeError(
-            "CF_ACCOUNT_ID and CF_API_TOKEN must be set when cloudflare is "
-            "the primary backend or the fallback"
-        )
-    if needs_cf and model_rejected(settings.cf_model):
+    if needs_cf and settings.cf_daily_neuron_budget > 0 and not configured:
+        if (backend_name == "cloudflare" and fallback == "ollama") or (
+            backend_name == "ollama" and fallback == "cloudflare"
+        ):
+            log.warning(
+                "Cloudflare is not configured: CF_ACCOUNT_ID or CF_API_TOKEN is unset "
+                "or its file is missing or unreadable; serving from Ollama"
+            )
+        else:
+            raise RuntimeError(
+                "CF_ACCOUNT_ID and CF_API_TOKEN must be set when cloudflare is "
+                "the primary backend or the fallback"
+            )
+    if needs_cf and configured and model_rejected(settings.cf_model):
         raise RuntimeError(
             "CF_MODEL is not allowed: Llama 3.2 Vision and Llama 4 Scout are rejected"
         )

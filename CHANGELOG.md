@@ -13,9 +13,22 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   `bench/results/cf-workers-ai-2026-10-19` (6.4 Neurons/photo). Mistral Small
   3.1 uses `response_format` too (`guided_json` is ignored on image messages).
   Qwen 3.8 is not recommended. Llama 3.2 Vision and Llama 4 Scout are rejected,
-  case-insensitively. The recommended opt-in is `BACKEND=cloudflare` with
-  `FALLBACK_BACKEND=ollama`; Ollama-primary with `FALLBACK_BACKEND=cloudflare`
-  still works. Code default and the Jetson env stay off.
+  case-insensitively. The shipped default is `BACKEND=cloudflare` with
+  `FALLBACK_BACKEND=ollama`. `FALLBACK_BACKEND` accepts `none`, `ollama`, or
+  `cloudflare`. Ollama-primary with `FALLBACK_BACKEND=cloudflare` still works,
+  and `BACKEND=ollama` with `FALLBACK_BACKEND=none` stays local.
+- **Default changed.** A missing `CF_ACCOUNT_ID` or `CF_API_TOKEN`, a missing
+  or unreadable credential file (`CF_ACCOUNT_ID_FILE` / `CF_API_TOKEN_FILE`),
+  or a missing or unreadable budget state file, does not crash startup. One
+  warning is logged (no secret values) and the request is served by Ollama.
+  `/v1/info` then shows Cloudflare not configured and `can_serve` false. When
+  a token is set, the default sends photos to Cloudflare. The Jetson example
+  uses placeholder paths `/opt/autofill/cf-account-id` and
+  `/opt/autofill/cf-api-token`.
+- **Secret scan.** `.gitignore` ignores `service.env`, `*.env` (tracked `.env`
+  and `*.env.example` stay tracked), `*.pem`, and `*.key`. CI runs gitleaks
+  8.28.0 on the full history. `.gitleaks.toml` allowlists only the test
+  sentinels and documented placeholders.
 - **Deadline.** `REQUEST_DEADLINE_S` (default 45, must be under Apotheke's 50 s)
   plus a warm reserve (15 s) or a cold/loading reserve (35 s). The Cloudflare
   slice is 20 s when Ollama is warm and about 10 s when it is cold. Startup

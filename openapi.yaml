@@ -299,6 +299,14 @@ components:
             state:
               type: string
               enum: [ok, warming, degraded, unavailable]
+            can_serve:
+              type: boolean
+              description: |
+                Live Cloudflare readiness when Cloudflare is the primary.
+                False when the token or account id is missing, the budget
+                state file cannot be used, the budget cannot pay, or the last
+                call was rejected (401/403 or Workers Paid). A later success
+                or the UTC budget reset can make it true again.
             model:
               type: string
               description: Cloudflare model id when the primary is Cloudflare.

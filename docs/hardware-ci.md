@@ -29,6 +29,7 @@ a run **fails** with a message saying which one is missing.
 2. `docker build -f Dockerfile.jetson` (tag `apotheke-autofill:jetson-ci`).
 3. Starts `tegrastats` (1 s) for whole-board memory and GPU load.
 4. Runs the image with `--network host`, `BACKEND=ollama`,
+   `FALLBACK_BACKEND=none` (local only, no Cloudflare call),
    `OLLAMA_URL=http://127.0.0.1:11434`, `OLLAMA_LOG_RAW=1`,
    `OLLAMA_QUEUE_SIZE=0`, and a random per-run `AUTOFILL_TOKEN` (masked).
    It listens on `127.0.0.1:18080`, so it never clashes with or exposes the

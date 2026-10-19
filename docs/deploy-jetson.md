@@ -220,7 +220,8 @@ and the container reads it with `--env-file`, so the token never appears on a co
 
 | Variable | Value | Why |
 |---|---|---|
-| `BACKEND` | `ollama` | Use the Ollama backend (the image's default too) |
+| `BACKEND` | `cloudflare` | Shipped default. Ollama answers when Cloudflare is not configured |
+| `FALLBACK_BACKEND` | `ollama` | Local model when Cloudflare fails, the budget is used up, or no token is set. `none` with `BACKEND=ollama` is the local-only mode |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | The host's Ollama, reachable because of `--network host` |
 | `OLLAMA_MODEL` | `qwen2.5vl-jetson:3b` | The patched model above |
 | `OLLAMA_LOG_RAW` | `0` | `1` logs every raw model answer, including the description of each photo, in the container log. Useful for debugging bad suggestions, but leave it off in production. |
@@ -230,11 +231,16 @@ and the container reads it with `--env-file`, so the token never appears on a co
 | `IMAGE_SIZES` | `448,560*,1024` | Image-size presets offered to Apotheke, 560 px recommended. See [Model and image size choice](#model-and-image-size-choice-allowed_models-and-image_sizes) |
 | `ALLOWED_MODELS` | `qwen2.5vl-jetson:3b` | Lists only the default model, so `/v1/info` gets a `models` field (Apotheke v2.4's model dropdown) with no extra model and no model switches. See the same section |
 
-Cloudflare is not enabled by this file. The recommended opt-in, once the owner asks for it, is
-`BACKEND=cloudflare` with `FALLBACK_BACKEND=ollama`. It is documented in
-[docs/cloudflare-backend.md](cloudflare-backend.md), including the env block, the 45 s deadline, and the
-DevOps steps for a token in this file (root, mode 600, never on a command line or in a label). Leave the
-primary `ollama` until that opt-in is deliberate. The Neuron counter needs a host directory that survives
+This file ships `BACKEND=cloudflare` and `FALLBACK_BACKEND=ollama`, and placeholder
+paths `CF_ACCOUNT_ID_FILE=/opt/autofill/cf-account-id` and
+`CF_API_TOKEN_FILE=/opt/autofill/cf-api-token`. With those files readable, every
+photo goes to Cloudflare. With either file missing or unreadable, or the budget
+state file missing or unreadable, the service logs one warning and serves from
+Ollama. `service.env` itself is gitignored. The pair is documented in
+[docs/cloudflare-backend.md](cloudflare-backend.md), including the 45 s deadline and
+the DevOps steps for a token in this file (root, mode 600, never on a command line
+or in a label). `BACKEND=ollama` with `FALLBACK_BACKEND=none` stays on the board
+and makes no Cloudflare call. The Neuron counter needs a host directory that survives
 `docker run` recreating the container:
 
 ```bash
