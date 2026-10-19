@@ -23,6 +23,18 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   harness gains a systemd-like fake `dl-cap.service` job, concurrent-event tests and worst-case runtime tests
   (at most 10 s). Board check over a reboot pending.
 
+### Added
+
+- **Periodic inbound-cap check (`dl-cap-check.timer`).** Closes the gap where the hook leaves dl-cap alone after a
+  `systemctl` timeout and nothing else restores the cap. New `deploy/jetson/dl-cap-check.sh`,
+  `dl-cap-check.service` (oneshot, `TimeoutStartSec=30`) and `dl-cap-check.timer` (`OnBootSec=2min`,
+  `OnUnitActiveSec=5min`, `AccuracySec=30s`). The check does nothing if `dl-cap.service` is disabled, has a job
+  queued or is starting or stopping. Otherwise it runs `dl-cap.sh check` and, only if that fails, logs under the tag
+  `dl-cap-check` and runs `systemctl --no-block restart dl-cap.service`. It shares the hook's lock file (waits at
+  most 8 s, else skips the round) and bounds every call (4 s each, about 24 s worst case). Install with
+  `systemctl enable --now dl-cap-check.timer` (see docs/deploy-jetson.md). Side effect: a plain `systemctl stop
+  dl-cap` is undone within 5 minutes; `systemctl disable --now dl-cap` keeps the cap off.
+
 ## [1.3.0]
 
 ### Added
