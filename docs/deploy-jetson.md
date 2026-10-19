@@ -306,11 +306,11 @@ resolve it:
 - otherwise (the new `autofill` works): `docker rm autofill-prev`.
 
 The script's behaviour is covered by [`deploy/jetson/tests/run-tests.sh`](../deploy/jetson/tests/run-tests.sh),
-which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl`, `tc`, `systemctl` and `journalctl`
+which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl`, `tc`, `systemctl`, `journalctl` and `logger`
 commands (no Docker, network or root needed) and checks: switches, rollbacks, signals before and during a rollback,
 the `/healthz` poll, the port check, the wall-clock `WAIT_S` and its validation, the bind-error hint,
 `build-image.sh` refs, `dl-cap.sh` (including a verbatim board `tc filter show` fixture), the NetworkManager hook,
-`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 1 min 45 s, because the
+`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 2 min, because the
 signal and wait-timeout cases use real timing, and removes its temporary files when it exits, also when interrupted
 with Ctrl-C.
 
@@ -401,15 +401,34 @@ sometimes takes over `eth0` a moment *after* that (journal: `device (eth0): stat
 `created default wired connection`, then `carrier: link connected`). That resets the device, the ingress qdisc
 goes with it, and the cap is silently gone while `dl-cap.service` still shows `active (exited)`; only a manual
 `systemctl restart dl-cap` brought it back. The NetworkManager dispatcher hook
-[`nm-dispatcher-90-dl-cap`](../deploy/jetson/nm-dispatcher-90-dl-cap) fixes that: when `eth0` (the `DEV` in
-`dl-cap.sh`) comes `up`, it runs `systemctl --no-block restart dl-cap.service`. On `dhcp4-change` for `eth0`, and
-on `connectivity-change` (which NetworkManager sends with an empty interface), it runs `dl-cap.sh check` first and
-only restarts if the cap is missing — a lease renewal must not leave a short uncapped gap or burn the unit's start
-limit (10 per 5 min). `--no-block` queues the restart and returns at once, so the hook never holds up
-NetworkManager's dispatcher while `network-online.target` is still pending. Other interfaces and other events are
-ignored, and the hook always exits 0. It does nothing while `dl-cap.service` is disabled, so
-`systemctl disable --now dl-cap` keeps the cap off. A plain `systemctl stop dl-cap` lasts only until the next
-`eth0` `up`.
+[`nm-dispatcher-90-dl-cap`](../deploy/jetson/nm-dispatcher-90-dl-cap) fixes that. It handles `up` and
+`dhcp4-change` for `eth0` (the `DEV` in `dl-cap.sh`) and `connectivity-change` (which NetworkManager sends with an
+empty interface). For each of them it runs `dl-cap.sh check` and only runs
+`systemctl --no-block restart dl-cap.service` if the cap is missing. A restart stops the cap first (`ExecStop`), so
+an unneeded one leaves a short uncapped gap and counts toward the unit's start limit (10 per 5 min).
+
+At boot NetworkManager sends `up` and `connectivity-change` at the same moment. Before this fix the hook restarted on every
+`up`, and the `connectivity-change` check could then see the cap removed by that restart's stop and queue a second
+restart. That second restart killed the first while it was starting (`status=15/TERM`, `Failed with result
+'signal'` in the journal), and the cap was off for about 0.4 s on every boot (QA follow-up N1). The hook now avoids
+that:
+
+1. Invocations are serialised with `flock` on `/run/lock/dl-cap-hook.lock`, so a second event waits for the first
+   instead of racing it. If the lock can't be taken within 60 s, or `flock` is missing, it carries on unlocked.
+2. If `dl-cap.service` already has a job queued (its boot start waiting for `network-online.target`, or a restart
+   queued by the previous event), the hook leaves it alone: that start applies the cap and verifies it.
+3. If the unit is in a transition (`activating`, `deactivating`, including the `Restart=on-failure` wait), the hook
+   waits for it to settle, at most 15 s, then goes on to the check. If it is still busy after that, the hook leaves
+   it alone as in step 2.
+4. Only then does it run the check, and restart if the cap is missing.
+
+`dl-cap.sh` is unchanged, so its post-apply check still fails the unit when the cap isn't there afterwards, and
+`Restart=on-failure` retries. `--no-block` queues the restart and returns at once, so the hook never holds up
+NetworkManager's dispatcher waiting for `network-online.target`; systemd registers the job before `systemctl`
+returns, so the next event sees it in step 2. Other interfaces and other events are ignored without any
+`systemctl`, `tc` or lock call, and the hook always exits 0. Each decision is logged with the tag `dl-cap-hook`. It
+does nothing while `dl-cap.service` is disabled, so `systemctl disable --now dl-cap` keeps the cap off. A plain
+`systemctl stop dl-cap` lasts only until the next handled event finds the cap missing.
 
 Install (as root). NetworkManager only runs dispatcher scripts that are owned by root and not writable by group or
 others:
@@ -427,12 +446,15 @@ Verify, now and **after every reboot** (the failure only showed up after a reboo
 tc -s filter show dev eth0 parent ffff:   # two filters (protocol ip and ipv6), each: police ... rate 30Mbit burst 384Kb ... drop
 /usr/local/sbin/dl-cap.sh check           # "cap is in place on eth0", exit 0; exit 1 if it's missing
 journalctl -b -u dl-cap -u NetworkManager-dispatcher   # after a reboot: dl-cap restarted once NetworkManager had eth0
+journalctl -b -t dl-cap-hook -o short-precise   # one line per event: "cap in place", "already has job", or "restarting"
+journalctl -b -u dl-cap | grep -c "Failed with result 'signal'"   # 0 (N1: was 1 on every boot)
 ```
 
 With `-s`, each filter also shows `Sent ... bytes` and, under load, `dropped` and `overlimits` counters. If the
 filters are missing, run `systemctl restart dl-cap` and check that `/etc/NetworkManager/dispatcher.d/90-dl-cap`
 exists, is owned by root and has mode 755. The test harness covers the verify step, `check` and the hook (with fake
-`tc` and `systemctl`).
+`tc` and `systemctl`), including concurrent events against a fake `dl-cap.service` job that, like systemd, kills a
+running start when another restart arrives: two events at the same moment give one apply and no killed start.
 
 `systemctl stop dl-cap` removes it. Effects: image builds and `ollama pull` are slow (see above), and a 1 MB photo
 upload takes about 0.3 s. Service timings measured on the board itself (loopback) are not affected.

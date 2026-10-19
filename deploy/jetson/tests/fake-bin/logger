@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fake `logger` for the dispatcher hook: appends the message (without -t TAG / --) to $DS/logger.log.
+while [ $# -gt 0 ]; do case "$1" in -t) shift 2 ;; --) shift; break ;; *) break ;; esac; done
+echo "$*" >> "${DS:?}/logger.log"
