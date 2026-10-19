@@ -48,6 +48,11 @@ has no GPU memory. That is what happens when Ollama starts before CUDA and
 falls back to CPU. `size_vram` is the source of truth; a missing `size_vram`
 does not degrade the probe. Echo never reports degraded.
 
+The Cloudflare Worker uses the same body, but a missing `AUTOFILL_TOKEN`
+secret is also `503 {"status":"degraded"}` (the Worker fails closed; it does
+not run without a token). With the secret set, `/healthz` is `200 {"status":"ok"}`
+and does not check the neuron budget.
+
 ### `GET /v1/info`
 Used by Apotheke's "Test connection". Requires auth when enabled, so a wrong
 token shows up as `401` here.
@@ -247,8 +252,9 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 |---|---|---|
 | 400 | `bad_request` | `image` missing/empty, `context` not valid JSON or wrong shape |
 | 401 | `unauthorized` | token required and missing/wrong (`WWW-Authenticate: Bearer`) |
-| 413 | `payload_too_large` | image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760); advertised as `max_image_bytes` in `/v1/info` |
+| 413 | `payload_too_large` | Python: image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760). Worker: whole request body > `MAX_UPLOAD_BYTES` (default 3 MiB = 3145728), from `Content-Length` or from the bytes read when the length is absent; also Workers AI code 3006. Advertised as `max_image_bytes` in `/v1/info` |
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
+| 429 | `rate_limited` | Worker only. Per-location rate limit on `POST /v1/suggest` after auth (`Retry-After: 60`). Loosely enforced; the daily cap is the `503` below |
 | 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or loading the model a client picked with `context.model`, when loading plus answering would not fit in the timeout (otherwise the request waits for the load), or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading, model-loading and busy responses carry `Retry-After: <seconds>` (for a cold start, the model's remaining load time; see [Choosing a model](#choosing-a-model-v12)) |
 | 503 | `backend_error` | backend answered but its output was unusable (e.g. model returned invalid/empty JSON, upstream HTTP error) |
 | 504 | `backend_timeout` | backend exceeded `BACKEND_TIMEOUT_S` (default 45 s) |
@@ -293,3 +299,31 @@ being absent.
   successful suggest. `GET /healthz` answers `503` `{"status":"degraded"}`
   when a warm model or the loaded production model has `size_vram` 0 (Ollama
   started before CUDA and is on CPU) and does not list models.
+
+## Cloudflare Worker
+
+The Worker in `worker/` is a drop-in for the same three routes. `version`
+stays `"1"`. Clients keep ignoring unknown fields.
+
+- `backend` and `backend_used` are `cloudflare-workers`. `model_used` is
+  `@cf/google/gemma-4-26b-a4b-it`.
+- `max_image_bytes` is `MAX_UPLOAD_BYTES` (default 3145728). The Python
+  service still defaults to 10485760. Apotheke reads `max_image_bytes`.
+- `budget` on `/v1/info` is `{neurons: {limit, used, reserved, remaining},
+  requests: {limit, used, remaining}, resets_at}`. `ready` is false when the
+  cap is exhausted. Absent on the Python service.
+- Auth is required whenever the secret is set, compared as SHA-256 digests
+  with `crypto.subtle.timingSafeEqual`. A missing secret is `503`, not open
+  access.
+- `POST /v1/suggest` stays `multipart/form-data`. Type comes from magic bytes.
+  Categories are stripped of NUL, C0/C1 controls, and bidi overrides. A lone
+  surrogate in a category is `400`.
+- Brand, model number, and serial follow v1.3 (trimmed, cut at 128, never
+  logged).
+- Over the daily cap, or when Workers AI returns 3036 or 3040, the status is
+  `503` `backend_unavailable` with `Retry-After` until 00:00 UTC. The body
+  does not include the upstream error. 3006 is `413`.
+- The Worker does not return `504`. A model failure is `503`.
+
+Deploy, free-tier limits, and the base64 CPU measurement:
+[cloudflare-workers-deploy.md](cloudflare-workers-deploy.md).

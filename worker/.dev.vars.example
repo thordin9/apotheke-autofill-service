@@ -1,0 +1,4 @@
+# Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
+# Generate a token with: openssl rand -hex 32
+# wrangler dev calls the real Workers AI binding and spends Neurons.
+AUTOFILL_TOKEN=replace-me

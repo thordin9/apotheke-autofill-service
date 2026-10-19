@@ -3,6 +3,66 @@
 All notable changes to this service. The HTTP contract is versioned
 separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
+## [2.0.0]
+
+### Added
+
+- **Cloudflare Worker (`worker/`).** Recommended deployment. Apotheke keeps
+  the same multipart `POST /v1/suggest`, `GET /v1/info`, and `GET /healthz`.
+  Set the base URL and the bearer token. `backend` and `backend_used` are
+  `cloudflare-workers`. Model `@cf/google/gemma-4-26b-a4b-it`, thinking off,
+  JSON schema, one repair call. Docker and Jetson remain legacy self-hosting.
+- Daily neuron cap in one SQLite Durable Object (default 6000, plain wrangler
+  var `AUTOFILL_DAILY_NEURON_BUDGET`). No KV. Optional
+  `AUTOFILL_DAILY_REQUEST_CAP`. Over the cap: `503` and `Retry-After` until
+  00:00 UTC. `/v1/info` adds `budget` (limit, used, remaining, `resets_at`)
+  and `max_image_bytes`.
+- Workers AI 3036 and 3040 map to that same `503`. 3006 maps to `413`.
+- Deploy workflow checkout uses `persist-credentials: false`, so the
+  `GITHUB_TOKEN` is not left in `.git/config` while `npm ci` runs.
+- Docs: roll back a bad deploy with `npx wrangler rollback` from `worker/`.
+- Removed `worker/.npmrc` (`legacy-peer-deps=true`); the pinned packages
+  resolve without it, so a real peer conflict now fails `npm ci`.
+  Upstream text is not returned. A Durable Object error fails closed.
+- Upload cap is the whole body, `MAX_UPLOAD_BYTES` default **3145728 (3 MiB)**,
+  checked from `Content-Length` and then from bytes actually read (chunked
+  bodies included). The Python service stays at 10 MiB.
+- Per-IP rate limit (10 / 60 s, after auth, suggest only) returns `429`.
+  It is per location and loosely enforced. The Durable Object is the real cap.
+- Deploy guide: [docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
+  `wrangler deploy` with an account-scoped token (Workers Scripts Edit,
+  Workers AI Read, Zone Workers Routes Edit, and DNS Edit). CI typechecks,
+  runs Vitest with `env.AI` stubbed, and
+  `wrangler deploy --dry-run`. It does not deploy.
+- Custom domain `apotheke-autofill-service.webapp.gr` (`workers_dev` and
+  preview URLs off). A fork sets `<your-domain>`.
+  [`.github/workflows/deploy-worker.yml`](.github/workflows/deploy-worker.yml)
+  deploys on a push to `main` that touches `worker/**` or the workflow, and
+  on `workflow_dispatch`, using the `production` environment. The first
+  deploy is still by hand, including one `wrangler secret put AUTOFILL_TOKEN`.
+  CI never runs `secret put`. The post-deploy smoke checks `/healthz` and an
+  unauthenticated `/v1/suggest` and spends no Neurons.
+
+### Fixed
+
+- **Jetson Cloudflare credential paths.** The service reads
+  `CF_API_TOKEN_FILE` and `CF_ACCOUNT_ID_FILE` inside the container.
+  `run-service.sh` mounts only `/opt/autofill/data` at `/var/lib/autofill`, so
+  the 1.4.0 example paths `/opt/autofill/cf-api-token` and
+  `/opt/autofill/cf-account-id` were invisible and the service fell back to
+  Ollama. The example and the Jetson deploy doc now use
+  `/var/lib/autofill/cf-api-token` and `/var/lib/autofill/cf-account-id`.
+  Put the files in `/opt/autofill/data/` with mode 600.
+- **Worker budget clock.** The Durable Object rolls the counter forward only.
+  A clock step backwards keeps the stored day. The Python state file still
+  resets; that is known issue M5 in
+  [docs/deploy-jetson.md](docs/deploy-jetson.md#known-issues), with H2, M6,
+  L6, and L7.
+- **Gitleaks allowlist.** Placeholder matches are ignored only in the two
+  commits that added them, and only when whitespace follows the closing
+  angle bracket. A value glued on, or a second bearer on the same curl line
+  in a later commit, stays a finding.
+
 ## [1.4.0] - 2026-10-19
 
 ### Added
@@ -67,7 +127,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   overrides, are stripped from client category names before the prompt, the
   schema enum, and the category returned to the client. The same classes as
   the brand fields. A NUL never comes back in the response.
-- **v3_lean latency.** The changelog's v3_lean cost is the measured +0.7 s.
+- **v3_lean latency.** The changelog's v3_lean cost is   the measured +0.7 s.
 
 ## [Unreleased]
 

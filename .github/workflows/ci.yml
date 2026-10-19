@@ -1,6 +1,6 @@
 name: CI
 
-# Checkout, lint, tests, and the history scan only read the repo.
+# Checkout, lint, tests, the history scan, and the Worker dry run only read the repo.
 permissions:
   contents: read
 
@@ -71,6 +71,35 @@ jobs:
 
       - name: Scan git history
         run: gitleaks detect --source . --config .gitleaks.toml --redact --exit-code 1
+
+      - name: Glued placeholder is still a finding
+        run: scripts/gitleaks-allowlist-fixture.sh
+
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Package dry run
+        run: npx wrangler deploy --dry-run
 
   deploy-scripts:
     # Jetson deploy scripts: shellcheck and the fake-docker harness (bash only; no Docker, network or root).

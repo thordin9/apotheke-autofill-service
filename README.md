@@ -5,9 +5,18 @@ description) from a photo, for [Apotheke](https://github.com/thordin9/apotheke).
 
 Contract: [docs/api-v1.md](docs/api-v1.md) · [openapi.yaml](openapi.yaml)
 
-Hardware CI on the Jetson (run by hand, not a required check): [docs/hardware-ci.md](docs/hardware-ci.md)
+**Recommended deployment:** the Cloudflare Worker in [`worker/`](worker),
+served at `https://apotheke-autofill-service.webapp.gr`. A fork sets its own
+`<your-domain>` and its own production secrets. Install, the one-time secret,
+and the main-only deploy Action are in
+[docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
+Apotheke only changes the base URL and the bearer token. The Worker reports
+`backend: "cloudflare-workers"` and `max_image_bytes: 3145728` (3 MiB).
 
-Deploying on the Jetson (production setup, scripts in `deploy/jetson/`): [docs/deploy-jetson.md](docs/deploy-jetson.md)
+Docker and the Jetson stack below are **legacy self-hosting**. They keep the
+Python service, including its 10 MiB upload limit. Hardware CI on the Jetson
+(run by hand, not a required check): [docs/hardware-ci.md](docs/hardware-ci.md).
+Legacy deploy (scripts in `deploy/jetson/`): [docs/deploy-jetson.md](docs/deploy-jetson.md).
 
 ## Quickstart
 
@@ -92,9 +101,9 @@ Checked against the Ollama library on 2026-10-14:
 | `qwen2.5vl:2b` | No. |
 | `qwen2.5vl:3b`, `qwen2.5vl:7b`, `qwen2.5vl:32b`, `qwen2.5vl:72b` | Yes. `qwen2.5vl:3b` is the smallest official Qwen vision tag. It is not Qwen2-VL-2B. |
 
-## Jetson (JetPack 5 / L4T r35)
+## Jetson (JetPack 5 / L4T r35) — legacy self-hosting
 
-The full production deployment (Ollama drop-in, model, `service.env`, container, verify, redeploy, rollback,
+The full legacy deployment (Ollama drop-in, model, `service.env`, container, verify, redeploy, rollback,
 bandwidth cap, runner, reboot) is in [docs/deploy-jetson.md](docs/deploy-jetson.md).
 
 `Dockerfile.jetson` is based on `dustynv/ollama:r35.4.1` (dusty-nv's Jetson
@@ -177,7 +186,7 @@ failure does not block merging. Build on the Xavier for a result you can run.
 
 All variables are plain env vars and work with `uvicorn` directly; Docker is not required.
 
-Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history, with the default rules enabled. The download is checksum-pinned. `.gitleaks.toml` allowlists only two historical placeholders: `generate-a-random-token` and `Bearer ci-token`.
+Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history, with the default rules enabled. The download is checksum-pinned. `.gitleaks.toml` allowlists the two historical placeholders only in the commits that added them, and only when whitespace follows the closing angle bracket.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -213,7 +222,7 @@ Do not commit `service.env`, key files, or a local env file. `.gitignore` ignore
 | `CF_ACCOUNT_ID` | *(unset)* | Cloudflare account id. When it or the token is missing, startup logs one warning and serves from Ollama. Never logged. |
 | `CF_API_TOKEN` | *(unset)* | API token scoped to Workers AI. When it is set, the default path sends photos to Cloudflare. Never logged, never returned, never put in an error. |
 | `CF_ACCOUNT_ID_FILE` | *(unset)* | File whose contents are the account id when `CF_ACCOUNT_ID` is unset. A missing or unreadable file does not crash startup. |
-| `CF_API_TOKEN_FILE` | *(unset)* | File whose contents are the API token when `CF_API_TOKEN` is unset. Same failure rule as `CF_ACCOUNT_ID_FILE`. The Jetson example uses `/opt/autofill/cf-api-token`. |
+| `CF_API_TOKEN_FILE` | *(unset)* | File whose contents are the API token when `CF_API_TOKEN` is unset. Same failure rule as `CF_ACCOUNT_ID_FILE`. The Jetson example uses `/var/lib/autofill/cf-api-token` (host file `/opt/autofill/data/cf-api-token`, mode 600). |
 | `CF_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | Workers AI model id. Confirmed default: Gemma 4 26B, thinking off, Apache 2.0, free plan. Llama 3.2 Vision and Llama 4 Scout are rejected (case-insensitive). |
 | `CF_TIMEOUT_S` | `20` | Per-attempt Cloudflare timeout. Must be a finite number greater than 0. With Ollama as the fallback the effective slice shrinks so the request stays inside `REQUEST_DEADLINE_S`. |
 | `CF_DAILY_NEURON_BUDGET` | `6000` | Neurons this process may spend per UTC day. About 930 Gemma 4 photos at 6.4 Neurons. `0` disables Cloudflare. |

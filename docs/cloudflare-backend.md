@@ -163,6 +163,9 @@ Worked example, recommended defaults:
 - warm: `min(20, 45 - 15 - 0) = 20`. Then 20 s Cloudflare + 15 s reserve = 35 s,
   under the 45 s deadline and under the 50 s client timeout.
 - cold: `min(20, 45 - 35 - 0) = 10`. Then 10 + 35 = 45, still under 50 s.
+  Known issue H2: that 10 s slice is the whole Cloudflare wait when Ollama is
+  cold, so a hang returns 503 instead of an Ollama answer. It fails safe.
+  See [Known issues](deploy-jetson.md#known-issues).
 
 `CF_TIMEOUT_S`, `REQUEST_DEADLINE_S`, and both reserves must be finite numbers
 greater than 0. `nan` and `inf` are refused at startup.
@@ -178,6 +181,9 @@ malformed or empty body after the one repair, a used-up daily Neuron budget,
 or a photo that will not fit the Cloudflare size cap after re-encoding.
 Client 4xx on the incoming request (400, 413, 415) is returned directly and
 does not call either backend. A Cloudflare HTTP 400 does not fall back either.
+Known issue L6: a Cloudflare HTTP 413 or 422 also stays 503 and does not fall
+back. Known issue L7: short non-JSON prose after the repair can be accepted
+as a name. See [Known issues](deploy-jetson.md#known-issues).
 
 Ollama cold or loading, when it is the fallback, waits when the remaining
 deadline covers it and otherwise returns 503 with `Retry-After`. Busy from
