@@ -12,6 +12,13 @@ build/
 # Secrets. The tracked .env only sets COMPOSE_PROFILES.
 .env.local
 .dev.vars
+# Local env files and keys. Negations keep the tracked templates.
+service.env
+*.env
+!.env
+!*.env.example
+*.pem
+*.key
 worker/node_modules/
 worker/.wrangler/
 worker/worker-configuration.d.ts

@@ -52,11 +52,13 @@ def test_credential_paths_are_under_the_mounted_directory():
     example = _assignments(EXAMPLE.read_text())
     script = RUN.read_text()
     doc = DOC.read_text()
-    if not example and MOUNT not in script:
-        return
     assert MOUNT in script
+    mount_target = MOUNT.split(":", 1)[1]
     assert example == GOOD
+    for path in example.values():
+        assert path.startswith(mount_target + "/")
     for path in GOOD.values():
         assert path in doc
-    assert "/opt/autofill/data/" in doc
-    assert "600" in doc
+    assert "/opt/autofill/data/cf-api-token" in doc
+    assert "/opt/autofill/data/cf-account-id" in doc
+    assert "mode 600" in doc

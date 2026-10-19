@@ -131,7 +131,7 @@ fails at once with a dependency error (the system shows as degraded) and does no
 **Forced-race boot (QA, R1b).** The race happened once and may not recur, so to exercise the once-per-boot restart
 path on purpose, make Ollama's first start of one boot CPU-only and skip the wait. (An empty `After=` in a drop-in
 can't do this: systemd ignores it, so `After=nv.service nvpmodel.service` stays.) For one boot only, the first start
-runs with `CUDA_VISIBLE_DEVICES=-1` and `CUDA_WAIT_S=0`. On xavier12 (2026-10-19, 21:07 EEST) this gave
+runs with `CUDA_VISIBLE_DEVICES=-1` and `CUDA_WAIT_S=0`. On `<jetson-host>` (2026-10-19, 21:07 EEST) this gave
 `library=cpu`, and `ollama-gpu-check.sh check` exited 1 with `CPU-only`; without it Ollama logs `library=CUDA` again,
 so `OLLAMA_LLM_LIBRARY` isn't needed.
 
@@ -220,7 +220,8 @@ and the container reads it with `--env-file`, so the token never appears on a co
 
 | Variable | Value | Why |
 |---|---|---|
-| `BACKEND` | `ollama` | Use the Ollama backend (the image's default too) |
+| `BACKEND` | `cloudflare` | Shipped default. Ollama answers when Cloudflare is not configured |
+| `FALLBACK_BACKEND` | `ollama` | Local model when Cloudflare fails, the budget is used up, or no token is set. `none` with `BACKEND=ollama` is the local-only mode |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | The host's Ollama, reachable because of `--network host` |
 | `OLLAMA_MODEL` | `qwen2.5vl-jetson:3b` | The patched model above |
 | `OLLAMA_LOG_RAW` | `0` | `1` logs every raw model answer, including the description of each photo, in the container log. Useful for debugging bad suggestions, but leave it off in production. |
@@ -229,6 +230,38 @@ and the container reads it with `--env-file`, so the token never appears on a co
 | `BACKEND_TIMEOUT_S` | `45` | See below |
 | `IMAGE_SIZES` | `448,560*,1024` | Image-size presets offered to Apotheke, 560 px recommended. See [Model and image size choice](#model-and-image-size-choice-allowed_models-and-image_sizes) |
 | `ALLOWED_MODELS` | `qwen2.5vl-jetson:3b` | Lists only the default model, so `/v1/info` gets a `models` field (Apotheke v2.4's model dropdown) with no extra model and no model switches. See the same section |
+
+This file ships `BACKEND=cloudflare` and `FALLBACK_BACKEND=ollama`. The service
+reads `CF_ACCOUNT_ID_FILE` and `CF_API_TOKEN_FILE` inside the container.
+`run-service.sh` mounts only `/opt/autofill/data` at `/var/lib/autofill`, so the
+example uses container paths:
+
+```text
+CF_ACCOUNT_ID_FILE=/var/lib/autofill/cf-account-id
+CF_API_TOKEN_FILE=/var/lib/autofill/cf-api-token
+```
+
+Put the files on the host in `/opt/autofill/data/`, owned by root, mode 600.
+Placeholders only; never commit the files or put a real token on a command line:
+
+```bash
+install -d -m 755 /opt/autofill/data
+umask 077
+printf '%s\n' '<CF_ACCOUNT_ID>' > /opt/autofill/data/cf-account-id
+printf '%s\n' '<CF_API_TOKEN>' > /opt/autofill/data/cf-api-token
+chmod 600 /opt/autofill/data/cf-account-id /opt/autofill/data/cf-api-token
+```
+
+With those files readable, every photo goes to Cloudflare. With either file
+missing or unreadable, or the budget state file missing or unreadable, the
+service logs one warning and serves from Ollama. `service.env` itself is
+gitignored. The pair is documented in
+[docs/cloudflare-backend.md](cloudflare-backend.md), including the 45 s deadline and
+the DevOps steps for a token in this file (root, mode 600, never on a command line
+or in a label). `BACKEND=ollama` with `FALLBACK_BACKEND=none` stays on the board
+and makes no Cloudflare call. The Neuron counter uses the same host directory,
+which survives `docker run` recreating the container. The default state file is
+`/var/lib/autofill/cf-neuron-budget.json` inside the container.
 
 **45 rather than 25.** A warm Qwen request takes about 13.5 s, and loading the model about 15 s. The service admits
 a request only if load (if needed) plus answer fits in 90% of the timeout, judged by the slowest of the last 5
@@ -318,7 +351,9 @@ The new container is started with:
 
 ```bash
 docker run -d --name autofill --network host --runtime nvidia --restart unless-stopped \
-  --env-file /opt/autofill/service.env apotheke-autofill:jetson-<sha>
+  --env-file /opt/autofill/service.env \
+  -v /opt/autofill/data:/var/lib/autofill \
+  apotheke-autofill:jetson-<sha>
 ```
 
 - `--network host`: the service listens on port 8080 of the board and reaches Ollama on `127.0.0.1:11434`.

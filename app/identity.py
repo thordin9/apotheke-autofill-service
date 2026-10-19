@@ -73,6 +73,20 @@ def _as_text(value: Any, depth: int = 0) -> str | None:
     return None
 
 
+_LINE_BREAK = re.compile(r"[\r\n\u2028\u2029\v\f]+")
+
+
+def clean_category(text: str) -> str:
+    """Fold line breaks, then drop C0/C1 controls and bidi overrides.
+
+    The same control classes as the brand fields. Line breaks become a space
+    first so a category name stays one prompt line. Callers that must reject
+    lone surrogates check that the text encodes as UTF-8 before this runs:
+    a surrogate is a control class here and would otherwise disappear.
+    """
+    return _printable(_LINE_BREAK.sub(" ", text)).strip()
+
+
 def _printable(text: str) -> str:
     """Drop C0/C1 controls, lone surrogates (they made the response 500) and the
     bidi embedding/override/isolate controls. RLM/LRM, ZWJ/ZWNJ stay."""

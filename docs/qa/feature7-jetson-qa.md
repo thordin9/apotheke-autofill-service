@@ -1,6 +1,6 @@
 # Feature 7: Jetson hardware QA (multi-model contract, API v1.2)
 
-Deployment under test: `apotheke-autofill:jetson-517352f` (main 517352f; app code identical to be67956, which adds docs only), container `autofill` on the Jetson **xavier12**, Ollama backend.
+Deployment under test: `apotheke-autofill:jetson-517352f` (main 517352f; app code identical to be67956, which adds docs only), container `autofill` on the Jetson **<jetson-host>**, Ollama backend.
 Date: 2026-10-18. Phase 1 (single-model allowlist) board window: **13:00:57–13:12:14 EEST**. Phase 2 (two-model allowlist, same image redeployed): **13:13:53–13:22:02 EEST**.
 
 ## Deployment configuration (verified from the container env)

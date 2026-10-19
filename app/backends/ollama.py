@@ -61,7 +61,7 @@ from typing import Any
 
 import httpx
 
-from ..identity import identity_fields, redact_for_log
+from ..identity import clean_category, identity_fields, redact_for_log
 from ..settings import get_settings
 from .base import CAPABILITIES, Backend, BackendUnavailable, Busy
 from .selection import allowlist, cold_wait_fits, model_key, resolve_model, same_model
@@ -111,13 +111,28 @@ V3_CATEGORIES = [
 ]
 
 
+# Line breaks must not survive into the prompt: a category is one line, and a
+# newline in a client name would start a new instruction.
+_LINE_BREAK = re.compile(r"[\r\n\u2028\u2029\v\f]+")
+
+
+def _one_line(value: str) -> str:
+    return _LINE_BREAK.sub(" ", value).strip()
+
+
 def _context_list(context: dict[str, Any], key: str) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for v in context.get(key, []) or []:
-        if isinstance(v, str) and v.strip() and v.strip() not in seen:
-            seen.add(v.strip())
-            out.append(v.strip())
+        if not isinstance(v, str):
+            continue
+        # Categories are client text that is echoed into the prompt, the schema
+        # enum, and the suggestion. NUL and the other controls are stripped
+        # here, after line breaks have been folded to a space.
+        v = clean_category(v) if key == "categories" else _one_line(v)
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
     return out[:MAX_CONTEXT_ITEMS]
 
 
@@ -125,6 +140,10 @@ class BackendError(BackendUnavailable):
     """Upstream answered but the answer was unusable (maps to backend_error)."""
 
     code = "backend_error"
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 def build_prompt(context: dict[str, Any]) -> str:
@@ -549,7 +568,7 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         s := _scored(
             raw.get("category"),
             MAX_CATEGORY,
-            context.get("categories"),
+            _context_list(context, "categories"),
             strict=True,
             synonyms=CATEGORY_SYNONYMS,
             default_confidence=overall,
@@ -659,7 +678,7 @@ def suggestion_from_text(text: str, context: dict[str, Any]) -> dict[str, Any]:
     def mentioned(v: str) -> bool:
         return bool(v.strip()) and re.search(rf"\b{re.escape(v.casefold())}\b", low) is not None
 
-    if cats := [c for c in context.get("categories", []) if mentioned(c)]:
+    if cats := [c for c in _context_list(context, "categories") if mentioned(c)]:
         out["category"] = {"value": cats[0], "confidence": TEXT_NAME_CONFIDENCE}
     if tags := [t for t in context.get("tags", []) if mentioned(t)]:
         out["tags"] = [{"value": t, "confidence": TEXT_NAME_CONFIDENCE} for t in tags]
@@ -1001,6 +1020,17 @@ class OllamaBackend(Backend):
         """A background load finished, so the model is warm before any suggest."""
         self._succeeded.add(model_key(model))
 
+    def residency(self) -> str:
+        """cold, loading, or warm for the configured model.
+
+        `/api/ps` has never answered, or the model is absent: cold. Failover
+        reserves the cold budget for cold and for loading.
+        """
+        state = self._state_of(self.model)
+        if state in ("warm", "loading", "cold"):
+            return state
+        return "cold"
+
     def _state_of(self, model: str) -> str | None:
         """cold | loading | warm, or None when /api/ps has never answered.
 
@@ -1045,6 +1075,10 @@ class OllamaBackend(Backend):
             loaded = None if self._vram is None else set(self._vram)
             models = await self._model_entries(loaded)
         return {"degraded": self._cpu_only_resident(), "models": models}
+
+    def degraded(self) -> bool:
+        """Last /api/ps view: a warm model, or the loaded production model, has 0 VRAM."""
+        return self._cpu_only_resident()
 
     async def _model_loaded(self, model: str | None = None) -> bool:
         """Whether Ollama has the model in memory (GET /api/ps). Any error
@@ -1150,7 +1184,7 @@ class OllamaBackend(Backend):
                 r.status_code,
                 logged_output(r.text),
             )
-            raise BackendError(f"ollama returned HTTP {r.status_code}")
+            raise BackendError(f"ollama returned HTTP {r.status_code}", status=r.status_code)
         try:
             data = r.json()
         except ValueError:
@@ -1270,7 +1304,7 @@ class OllamaBackend(Backend):
     async def suggest(self, image_bytes: bytes, mime: str, context: dict[str, Any]) -> Any:
         self.start()
         if not self.ready:
-            raise Busy(f"model '{self.model}' is warming up", self.retry_after)
+            raise Busy(f"model '{self.model}' is warming up", self.retry_after, reason="cold")
         model = await self.resolve(context.get("model"))
         timeout = get_settings().backend_timeout_s
         if not self._in_flight:
@@ -1283,7 +1317,9 @@ class OllamaBackend(Backend):
                 # (45 s), the request simply waits: the chat call makes Ollama
                 # load the model.
                 self._reload(model)
-                raise Busy(f"model '{model}' is loading", self._cold_retry_after(model))
+                raise Busy(
+                    f"model '{model}' is loading", self._cold_retry_after(model), reason="cold"
+                )
         else:
             # One request in flight, up to queue_size waiting; the rest get
             # 503. A request is also refused when, judging by the slowest
@@ -1326,7 +1362,7 @@ class OllamaBackend(Backend):
             self._inflight_load = None
             self._in_flight -= 1
             self._activity += 1
-        return {**out, "model_used": model}
+        return {**out, "model_used": model, "backend_used": "ollama"}
 
     def _pays_load(self, model: str) -> bool:
         """Whether this request will wait for a model load, not a warm answer."""

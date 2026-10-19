@@ -33,6 +33,7 @@ jobs:
       - name: Unit and contract tests
         env:
           BACKEND: echo
+          FALLBACK_BACKEND: none
         run: pytest -q
 
   gitleaks:
@@ -125,7 +126,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(docker compose config --services)" = "autofill"
-          docker compose config | grep -q 'BACKEND: echo'
+          docker compose config | grep -q 'BACKEND: cloudflare'
+          docker compose config | grep -q 'FALLBACK_BACKEND: ollama'
           got="$(docker compose --profile ollama config --services | sort | tr '\n' ' ')"
           test "$got" = "autofill-ollama ollama ollama-init "
           docker compose --profile ollama config --format json > /tmp/compose-ollama.json
@@ -134,6 +136,7 @@ jobs:
           d = json.load(open("/tmp/compose-ollama.json"))
           af = d["services"]["autofill-ollama"]["environment"]
           assert af["BACKEND"] == "ollama", af
+          assert af["FALLBACK_BACKEND"] == "none", af
           assert af["OLLAMA_URL"] == "http://ollama:11434", af
           assert "OLLAMA_HOST" not in af, af
           assert af["OLLAMA_MODEL"] == "moondream", af
@@ -151,6 +154,7 @@ jobs:
           docker rm -f autofill-smoke >/dev/null 2>&1 || true
           docker run -d --name autofill-smoke -p 8080:8080 \
             -e BACKEND=echo \
+            -e FALLBACK_BACKEND=none \
             -e AUTOFILL_TOKEN=ci-token \
             apotheke-autofill:echo
           cleanup() { docker logs autofill-smoke || true; docker rm -f autofill-smoke >/dev/null 2>&1 || true; }

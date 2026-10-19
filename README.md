@@ -36,7 +36,7 @@ curl -s -H 'Authorization: Bearer secret' localhost:8080/v1/info
 
 ## Docker (echo, x86)
 
-No GPU. The image runs `uvicorn app.main:app` with `BACKEND=echo`.
+No GPU. The image runs `uvicorn app.main:app` with `BACKEND=cloudflare` and `FALLBACK_BACKEND=ollama`.
 
 ```bash
 docker compose up --build
@@ -184,12 +184,14 @@ failure does not block merging. Build on the Xavier for a result you can run.
 
 All variables are plain env vars and work with `uvicorn` directly; Docker is not required.
 
+Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history, with the default rules enabled. The download is checksum-pinned. `.gitleaks.toml` allowlists only two historical placeholders: `generate-a-random-token` and `Bearer ci-token`.
+
 | Variable | Default | Meaning |
 |---|---|---|
-| `BACKEND` | `echo` | `echo`, `ollama`, `clip`. Unknown values fail at startup. |
+| `BACKEND` | `cloudflare` | `echo`, `ollama`, `cloudflare`, `clip`. Unknown values fail at startup. Shipped with `FALLBACK_BACKEND=ollama`. |
 | `AUTOFILL_TOKEN` | *(unset)* | If set, every route except `/healthz` needs `Authorization: Bearer <token>` (else 401). |
 | `MAX_IMAGE_BYTES` | `10485760` (10 MiB) | Larger images get 413. |
-| `BACKEND_TIMEOUT_S` | `25` (`45` in the Jetson image) | Backend call limit; exceeded → 504. Clients should time out 5 s later (30 s, or 50 s for the Jetson). |
+| `BACKEND_TIMEOUT_S` | `45` | Backend call limit; exceeded → 504. Clients should time out 5 s later (50 s). Must be at least `REQUEST_DEADLINE_S` when Cloudflare is primary and Ollama is the fallback. |
 | `ECHO_MODE` | `ok` | Echo only: `ok`, `error` (503), `malformed` (200 with invalid JSON body), `slow` (hangs → 504 after `BACKEND_TIMEOUT_S`). |
 | `ALLOWED_MODELS` | *(unset)* | Models a client may pick with `context.model`, comma-separated, e.g. `moondream,qwen3-vl:2b`. The backend's own model (`OLLAMA_MODEL`, or `ECHO_MODEL` on echo) is always allowed and is the default, so it need not be listed. Unset: `/v1/info` has no `models` and `context.model` is ignored. Only installed models (Ollama `GET /api/tags`, cached 30 s) are offered and used; anything else falls back to the default. See [Model and image size choice](#model-and-image-size-choice). On the Jetson, set it to the default model only (`qwen2.5vl-jetson:3b`) so `/v1/info` lists `models` and clients can show the model choice; don't add other tags: `qwen3-vl:2b` cannot load there with Ollama 0.15.6 (out of memory), and the lower-`max_pixels` tags add nothing over client-side `IMAGE_SIZES` ([benchmarks](docs/benchmarks.md#recommendation)). |
 | `IMAGE_SIZES` | *(unset)* | Long-edge presets (pixels, 64–8192) advertised as `image_sizes` in `/v1/info`, comma-separated, the recommended one marked with a trailing `*`, e.g. `448,672*,1024`. Without a `*` the largest is recommended; more than one `*` or a bad value fails at startup. Each entry must be plain digits with at most one trailing `*` (`^\d+\*?$`), so `672**`, `+448`, `4_48` and `672 *` are rejected. The client resizes; the service does not. Unset: no `image_sizes`. Recommended on the Jetson: `448,560*,1024` (560 px: median 8.3 s instead of 13.9 s at 1024 px with the same accuracy; see [docs/benchmarks.md](docs/benchmarks.md#image-size-sweep-and-qwen3-vl-2b-2026-10-18)). |
@@ -213,6 +215,19 @@ All variables are plain env vars and work with `uvicorn` directly; Docker is not
 | `OLLAMA_JSON_FORMAT` | `schema` | Ollama only: `schema` (or `1`) sends the Feature 9 v3_lean JSON schema as `format`. The category enum is `context.categories` when the client sends them, otherwise the v3_lean list. Tags are at most 3 and the description at most 100 characters, plus `brand`, `model_number`, `serial_number`. The prompt shows no JSON template, because small models copy a template back instead of answering. `json` sends `format: "json"`. `0` lets the model answer freely; the service still extracts the first JSON object, or derives fields from plain text. |
 | `OLLAMA_PLAIN_RETRY` | `1` | Ollama only: if the answer to the JSON prompt is unusable, ask once more with a short plain-text prompt and derive a low-confidence name and description from the text. It retries when generating took at most 40% of `BACKEND_TIMEOUT_S` (time Ollama spent loading the model does not count) and enough time is left. `0` disables the retry. |
 | `OLLAMA_LOG_RAW` | `0` | Ollama only: `1` logs every raw model answer at DEBUG. Answers that cannot be used are always logged at WARNING. Logged text is cut to 2 KB; the image, the request token, and `brand` / `model_number` / `serial_number` values are never logged. |
+| `FALLBACK_BACKEND` | `ollama` | `none`, `ollama`, or `cloudflare`. `ollama` fails over from Cloudflare and requires `BACKEND=cloudflare`. `cloudflare` fails over from Ollama and requires `BACKEND=ollama`. `none` with `BACKEND=ollama` is the local-only mode and makes no Cloudflare call. |
+| `FAILOVER_ON_COLD` | `false` | When the fallback is Cloudflare, also fail over on Ollama warm-up or a cold model load. The load keeps running. Default `false`: those requests stay a local 503 + `Retry-After`. |
+| `CF_ACCOUNT_ID` | *(unset)* | Cloudflare account id. When it or the token is missing, startup logs one warning and serves from Ollama. Never logged. |
+| `CF_API_TOKEN` | *(unset)* | API token scoped to Workers AI. When it is set, the default path sends photos to Cloudflare. Never logged, never returned, never put in an error. |
+| `CF_ACCOUNT_ID_FILE` | *(unset)* | File whose contents are the account id when `CF_ACCOUNT_ID` is unset. A missing or unreadable file does not crash startup. |
+| `CF_API_TOKEN_FILE` | *(unset)* | File whose contents are the API token when `CF_API_TOKEN` is unset. Same failure rule as `CF_ACCOUNT_ID_FILE`. The Jetson example uses `/var/lib/autofill/cf-api-token` (host file `/opt/autofill/data/cf-api-token`, mode 600). |
+| `CF_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | Workers AI model id. Confirmed default: Gemma 4 26B, thinking off, Apache 2.0, free plan. Llama 3.2 Vision and Llama 4 Scout are rejected (case-insensitive). |
+| `CF_TIMEOUT_S` | `20` | Per-attempt Cloudflare timeout. Must be a finite number greater than 0. With Ollama as the fallback the effective slice shrinks so the request stays inside `REQUEST_DEADLINE_S`. |
+| `CF_DAILY_NEURON_BUDGET` | `6000` | Neurons this process may spend per UTC day. About 930 Gemma 4 photos at 6.4 Neurons. `0` disables Cloudflare. |
+| `CF_BUDGET_STATE_FILE` | `/var/lib/autofill/cf-neuron-budget.json` | Persistent counter. Not `/tmp`. A corrupt or unwritable file spends the day. |
+| `REQUEST_DEADLINE_S` | `45` | Total deadline when Cloudflare is primary and Ollama is the fallback. Must be under Apotheke's 50 s client timeout and fit in `BACKEND_TIMEOUT_S`. |
+| `OLLAMA_WARM_RESERVE_S` | `15` | Seconds held for a warm Ollama fallback. The Jetson warm p95 at 560 px is about 11 s. |
+| `OLLAMA_COLD_RESERVE_S` | `35` | Seconds held when the local model is cold or loading (measured cold Qwen 25–32 s). |
 
 `ECHO_*` are read on every request (as is `ALLOWED_MODELS` on echo; the Ollama backend reads it at startup). Example: `ECHO_MODE=slow BACKEND_TIMEOUT_S=2 uvicorn app.main:app --port 8080`.
 
@@ -247,6 +262,7 @@ curl -s -F image=@photo.jpg -F 'context={"model":"moondream"}' localhost:8080/v1
 |---|---|
 | `echo` | Implemented. Deterministic: category = first `context.categories` entry (else `Misc`), tags = first 3 `context.tags` (else `echo`, `sample`), name/description derived from image hash, type and size. |
 | `ollama` | Implemented. Sends the image to Ollama `/api/chat` (temperature 0) with the Feature 9 v3_lean JSON schema as `format` (category enum from `context.categories` when sent, otherwise the v3_lean list; tags at most 3; description at most 100 characters; `brand` / `model_number` / `serial_number`). The short prompt is that v3_lean text: it names the fields in words, shows no JSON template, asks for a generic object name, and interpolates `context.locale` and those categories. With no categories the prompt matches the winning v3_lean bench file. The answer is extracted (tolerates code fences/prose, a JSON object cut off by `OLLAMA_NUM_PREDICT`, renamed keys such as `object`/`caption`/`keywords` and camelCase `modelNumber` / `serialNumber`, and schema placeholders like `"str"`), validated and clamped: max 10 unique tags of ≤40 chars, name ≤120, category ≤80, description ≤500, confidence in [0,1]; `brand`, `model_number` and `serial_number` are trimmed, stripped of controls and lone surrogates, and hard-cut to 128 characters, or `""` when missing or unreadable. Fields nested as `{"value","confidence"}` (in any combination) are unwrapped, and a top-level `confidence` fills in for name/category/description without one. When `context.categories` is given, the category must be one of them: matched case-insensitively, singular/plural (`clothes` → `Clothing`) or by a small English synonym list (`cookware` → `Kitchen`, `laptop` → `Electronics`, `lamp` → `Lighting`) if that target is listed, otherwise dropped. Tags matching `context.tags` the same way take the existing spelling; new tags stay allowed. Tags that are only a prompt word (`material`, `colour`, `brand`, `category`, …) are dropped, and `material: leather` becomes `leather`. A lone common first name ("John") is not used as the name. When the name shares no word with the object phrase that opens the description (`bose` vs "A pair of black headphones…"), that phrase (up to 4 words) becomes the name, at confidence ≤0.5. A description that only repeats the name or category is dropped. If the model ignores the JSON instructions, a low-confidence name/description is derived from its plain-text answer; if the answer is unusable (e.g. `{}`), one retry with a short plain-text prompt is made while time allows (`OLLAMA_PLAIN_RETRY`). Still unusable → 503 `backend_error`, with the raw output logged at WARNING (identity values redacted); unreachable → 503 `backend_unavailable`; slower than `BACKEND_TIMEOUT_S` → 504. |
+| `cloudflare` | Implemented. Shipped default, with `FALLBACK_BACKEND=ollama`. Posts the photo to the Workers AI REST API when a token is set. See [docs/cloudflare-backend.md](docs/cloudflare-backend.md). |
 | `clip` | Placeholder. Service starts and `/healthz` is 200, but `/v1/info` and `/v1/suggest` return **503** `backend_unavailable`. |
 
 Example: `BACKEND=ollama OLLAMA_URL=http://localhost:11434 uvicorn app.main:app --port 8080`.

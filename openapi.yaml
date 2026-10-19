@@ -39,7 +39,9 @@ paths:
             Degraded. A model that is warm, or the loaded production model, is
             in Ollama's memory with size_vram 0 (no GPU memory — Ollama started
             before CUDA). The process is up; it is not healthy for inference.
-            The body is status only; model ids stay on /v1/info.
+            The body is status only, plus optional `serving` when a fallback
+            can take requests. Model ids stay on /v1/info. HTTP status stays
+            503 so a deploy rollback still sees a failed probe.
           content:
             application/json:
               schema:
@@ -50,6 +52,15 @@ paths:
                   status:
                     type: string
                     const: degraded
+                  serving:
+                    type: string
+                    enum: [fallback, primary]
+                    description: |
+                      Added in v1.4. Present only when the local Ollama probe
+                      is degraded and Cloudflare can still serve. `fallback`
+                      when Ollama is primary. `primary` when Cloudflare is
+                      primary and Ollama is the fallback. Absent otherwise.
+                      The HTTP status stays 503.
   /v1/info:
     get:
       operationId: getInfo
@@ -161,6 +172,11 @@ components:
             IMAGE_SIZES. Long-edge presets the client may resize photos to
             before upload, ascending, exactly one `recommended: true`. The
             service does not resize; it only advertises the presets.
+        backends:
+          $ref: "#/components/schemas/Backends"
+          description: |
+            Added in v1.4 (additive). The primary backend and the optional
+            fallback, each with a state, plus whether the fallback can serve.
     ModelInfo:
       type: object
       required: [id, default]
@@ -255,6 +271,102 @@ components:
           type: string
           maxLength: 128
           description: Same rules as `brand`. Values are never written to service logs.
+        backend_used:
+          type: string
+          enum: [ollama, cloudflare]
+          description: |
+            Added in v1.4, optional. Which backend produced this answer.
+            `model_used` is that backend's model id (the Cloudflare model id
+            when `backend_used` is `cloudflare`).
+    NeuronBudget:
+      type: object
+      additionalProperties: false
+      required: [limit, used, remaining, resets_at]
+      properties:
+        limit: {type: number, minimum: 0}
+        used: {type: number, minimum: 0}
+        remaining: {type: number, minimum: 0}
+        resets_at:
+          type: string
+          description: Next 00:00 UTC, ISO-8601, for example 2026-10-20T00:00:00Z.
+        reason:
+          type: string
+          description: |
+            Present when Cloudflare will not be called: the state file failed,
+            the budget is 0, or what remains cannot pay for another call.
+    Backends:
+      type: object
+      additionalProperties: false
+      required: [primary, fallback]
+      properties:
+        primary:
+          type: object
+          additionalProperties: false
+          required: [id, state]
+          properties:
+            id: {type: string, examples: [ollama, cloudflare, echo]}
+            state:
+              type: string
+              enum: [ok, warming, degraded, unavailable]
+            can_serve:
+              type: boolean
+              description: |
+                Live Cloudflare readiness when Cloudflare is the primary.
+                False when the token or account id is missing, the budget
+                state file cannot be used, the budget cannot pay, or the last
+                call was rejected (401/403 or Workers Paid). A later success
+                or the UTC budget reset can make it true again.
+            model:
+              type: string
+              description: Cloudflare model id when the primary is Cloudflare.
+            budget: {$ref: "#/components/schemas/NeuronBudget"}
+            request_deadline_s:
+              type: number
+              description: |
+                Per-request deadline when Cloudflare is primary and Ollama is
+                the fallback. Under Apotheke's 50 s client timeout.
+            cf_slice_s:
+              type: number
+              description: |
+                Effective Cloudflare timeout for the current Ollama reserve.
+                Warm Ollama keeps CF_TIMEOUT_S (20 s at the defaults). Cold or
+                loading Ollama shrinks it (10 s at the defaults).
+            ollama_reserve_s:
+              type: number
+              description: |
+                Seconds held back for the Ollama fallback. OLLAMA_WARM_RESERVE_S
+                when the local model is warm, OLLAMA_COLD_RESERVE_S otherwise.
+            ollama_state:
+              type: string
+              enum: [warm, cold, loading]
+              description: Local Ollama residency used to pick the reserve.
+        fallback:
+          type: object
+          additionalProperties: false
+          required: [id, state, can_serve]
+          properties:
+            id: {type: string, examples: [none, cloudflare, ollama]}
+            state:
+              type: string
+              enum: ["off", "ready", "unavailable", "ok", "warming", "degraded"]
+            can_serve:
+              type: boolean
+              description: |
+                True only when a fallback is configured and allowed to take
+                requests. False when FALLBACK_BACKEND is none, or when the
+                Cloudflare budget cannot pay for a call.
+            model:
+              type: string
+              description: Model id of the fallback (Cloudflare id or Ollama tag).
+            budget: {$ref: "#/components/schemas/NeuronBudget"}
+            size_vram:
+              type: integer
+              minimum: 0
+              description: GPU bytes for the local Ollama model when it is the fallback.
+            models:
+              type: array
+              items: {$ref: "#/components/schemas/ModelInfo"}
+              description: Local Ollama models when Ollama is the fallback.
     Error:
       type: object
       required: [error]

@@ -44,7 +44,32 @@ _ENV = [
     "OLLAMA_JSON_FORMAT",
     "OLLAMA_LOG_RAW",
     "OLLAMA_PLAIN_RETRY",
+    "FALLBACK_BACKEND",
+    "FAILOVER_ON_COLD",
+    "CF_ACCOUNT_ID",
+    "CF_API_TOKEN",
+    "CF_ACCOUNT_ID_FILE",
+    "CF_API_TOKEN_FILE",
+    "CF_MODEL",
+    "CF_TIMEOUT_S",
+    "CF_DAILY_NEURON_BUDGET",
+    "CF_BUDGET_STATE_FILE",
+    "REQUEST_DEADLINE_S",
+    "OLLAMA_WARM_RESERVE_S",
+    "OLLAMA_COLD_RESERVE_S",
 ]
+
+
+@pytest.fixture(autouse=True)
+def cf_budget_state(clean_env, monkeypatch, tmp_path):
+    """Every test gets a writable budget file. The production path is not /tmp.
+
+    The shipped default is Cloudflare with an Ollama fallback. Tests pin echo
+    and no fallback so they do not boot that pair unless they opt in.
+    """
+    monkeypatch.setenv("CF_BUDGET_STATE_FILE", str(tmp_path / "cf-neuron-budget.json"))
+    monkeypatch.setenv("BACKEND", "echo")
+    monkeypatch.setenv("FALLBACK_BACKEND", "none")
 
 
 @pytest.fixture(autouse=True)
