@@ -451,7 +451,7 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   # Negative control: the same check catches a misspelt key (so a clean run means something).
   echo 'Requisitee=ollama.service' >> "$DS/u/ollama-gpu-check.service"
   (cd "$DS/u" && SYSTEMD_UNIT_PATH="$DS/u:" systemd-analyze verify --man=no ollama-gpu-check.service) > "$DS/out" 2>&1
-  grep -q "Unknown key 'Requisitee'" "$DS/out" && ok=1 || ok=0
+  grep -qE "Unknown key( name)? 'Requisitee'" "$DS/out" && ok=1 || ok=0
   result "systemd-analyze verify: negative control catches a misspelt key" "$ok" ""
 fi
 
