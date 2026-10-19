@@ -1,0 +1,13 @@
+filter protocol ip pref 2 u32 chain 0 
+filter protocol ip pref 2 u32 chain 0 fh 800: ht divisor 1 
+filter protocol ip pref 2 u32 chain 0 fh 800::800 order 2048 key ht 800 bkt 0 terminal flowid ??? not_in_hw 
+  match 00000000/00000000 at 0
+	action order 1:  police 0x1 rate 30Mbit burst 384Kb mtu 2Kb action drop overhead 0b 
+	ref 1 bind 1
+
+filter protocol ipv6 pref 3 u32 chain 0 
+filter protocol ipv6 pref 3 u32 chain 0 fh 801: ht divisor 1 
+filter protocol ipv6 pref 3 u32 chain 0 fh 801::800 order 2048 key ht 801 bkt 0 terminal flowid ??? not_in_hw 
+  match 00000000/00000000 at 0
+	action order 1:  police 0x2 rate 30Mbit burst 384Kb mtu 2Kb action drop overhead 0b 
+	ref 1 bind 1
