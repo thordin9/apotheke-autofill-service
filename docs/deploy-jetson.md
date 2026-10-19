@@ -310,7 +310,7 @@ which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl`, `tc`, `syst
 commands (no Docker, network or root needed) and checks: switches, rollbacks, signals before and during a rollback,
 the `/healthz` poll, the port check, the wall-clock `WAIT_S` and its validation, the bind-error hint,
 `build-image.sh` refs, `dl-cap.sh` (including a verbatim board `tc filter show` fixture), the NetworkManager hook,
-`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 3 min, because the
+`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 3 min 30 s, because the
 signal and wait-timeout cases use real timing, and removes its temporary files when it exits, also when interrupted
 with Ctrl-C.
 
@@ -413,7 +413,7 @@ restart. That second restart killed the first while it was starting (`status=15/
 'signal'` in the journal), and the cap was off for about 0.4 s on every boot (QA follow-up N1). The hook now avoids
 that:
 
-1. Invocations are serialised with `flock` on `/run/lock/dl-cap-hook.lock`, so a second event waits for the first
+1. Invocations are serialised with `flock` on `/run/dl-cap-hook.lock`, so a second event waits for the first
    instead of racing it. If the lock isn't free in time (see the time limit below), or `flock` is missing, it
    carries on unlocked.
 2. If `dl-cap.service` already has a job queued (its boot start waiting for `network-online.target`, or a restart
@@ -429,11 +429,16 @@ per script (`SCRIPT_TIMEOUT` in `dispatcher/nm-dispatcher.c`) and 10 minutes for
 `src/nm-dispatcher.c`), but the hook stays far below that so it never delays the next event noticeably. It has one
 deadline, `DL_CAP_HOOK_BUDGET_S` (default 8 s) after it starts: the lock wait and the settle wait share it and stop
 2 s before the deadline, which is kept for the check and the restart, and every `systemctl` and `dl-cap.sh check`
-call runs under `timeout` with the time left (at least 1 s). The worst case is about 9 s. When the time runs out,
-the hook falls through as above: no lock means it goes on unlocked, a unit still busy or with a job is left alone,
+call runs under `timeout` with the time left (at least 1 s). The worst case is about the budget plus 3 s (about
+11 s at the default 8 s; 10.9 s measured), because after a slow `is-enabled` the later calls each still get the
+1 s minimum. `DL_CAP_HOOK_BUDGET_S` must be a whole number from 1 to 60 without a leading zero; anything else falls
+back to 8 s and a value above 60 is capped at 60, both with a log line. When the time runs out, the hook falls
+through as above: no lock means it goes on unlocked, a unit still busy or with a job is left alone,
 and otherwise it checks and restarts with `--no-block`. A `systemctl` call that times out (PID 1 busy, as in QA's
 boot observation O4) counts as unknown, and the hook leaves dl-cap alone rather than risk killing a start; the
-boot start, or the next event, applies the cap, and failing that the periodic check below.
+boot start, or the next event, applies the cap, and failing that the periodic check below. A `dl-cap.sh check`
+that times out (for example `tc` hanging) also counts as unknown: the hook logs `dl-cap.sh check timed out` and
+leaves dl-cap alone instead of restarting, and with it dropping, a cap that may well be in place.
 
 **Periodic check (safety net).** [`dl-cap-check.timer`](../deploy/jetson/dl-cap-check.timer) runs
 [`dl-cap-check.service`](../deploy/jetson/dl-cap-check.service) 2 minutes after boot and then every 5 minutes
@@ -441,9 +446,13 @@ boot start, or the next event, applies the cap, and failing that the periodic ch
 `dl-cap.service` is disabled, has a job queued, or is starting or stopping. Otherwise it runs `dl-cap.sh check`
 and, only if that fails, logs under the tag `dl-cap-check` and runs `systemctl --no-block restart dl-cap.service`.
 So a cap the hook left off (for example after a `systemctl` timeout) comes back within about 5 minutes. It takes
-the hook's lock file (`/run/lock/dl-cap-hook.lock`, waiting at most 8 s), so the two never restart dl-cap at the
+the hook's lock file (`/run/dl-cap-hook.lock`, waiting at most 8 s), so the two never restart dl-cap at the
 same moment. If the hook holds the lock longer, the check skips that round. Every call is bounded (4 s each, about
-24 s in the worst case), and the unit has `TimeoutStartSec=30`. A check that finds the cap in place logs nothing.
+24 s in the worst case), and the unit has `TimeoutStartSec=30`. A check that finds the cap in place logs nothing,
+and one that times out counts as unknown (logged, nothing done that run). A `dl-cap.service` stuck in `failed`
+(for example `tc` keeps failing) is still restarted on every run, but logged only once per boot: the marker
+`/run/dl-cap-check.failed-logged` (`DL_CAP_CHECK_FAILED_MARKER`) suppresses the repeats and is removed once the cap
+is back.
 A plain `systemctl stop dl-cap` is therefore undone within 5 minutes too; use `systemctl disable --now dl-cap` to
 keep the cap off.
 
@@ -474,7 +483,7 @@ Verify, now and **after every reboot** (the failure only showed up after a reboo
 ```bash
 tc -s filter show dev eth0 parent ffff:   # two filters (protocol ip and ipv6), each: police ... rate 30Mbit burst 384Kb ... drop
 /usr/local/sbin/dl-cap.sh check           # "cap is in place on eth0", exit 0; exit 1 if it's missing
-journalctl -b -u dl-cap -u NetworkManager-dispatcher   # after a reboot: dl-cap restarted once NetworkManager had eth0
+journalctl -b -u dl-cap -u NetworkManager-dispatcher   # after a reboot: one dl-cap start, hook lines but normally no hook restart
 journalctl -b -t dl-cap-hook -o short-precise   # one line per event: "cap in place", "already has job", or "restarting"
 journalctl -b -u dl-cap | grep -c "Failed with result 'signal'"   # 0 (N1: was 1 on every boot)
 systemctl list-timers dl-cap-check.timer       # next run within 5 min

@@ -11,15 +11,20 @@
 # Uses the hook's lock file, so the two never restart dl-cap at the same moment (a restart during a running start
 # kills that start: QA #17 N1). Every call is bounded: is-enabled, show, check and restart CALL_S each, plus the
 # lock wait: 4 x 4 + 8 = 24 s worst case, under the unit's TimeoutStartSec=30.
+# A `dl-cap.sh check` that times out counts as unknown: nothing this run. A dl-cap.service stuck in `failed` is
+# still restarted every run, but logged only once per boot (marker DL_CAP_CHECK_FAILED_MARKER, default
+# /run/dl-cap-check.failed-logged, removed again once the cap is back).
 # Exit 0 except when the restart call itself fails or times out (exit 1, so the unit shows it).
 DEV=eth0   # must match DEV in dl-cap.sh
 DL_CAP=/usr/local/sbin/dl-cap.sh   # the harness rewrites this line to point at the repo copy
 UNIT=dl-cap.service
-LOCK=${DL_CAP_HOOK_LOCK:-/run/lock/dl-cap-hook.lock}   # same file as nm-dispatcher-90-dl-cap
+LOCK=${DL_CAP_HOOK_LOCK:-/run/dl-cap-hook.lock}   # same file as nm-dispatcher-90-dl-cap
 LOCK_WAIT_S=${DL_CAP_CHECK_LOCK_WAIT_S:-8}
 case "$LOCK_WAIT_S" in ''|*[!0-9]*) LOCK_WAIT_S=8 ;; esac
 [ "$LOCK_WAIT_S" -le 8 ] || LOCK_WAIT_S=8   # keep the worst case under TimeoutStartSec
 CALL_S=4
+# L5: a dl-cap.service stuck in `failed` is retried every run but logged once per boot (until the cap is back).
+FAILED_MARKER=${DL_CAP_CHECK_FAILED_MARKER:-/run/dl-cap-check.failed-logged}
 
 log() { logger -t dl-cap-check -- "$*" 2>/dev/null || :; }
 
@@ -45,9 +50,17 @@ case "$job" in 0|"("*) job="" ;; esac
 [ -n "$job" ] && exit 0
 case "$state" in activating|deactivating|reloading) exit 0 ;; esac
 
-if [ -x "$DL_CAP" ] && timeout "$CALL_S" env DEV="$DEV" "$DL_CAP" check >/dev/null 2>&1; then
+if [ -x "$DL_CAP" ]; then
+  timeout "$CALL_S" env DEV="$DEV" "$DL_CAP" check >/dev/null 2>&1; rc=$?
+  [ "$rc" = 0 ] && { rm -f "$FAILED_MARKER" 2>/dev/null; exit 0; }
+  [ "$rc" = 124 ] && { log "dl-cap.sh check timed out; trying again next run"; exit 0; }
+fi
+# dl-cap.service failed (e.g. tc keeps failing): keep retrying every run, but log it once per boot.
+if [ "$state" = failed ] && [ -e "$FAILED_MARKER" ]; then
+  timeout "$CALL_S" systemctl --no-block restart "$UNIT" || exit 1
   exit 0
 fi
+[ "$state" = failed ] && { : > "$FAILED_MARKER"; } 2>/dev/null
 log "30 Mbit/s inbound cap missing on $DEV (dl-cap.service $state); restarting dl-cap.service"
 if ! timeout "$CALL_S" systemctl --no-block restart "$UNIT"; then
   log "systemctl restart dl-cap.service failed or timed out"
