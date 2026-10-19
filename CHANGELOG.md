@@ -11,15 +11,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   adds Feature 9 results: four prompt/schema variants on `qwen2.5vl-jetson:3b` at 560 and 1024 px.
   Winner **`v3_lean`** (+0.8 s, fewest invented values). `v2_omit` invents heavily — do not use.
   Small-model pulls: MiniCPM-V4 runs but category accuracy lags; library `gemma3:4b` needs a newer
-  Ollama; InternVL3/SmolVLM2 are CPU-only (~80–110 s/photo) on this 0.15.6 build. Production stays
+  Ollama. InternVL3/SmolVLM2 are not inherently CPU-only. The earlier ~80–110 s/photo was the
+  18:22–19:28 CPU-only Ollama boot window; after CUDA restore they run on GPU (~19.5 s InternVL,
+  ~17 s SmolVLM for a single 560 px request) and still are not allowlisted. Production stays
   on Qwen with `ALLOWED_MODELS=qwen2.5vl-jetson:3b`. New scripts: `bench/brand_variants.py`,
   `bench/brand_sweep.py`, `bench/brand_sweep.sh`, `bench/score_brand.py`,
   `bench/photos/brand_readability.json`. Raw: `bench/results/brandserial-2026-10-19/`,
   `bench/results/modelbench-2026-10-19/`.
-  GPU retime after the 18:22–19:28 CPU-only Ollama window confirms Feature 9 medians (v3_lean +0.7 s).
-  InternVL3/SmolVLM2 are **not** inherently CPU-only — that was the boot race; on GPU they land ~17–20 s for a
-  single 560 px request but still are not allowlisted.
-
+  GPU retime after that boot window confirms Feature 9 medians (v3_lean +0.7 s).
 
 - **Jetson deployment guide (PR #9).** `docs/deploy-jetson.md` documents the production setup on the Jetson
   Xavier NX: platform, Ollama drop-in, the `qwen2.5vl-jetson:3b` model, `service.env`, building
