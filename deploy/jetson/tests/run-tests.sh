@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for deploy/jetson/*.sh with fake docker/curl/tc on PATH (no Docker, no network, no root).
-# Usage: deploy/jetson/tests/run-tests.sh        (about 1 min 45 s; the signal cases use real timing)
+# Usage: deploy/jetson/tests/run-tests.sh        (about 3 min; the signal cases use real timing)
 # Exit code: number of failed cases (0 = all passed).
 set -u
 set -m   # job control: background jobs keep default SIGINT handling, so the signal cases can send it
@@ -188,7 +188,7 @@ nmd() {
   newds
   if [ -n "${NMD_CAP:-}" ]; then touch "$DS/tc.qdisc"; printf 'ip\nipv6\n' > "$DS/tc.filters"; fi
   sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=${NMD_DLCAP:-$DC}|" "$NMD" > "$DS/hook"
-  env PATH="$FAKE:$PATH" "$@" sh "$DS/hook" "$i" "$a" > "$DS/out" 2>&1; rc=$?
+  env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DLCAP_SH="$DC" "$@" sh "$DS/hook" "$i" "$a" > "$DS/out" 2>&1; rc=$?
   n=$(grep -c "restart dl-cap.service" "$DS/systemctl.log" 2>/dev/null); n=${n:-0}
   [ "$rc" = 0 ] && [ "$n" = "$er" ] && ok=1 || ok=0
   result "nm-dispatcher: '$i' '$a'${NMD_CAP:+ cap ok}${NMD_DLCAP:+ no dl-cap.sh}${1:+ $*} -> $([ "$er" = 1 ] && echo restart || echo nothing)" "$ok" "exit=$rc restarts=$n"
@@ -201,8 +201,11 @@ nmd 1 "" connectivity-change          # NetworkManager sends connectivity-change
 for a in down pre-up pre-down dhcp6-change hostname reapply vpn-up ""; do nmd 0 eth0 "$a"; done
 for i in wlan0 eth1 lo eth0.5 docker0 ""; do nmd 0 "$i" up; done
 for i in wlan0 docker0; do nmd 0 "$i" connectivity-change; nmd 0 "$i" dhcp4-change; done
-# Cap in place: `up` still restarts (the device was just reset); renewals and connectivity changes don't (L5).
-NMD_CAP=1 nmd 1 eth0 up
+# Cap in place: nothing to do for any handled event, `up` included (N1: `up` used to restart unconditionally).
+NMD_CAP=1 nmd 0 eth0 up
+NMD_CAP=1 nmd 0 eth0 up; grep -q "filter show dev eth0 parent ffff:" "$DS/tc.log" && ! grep -qE "qdisc|filter add" "$DS/tc.log" \
+  && grep -q "eth0 up: cap in place on eth0, no restart" "$DS/logger.log" && ok=1 || ok=0
+result "  ...up ran 'dl-cap.sh check' (read-only), logged the skip, cap untouched" "$ok" ""
 NMD_CAP=1 nmd 0 eth0 dhcp4-change
 NMD_CAP=1 nmd 0 "" connectivity-change
 NMD_CAP=1 nmd 0 eth0 connectivity-change
@@ -216,12 +219,225 @@ nmd 0 eth0 dhcp4-change UNIT_DISABLED=1
 nmd 0 "" connectivity-change UNIT_DISABLED=1
 nmd 1 eth0 up SYSTEMCTL_FAIL=1
 nmd 1 eth0 dhcp4-change SYSTEMCTL_FAIL=1
-newds; env PATH="$FAKE:$PATH" sh "$NMD" eth0 up > "$DS/out" 2>&1
+newds; env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" sh "$NMD" eth0 up > "$DS/out" 2>&1
 grep -qx "systemctl --no-block restart dl-cap.service" "$DS/systemctl.log" && ok=1 || ok=0
 result "  ...restart is queued (--no-block), not waited for" "$ok" ""
+# Ignored events/interfaces touch nothing: no systemctl call (not even is-enabled), no tc call, no lock file.
+for ia in "eth0 down" "wlan0 up" "docker0 connectivity-change" "eth1 dhcp4-change" "eth0 pre-up"; do
+  nmd 0 "${ia% *}" "${ia#* }"
+  [ ! -e "$DS/systemctl.log" ] && [ ! -e "$DS/tc.log" ] && [ ! -e "$DS/hook.lock" ] && ok=1 || ok=0
+  result "  ...'$ia' ignored: no systemctl, tc or lock" "$ok" ""
+done
+# A job already queued for dl-cap.service (its boot start waiting for network-online.target, or a restart queued by
+# an earlier event): leave it, even with the cap missing; that start applies and verifies the cap.
+nmd 0 eth0 up DLCAP_STATE=inactive DLCAP_JOB=7
+nmd 0 "" connectivity-change DLCAP_STATE=active DLCAP_JOB=12
+grep -q "already has job 12 queued" "$DS/logger.log" && ok=1 || ok=0; result "  ...logged 'already has job 12 queued'" "$ok" ""
+# Stuck in a transition: give up when the time budget runs out (2 s before the deadline), no restart, exit 0.
+SECONDS=0; nmd 0 eth0 up DLCAP_STATE=activating DL_CAP_HOOK_BUDGET_S=4; t=$SECONDS
+[ "$t" -ge 1 ] && [ "$t" -le 4 ] && grep -q "still activating after [0-9]*s" "$DS/logger.log" && ok=1 || ok=0
+result "  ...gave up within DL_CAP_HOOK_BUDGET_S=4 (${t}s), logged it" "$ok" ""
+nmd 1 eth0 up DLCAP_STATE=failed   # a failed unit with no job and no cap: restart
+nmd 1 eth0 up DLCAP_STATE=inactive # stopped (not disabled): the next event restarts it, as before
+
+echo "== nm-dispatcher-90-dl-cap: concurrent events (QA #17 N1), with a systemd-like dl-cap job"
+# settle: wait (max 10 s) for the simulated dl-cap start to finish.
+settle() { local k=0; while [ -f "$DS/dlcap.pid" ] && kill -0 "$(cat "$DS/dlcap.pid")" 2>/dev/null && [ $k -lt 100 ]; do
+  sleep 0.1; k=$((k+1)); done; }
+cnt() { local c; c=$(grep -c "$@" 2>/dev/null); echo "${c:-0}"; }   # cnt [GREP-OPT] PATTERN FILE
+# pair LOCK CAP "IF1 EV1" "IF2 EV2" [ENV...]: run two hook invocations at the same moment, then let dl-cap settle.
+# Sets restarts= applies= killed= capok= (dl-cap.sh check exit 0 afterwards).
+pair() {
+  local lock=$1 cap=$2 e1=$3 e2=$4 p1 p2; shift 4
+  newds
+  if [ "$cap" = 1 ]; then touch "$DS/tc.qdisc"; printf 'ip\nipv6\n' > "$DS/tc.filters"; fi
+  sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$NMD" > "$DS/hook"
+  # shellcheck disable=SC2086  # "IF EV" splits into the hook's two arguments; an empty IF is passed as ""
+  { env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$lock" DLCAP_SIM=1 DLCAP_SH="$DC" SHOW_SLEEP=0.3 "$@" \
+      sh "$DS/hook" "${e1% *}" "${e1#* }" > "$DS/out1" 2>&1 & p1=$!
+    env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$lock" DLCAP_SIM=1 DLCAP_SH="$DC" SHOW_SLEEP=0.3 "$@" \
+      sh "$DS/hook" "${e2% *}" "${e2#* }" > "$DS/out2" 2>&1 & p2=$!
+    wait "$p1"; r1=$?; wait "$p2"; r2=$?; }
+  settle
+  cat "$DS/out1" "$DS/out2" > "$DS/out" 2>/dev/null; [ -f "$DS/logger.log" ] && sed 's/^/log: /' "$DS/logger.log" >> "$DS/out"
+  [ -f "$DS/dlcap.events" ] && sed 's/^/event: /' "$DS/dlcap.events" >> "$DS/out"
+  restarts=$(cnt "restart dl-cap.service" "$DS/systemctl.log"); applies=$(cnt "^apply$" "$DS/dlcap.events")
+  killed=$(cnt "start killed" "$DS/dlcap.events")
+  env PATH="$FAKE:$PATH" sh "$DC" check > /dev/null 2>&1 && capok=1 || capok=0
+}
+# Self-test: the fake reproduces N1. Two back-to-back restarts, as the old hook queued them, kill the first start.
+newds; touch "$DS/tc.qdisc"; printf 'ip\nipv6\n' > "$DS/tc.filters"
+for k in 1 2; do env PATH="$FAKE:$PATH" DLCAP_SIM=1 DLCAP_SH="$DC" systemctl --no-block restart dl-cap.service; sleep 0.3; done
+settle; killed=$(cnt "start killed" "$DS/dlcap.events"); applies=$(cnt "^apply$" "$DS/dlcap.events")
+[ "$killed" = 1 ] && [ "$applies" = 1 ] && ok=1 || ok=0
+result "nm-dispatcher sim self-test: 2 quick restarts -> 1st start killed (N1)" "$ok" "killed=$killed applies=$applies"
+# Two events at the same moment, cap missing: one restart, one apply, nothing killed, cap in place afterwards.
+for ev in "eth0 up|eth0 up" "eth0 up| connectivity-change" "eth0 dhcp4-change| connectivity-change"; do
+  pair "$TMPROOT/lock.$$" 0 "${ev%|*}" "${ev#*|}"; rm -f "$TMPROOT/lock.$$"
+  [ "$r1$r2" = 00 ] && [ "$restarts" = 1 ] && [ "$applies" = 1 ] && [ "$killed" = 0 ] && [ "$capok" = 1 ] && ok=1 || ok=0
+  result "nm-dispatcher: concurrent '${ev%|*}' + '${ev#*|}', no cap -> 1 apply, none killed" "$ok" \
+    "exit=$r1,$r2 restarts=$restarts applies=$applies killed=$killed cap=$capok"
+done
+[ "$(cnt "restarting dl-cap.service" "$DS/logger.log")" = 1 ] && [ "$(cnt -E "already has job|cap in place" "$DS/logger.log")" = 1 ] \
+  && ok=1 || ok=0
+result "  ...the second event left the first's job alone (queued job, or waited + cap in place)" "$ok" ""
+# The board's boot case: both events while the cap is already applied -> no restart at all, so no uncapped gap.
+pair "$TMPROOT/lock.$$" 1 "eth0 up" " connectivity-change"; rm -f "$TMPROOT/lock.$$"
+[ "$restarts" = 0 ] && [ "$applies" = 0 ] && [ "$killed" = 0 ] && [ "$capok" = 1 ] && ! grep -qE "qdisc|filter add" "$DS/tc.log" \
+  && [ "$(cnt "cap in place on eth0, no restart" "$DS/logger.log")" = 2 ] && ok=1 || ok=0
+result "nm-dispatcher: concurrent up + connectivity-change, cap in place -> 0 restarts" "$ok" \
+  "restarts=$restarts applies=$applies killed=$killed cap=$capok"
+# An event while a restart is in progress (deactivating/activating): wait for it, then check -> no second restart.
+newds; sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$NMD" > "$DS/hook"
+env PATH="$FAKE:$PATH" DLCAP_SIM=1 DLCAP_SH="$DC" DLCAP_START_S=2 systemctl --no-block restart dl-cap.service
+sleep 0.3; rm -f "$DS/dlcap.job"   # the job has started running (state activating), no longer just queued
+SECONDS=0; env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DLCAP_SIM=1 DLCAP_SH="$DC" sh "$DS/hook" eth0 up > "$DS/out" 2>&1; rc=$?; t=$SECONDS
+settle; restarts=$(cnt "restart dl-cap.service" "$DS/systemctl.log"); killed=$(cnt "start killed" "$DS/dlcap.events")
+[ "$rc" = 0 ] && [ "$restarts" = 1 ] && [ "$killed" = 0 ] && [ "$t" -ge 1 ] && grep -q "cap in place on eth0, no restart" "$DS/logger.log" \
+  && ok=1 || ok=0
+result "nm-dispatcher: up during a running start -> waits (${t}s), then no 2nd restart" "$ok" "restarts=$restarts killed=$killed"
+# Without the lock (lock file can't be opened), the same concurrent pair races and the fake shows N1 again:
+# evidence that the serialisation is what prevents it (the hook still exits 0 and the cap ends up in place).
+pair /nonexistent-dir/lock 0 "eth0 up" " connectivity-change"
+[ "$r1$r2" = 00 ] && [ "$restarts" = 2 ] && [ "$killed" = 1 ] && [ "$capok" = 1 ] && ok=1 || ok=0
+result "nm-dispatcher sim self-test: unlocked pair races -> 2 restarts, 1 killed" "$ok" \
+  "restarts=$restarts applies=$applies killed=$killed cap=$capok"
+echo "== nm-dispatcher-90-dl-cap: worst-case runtime (NetworkManager kills slow dispatcher scripts)"
+# bound NAME EXP_RESTARTS HOLD_LOCK CAP LOG_RE [ENV...]: run the hook for 'eth0 up' with the default budget
+# (DL_CAP_HOOK_BUDGET_S unset = 8 s). HOLD_LOCK=1: another process holds the hook's lock for 60 s. Passes if the hook
+# exits 0 in at most 10 s (wall clock), with EXP_RESTARTS restart calls and a log line matching LOG_RE.
+bound() {
+  local name=$1 er=$2 hold=$3 cap=$4 re=$5 t0 el n rc hp=""; shift 5
+  newds
+  if [ "$cap" = 1 ]; then touch "$DS/tc.qdisc"; printf 'ip\nipv6\n' > "$DS/tc.filters"; fi
+  sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$NMD" > "$DS/hook"
+  if [ "$hold" = 1 ]; then
+    ( exec 9>>"$DS/hook.lock"; flock 9; exec sleep 60 ) </dev/null >/dev/null 2>&1 & hp=$!
+    sleep 0.3
+  fi
+  t0=$(date +%s.%N)
+  env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DLCAP_SH="$DC" "$@" sh "$DS/hook" eth0 up > "$DS/out" 2>&1; rc=$?
+  el=$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.1f", b-a}')
+  [ -n "$hp" ] && { kill "$hp" 2>/dev/null; wait "$hp" 2>/dev/null; }
+  n=$(grep -c "restart dl-cap.service" "$DS/systemctl.log" 2>/dev/null); n=${n:-0}
+  [ -f "$DS/logger.log" ] && sed 's/^/log: /' "$DS/logger.log" >> "$DS/out"
+  [ "$rc" = 0 ] && awk -v e="$el" 'BEGIN{exit !(e <= 10.0)}' && [ "$n" = "$er" ] && grep -qE "$re" "$DS/logger.log" 2>/dev/null \
+    && ok=1 || ok=0
+  result "nm-dispatcher: $name -> <= 10 s" "$ok" "exit=$rc ${el}s restarts=$n"
+}
+# The longest path: lock held by someone else until the deadline, unit idle, cap missing, and the restart call
+# itself hangs (PID 1 busy) -> unlocked fall-through, check, restart attempted, killed by timeout.
+bound "lock held 60 s + cap missing + restart hangs 30 s" 1 1 0 "restart failed or timed out" RESTART_SLEEP=30
+# Lock held + unit stuck activating: both waits share the budget, then leave it.
+bound "lock held 60 s + unit stuck activating" 0 1 0 "still activating" DLCAP_STATE=activating
+# Every dl-cap systemctl call hangs 30 s (PID 1 busy): is-enabled times out, leave it.
+bound "every systemctl call hangs 30 s" 0 0 0 "is-enabled timed out" SYSTEMCTL_SLEEP=30
+# Only `show` hangs: unknown state, leave it rather than risk killing a start.
+bound "systemctl show hangs 30 s" 0 0 0 "show timed out" SHOW_SLEEP=30
+# Lock held until the deadline, cap in place: unlocked fall-through still checks first, no restart.
+bound "lock held 60 s + cap in place" 0 1 1 "cap in place on eth0, no restart"
+# DL_CAP_HOOK_BUDGET_S that isn't a positive whole number falls back to 8 s (still bounded).
+bound "bad DL_CAP_HOOK_BUDGET_S=abc + unit stuck activating" 0 0 0 "still activating" DLCAP_STATE=activating DL_CAP_HOOK_BUDGET_S=abc
 # shellcheck disable=SC2016  # a literal ${DEV:-...} in the sed pattern
 d1=$(sed -n 's/^DEV=\${DEV:-\([^}]*\)}.*/\1/p' "$DC"); d2=$(sed -n 's/^DEV=\([^ ]*\).*/\1/p' "$NMD")
 [ -n "$d1" ] && [ "$d1" = "$d2" ] && ok=1 || ok=0; result "nm-dispatcher: interface matches DEV in dl-cap.sh" "$ok" "dl-cap=$d1 hook=$d2"
+
+echo "== dl-cap-check.sh (dl-cap-check.timer safety net)"
+DCC=$JET/dl-cap-check.sh
+# dcc EXP_RC EXP_RESTARTS CAP NAME [ENV...]: run a copy of dl-cap-check.sh (DL_CAP -> repo dl-cap.sh) with the fakes.
+# CAP=1: the cap is in place. Sets el (seconds) and leaves the logs in $DS.
+dcc() {
+  local erc=$1 er=$2 cap=$3 name=$4 rc n t0; shift 4
+  newds
+  if [ "$cap" = 1 ]; then touch "$DS/tc.qdisc"; printf 'ip\nipv6\n' > "$DS/tc.filters"; fi
+  sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$DCC" > "$DS/dcc"
+  t0=$(date +%s.%N)
+  env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DLCAP_SH="$DC" "$@" sh "$DS/dcc" > "$DS/out" 2>&1; rc=$?
+  el=$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.1f", b-a}')
+  n=$(grep -c "restart dl-cap.service" "$DS/systemctl.log" 2>/dev/null); n=${n:-0}
+  [ -f "$DS/logger.log" ] && sed 's/^/log: /' "$DS/logger.log" >> "$DS/out"
+  [ "$rc" = "$erc" ] && [ "$n" = "$er" ] && ok=1 || ok=0
+  result "dl-cap-check: $name -> $([ "$er" = 1 ] && echo restart || echo nothing)" "$ok" "exit=$rc restarts=$n ${el}s"
+}
+dcc 0 0 1 "cap in place"
+grep -q "filter show dev eth0 parent ffff:" "$DS/tc.log" && ! grep -qE "qdisc|filter add" "$DS/tc.log" && [ ! -s "$DS/logger.log" ] \
+  && ok=1 || ok=0
+result "  ...ran 'dl-cap.sh check' read-only and logged nothing" "$ok" ""
+dcc 0 1 0 "cap missing"
+grep -qx "systemctl --no-block restart dl-cap.service" "$DS/systemctl.log" \
+  && grep -q "inbound cap missing on eth0 (dl-cap.service active); restarting dl-cap.service" "$DS/logger.log" && ok=1 || ok=0
+result "  ...queued with --no-block and logged (tag dl-cap-check)" "$ok" ""
+dcc 0 0 0 "unit disabled, cap missing" UNIT_DISABLED=1
+! grep -q show "$DS/systemctl.log" && [ ! -e "$DS/tc.log" ] && [ ! -e "$DS/hook.lock" ] && ok=1 || ok=0
+result "  ...disabled: no show, no tc, no lock" "$ok" ""
+dcc 0 0 0 "job queued (boot start), cap missing" DLCAP_STATE=inactive DLCAP_JOB=7
+dcc 0 0 0 "job queued (restart), cap missing" DLCAP_STATE=active DLCAP_JOB=9
+for st in activating deactivating reloading; do dcc 0 0 0 "unit $st, cap missing" DLCAP_STATE="$st"; done
+dcc 0 1 0 "unit failed, cap missing" DLCAP_STATE=failed
+dcc 0 1 0 "unit stopped (still enabled), cap missing" DLCAP_STATE=inactive
+dcc 1 1 0 "restart call fails -> exit 1" SYSTEMCTL_FAIL=1
+grep -q "restart dl-cap.service failed or timed out" "$DS/logger.log" && ok=1 || ok=0; result "  ...logged the failure" "$ok" ""
+# Bounded calls (PID 1 busy): each hang is cut at CALL_S=4 s.
+dcc 0 0 0 "every systemctl call hangs 30 s" SYSTEMCTL_SLEEP=30
+awk -v e="$el" 'BEGIN{exit !(e <= 6)}' && grep -q "is-enabled timed out" "$DS/logger.log" && ok=1 || ok=0
+result "  ...is-enabled cut off after ~4 s (${el}s), logged" "$ok" ""
+dcc 0 0 0 "systemctl show hangs 30 s, cap missing" SHOW_SLEEP=30
+awk -v e="$el" 'BEGIN{exit !(e <= 6)}' && grep -q "show timed out" "$DS/logger.log" && ok=1 || ok=0
+result "  ...show cut off after ~4 s (${el}s), logged" "$ok" ""
+dcc 1 1 0 "restart call hangs 30 s" RESTART_SLEEP=30
+awk -v e="$el" 'BEGIN{exit !(e <= 6)}' && ok=1 || ok=0; result "  ...restart cut off after ~4 s (${el}s)" "$ok" ""
+# Lock contention with the NetworkManager hook (same lock file).
+hold_lock() { ( exec 9>>"$DS/hook.lock"; flock 9; exec sleep "$1" ) >/dev/null 2>&1 & HP=$!; sleep 0.3; }
+newds; touch "$DS/hook.lock"; hold_lock 60
+sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$DCC" > "$DS/dcc"; SECONDS=0
+env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DL_CAP_CHECK_LOCK_WAIT_S=2 sh "$DS/dcc" > "$DS/out" 2>&1; rc=$?; t=$SECONDS
+kill "$HP" 2>/dev/null; wait "$HP" 2>/dev/null
+n=$(grep -c "restart dl-cap.service" "$DS/systemctl.log" 2>/dev/null); n=${n:-0}
+[ "$rc" = 0 ] && [ "$n" = 0 ] && [ "$t" -ge 2 ] && [ "$t" -le 4 ] && grep -q "busy for 2s (NetworkManager hook running)" "$DS/logger.log" \
+  && ok=1 || ok=0
+result "dl-cap-check: lock held by the hook -> waits LOCK_WAIT_S (${t}s), nothing, next run" "$ok" "exit=$rc restarts=$n"
+newds; touch "$DS/hook.lock"; hold_lock 1
+sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$DCC" > "$DS/dcc"
+env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" sh "$DS/dcc" > "$DS/out" 2>&1; rc=$?; wait "$HP" 2>/dev/null
+n=$(grep -c "restart dl-cap.service" "$DS/systemctl.log" 2>/dev/null); n=${n:-0}
+[ "$rc" = 0 ] && [ "$n" = 1 ] && ok=1 || ok=0
+result "dl-cap-check: lock freed after 1 s, cap missing -> waits, then 1 restart" "$ok" "exit=$rc restarts=$n"
+# The hook and the timer's check at the same moment, cap missing, systemd-like dl-cap job: one restart, none killed.
+newds
+sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$NMD" > "$DS/hook"; sed "s|^DL_CAP=/usr/local/sbin/dl-cap.sh .*|DL_CAP=$DC|" "$DCC" > "$DS/dcc"
+{ env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DLCAP_SIM=1 DLCAP_SH="$DC" SHOW_SLEEP=0.3 sh "$DS/hook" eth0 up > "$DS/out1" 2>&1 & p1=$!
+  env PATH="$FAKE:$PATH" DL_CAP_HOOK_LOCK="$DS/hook.lock" DLCAP_SIM=1 DLCAP_SH="$DC" SHOW_SLEEP=0.3 sh "$DS/dcc" > "$DS/out2" 2>&1 & p2=$!
+  wait "$p1"; r1=$?; wait "$p2"; r2=$?; }
+settle
+restarts=$(cnt "restart dl-cap.service" "$DS/systemctl.log"); killed=$(cnt "start killed" "$DS/dlcap.events"); applies=$(cnt "^apply$" "$DS/dlcap.events")
+env PATH="$FAKE:$PATH" sh "$DC" check > /dev/null 2>&1 && capok=1 || capok=0
+cat "$DS/out1" "$DS/out2" > "$DS/out" 2>/dev/null
+[ "$r1$r2" = 00 ] && [ "$restarts" = 1 ] && [ "$applies" = 1 ] && [ "$killed" = 0 ] && [ "$capok" = 1 ] && ok=1 || ok=0
+result "dl-cap-check + hook at the same moment, no cap -> 1 apply, none killed" "$ok" "restarts=$restarts applies=$applies killed=$killed cap=$capok"
+# Static: same lock file as the hook, same DEV, worst case under TimeoutStartSec, timer values.
+# shellcheck disable=SC2016  # literal ${...} in the sed patterns
+l1=$(sed -n 's/^LOCK=\${DL_CAP_HOOK_LOCK:-\([^}]*\)}.*/\1/p' "$NMD")
+# shellcheck disable=SC2016
+l2=$(sed -n 's/^LOCK=\${DL_CAP_HOOK_LOCK:-\([^}]*\)}.*/\1/p' "$DCC")
+[ -n "$l1" ] && [ "$l1" = "$l2" ] && [ "$(sed -n 's/^DEV=\([^ ]*\).*/\1/p' "$DCC")" = eth0 ] && ok=1 || ok=0
+result "dl-cap-check: same lock file and DEV as the hook" "$ok" "hook=$l1 check=$l2"
+# shellcheck disable=SC2016  # literal ${...} in the sed pattern
+cs=$(sed -n 's/^CALL_S=\([0-9]*\).*/\1/p' "$DCC")
+# shellcheck disable=SC2016
+lw=$(sed -n 's/^LOCK_WAIT_S=\${DL_CAP_CHECK_LOCK_WAIT_S:-\([0-9]*\)}.*/\1/p' "$DCC")
+ts=$(sed -n 's/^TimeoutStartSec=\([0-9]*\)$/\1/p' "$JET/dl-cap-check.service")
+[ -n "$cs" ] && [ -n "$lw" ] && [ -n "$ts" ] && [ $((4 * cs + lw)) -lt "$ts" ] && [ "$ts" -le 30 ] && ok=1 || ok=0
+result "dl-cap-check: worst case 4 x CALL_S + LOCK_WAIT_S < TimeoutStartSec" "$ok" "$((4 * ${cs:-0} + ${lw:-0}))s < ${ts}s"
+TIM=$JET/dl-cap-check.timer
+grep -qx "OnBootSec=2min" "$TIM" && grep -qx "OnUnitActiveSec=5min" "$TIM" && grep -qx "AccuracySec=30s" "$TIM" \
+  && grep -qx "WantedBy=timers.target" "$TIM" && grep -qx "Type=oneshot" "$JET/dl-cap-check.service" \
+  && grep -qx "ExecStart=/usr/local/sbin/dl-cap-check.sh" "$JET/dl-cap-check.service" && ok=1 || ok=0
+result "dl-cap-check: timer 2min / 5min / 30s, oneshot unit runs the installed script" "$ok" ""
+D=$JET/../../docs/deploy-jetson.md
+grep -q "install -m 755 \$REPO/deploy/jetson/dl-cap-check.sh /usr/local/sbin/dl-cap-check.sh" "$D" \
+  && grep -q "install -m 644 \$REPO/deploy/jetson/dl-cap-check.service \$REPO/deploy/jetson/dl-cap-check.timer /etc/systemd/system/" "$D" \
+  && grep -q "systemctl enable --now dl-cap-check.timer" "$D" && ok=1 || ok=0
+result "docs: install lines for dl-cap-check.sh, .service, .timer and enable --now" "$ok" ""
 
 echo "== dl-cap.sh: real board tc filter show fixture"
 # Verbatim iproute2-ss200127 output from the board (police on a separate line from protocol ip/ipv6).
@@ -474,6 +690,13 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   [ -s "$DS/u/ollama.service.d/zz-force-race.conf" ] && ! grep -qiE 'unknown (key|section)|invalid|failed to parse|bad' "$DS/out" && ok=1 || ok=0
   result "systemd-analyze verify: docs' R1b zz-force-race.conf drop-in parses cleanly" "$ok" "exit=$rc"
   rm "$DS/u/ollama.service.d/zz-force-race.conf"
+  # dl-cap-check.service + .timer (and dl-cap.service, which it is ordered after).
+  sed "s|/usr/local/sbin/[a-z-]*\.sh|$DS/stub|" "$JET/dl-cap-check.service" > "$DS/u/dl-cap-check.service"
+  cp "$JET/dl-cap-check.timer" "$DS/u/dl-cap-check.timer"
+  sed "s|/usr/local/sbin/[a-z-]*\.sh|$DS/stub|" "$JET/dl-cap.service" > "$DS/u/dl-cap.service"
+  (cd "$DS/u" && SYSTEMD_UNIT_PATH="$DS/u:" systemd-analyze verify --man=no dl-cap-check.timer dl-cap-check.service dl-cap.service) > "$DS/out" 2>&1; rc=$?
+  ! grep -qiE 'unknown (key|section)|invalid|failed to parse|bad' "$DS/out" && ok=1 || ok=0
+  result "systemd-analyze verify: dl-cap-check.service/.timer and dl-cap.service parse cleanly" "$ok" "exit=$rc"
   # Negative control: the same check catches a misspelt key (so a clean run means something).
   echo 'Requisitee=ollama.service' >> "$DS/u/ollama-gpu-check.service"
   (cd "$DS/u" && SYSTEMD_UNIT_PATH="$DS/u:" systemd-analyze verify --man=no ollama-gpu-check.service) > "$DS/out" 2>&1

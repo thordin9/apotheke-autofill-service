@@ -1,0 +1,12 @@
+# /etc/systemd/system/dl-cap-check.service
+# Started by dl-cap-check.timer. Restarts dl-cap.service if the 30 Mbit/s inbound cap on eth0 is missing (and the
+# unit is enabled and idle). See dl-cap-check.sh and docs/deploy-jetson.md.
+[Unit]
+Description=Re-check the 30 Mbit/s inbound cap on eth0 (restart dl-cap if it is missing)
+After=dl-cap.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dl-cap-check.sh
+# dl-cap-check.sh bounds itself to about 24 s (lock wait + 4 bounded calls); this is the hard stop.
+TimeoutStartSec=30

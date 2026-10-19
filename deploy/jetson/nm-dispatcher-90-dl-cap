@@ -4,26 +4,95 @@
 # eth0; NetworkManager then resets the device and the ingress qdisc (and with it the cap) is silently gone.
 # Install: install -o root -g root -m 755 nm-dispatcher-90-dl-cap /etc/NetworkManager/dispatcher.d/90-dl-cap
 # NetworkManager calls it as: 90-dl-cap <interface> <action>. It always exits 0 so it never disturbs NetworkManager.
-#   eth0 up                  restart dl-cap.service (the device was just (re)configured; the qdisc may be gone)
-#   eth0 dhcp4-change        `dl-cap.sh check` first; restart only if the cap is missing. A lease renewal doesn't
-#                            reset the qdisc, and a needless restart leaves a short uncapped gap and counts toward
-#                            dl-cap.service's start limit (10 per 5 min).
-#   "" connectivity-change   same check-then-restart. NetworkManager sends this event with an empty interface.
-#   anything else            ignored
+#   eth0 up, eth0 dhcp4-change, "" connectivity-change (NetworkManager sends this one with an empty interface),
+#   eth0 connectivity-change     reapply if needed, see below
+#   anything else                ignored (no systemctl, tc or lock calls)
+# "If needed": a restart stops the cap (ExecStop removes it) and a restart while another dl-cap start is running
+# kills that start (status=15/TERM, "Failed with result 'signal'"). At boot NetworkManager sends `up` and
+# `connectivity-change` together, and the old unconditional restart on `up` plus a check that saw the cap removed
+# by that restart's stop gave a double restart and ~0.4 s without the cap on every boot (QA #17 N1/O2). So:
+#   1. Invocations are serialised with flock: a second event waits for the first instead of racing it.
+#   2. If dl-cap.service already has a job queued (e.g. its boot start waiting for network-online.target, or a
+#      restart queued by an earlier event), leave it: that start applies the cap and verifies it afterwards.
+#   3. If it is in a transition (activating/deactivating, including Restart=on-failure's auto-restart), wait for it
+#      to settle. If it is still busy when the time is up, leave it, as in 2.
+#   4. `dl-cap.sh check`: cap in place -> nothing to do (also on `up`: a lease renewal or a re-up that kept the
+#      qdisc needs no gap, and each restart counts toward dl-cap.service's start limit of 10 per 5 min).
+#   5. Otherwise `systemctl --no-block restart dl-cap.service`. dl-cap.sh's own post-apply check still fails the
+#      unit if the cap isn't there afterwards, so Restart=on-failure retries.
+# Time limit: NetworkManager runs dispatcher scripts one at a time and kills one that runs too long (NM 1.22, as on
+# L4T R35 / Ubuntu 20.04: 600 s per script, SCRIPT_TIMEOUT in dispatcher/nm-dispatcher.c), and every later event
+# waits behind a running script. So the whole hook has one deadline, DL_CAP_HOOK_BUDGET_S (default 8 s) after it
+# starts: the lock wait and the settle wait share it and stop 2 s before it (kept for the check and the restart),
+# and every systemctl/tc call is bounded by `timeout` to the time left (at least 1 s). Worst case is about 9 s.
+# When the time runs out the fall-through is the same as above: the lock wait gives up and goes on unlocked; a
+# unit still busy or with a job is left alone; otherwise check, then restart. A systemctl call that times out
+# (PID 1 busy) counts as "don't know", and the hook leaves dl-cap alone rather than risk killing a start.
 DEV=eth0   # must match DEV in dl-cap.sh
 DL_CAP=/usr/local/sbin/dl-cap.sh   # the harness rewrites this line to point at the repo copy
+UNIT=dl-cap.service
+LOCK=${DL_CAP_HOOK_LOCK:-/run/lock/dl-cap-hook.lock}
+BUDGET_S=${DL_CAP_HOOK_BUDGET_S:-8}
+case "$BUDGET_S" in ''|*[!0-9]*|0) BUDGET_S=8 ;; esac
+RESERVE_S=2   # kept back from the lock and settle waits for the check and the restart
 
 case "${1:-}:${2:-}" in
-  "$DEV:up") mode=restart ;;
-  "$DEV:dhcp4-change"|":connectivity-change"|"$DEV:connectivity-change") mode=check ;;
+  "$DEV:up"|"$DEV:dhcp4-change"|":connectivity-change"|"$DEV:connectivity-change") ;;
   *) exit 0 ;;
 esac
+event="${1:-(none)} ${2:-}"
+log() { logger -t dl-cap-hook -- "$event: $*" 2>/dev/null || :; }
+DEADLINE=$(( $(date +%s) + BUDGET_S ))
+# left [RESERVE]: whole seconds until the deadline minus RESERVE (may be 0 or less).
+left() { echo $(( DEADLINE - $(date +%s) - ${1:-0} )); }
+# t RESERVE CMD...: run CMD bounded to the time left before (deadline - RESERVE), at least 1 s. Exit 124 = timed out.
+t() { l=$(left "$1"); shift; [ "$l" -ge 1 ] || l=1; timeout "$l" "$@"; }
+
 # Respect `systemctl disable dl-cap`: a disabled cap stays off. (`systemctl stop` alone is undone on the next event.)
-systemctl is-enabled --quiet dl-cap.service 2>/dev/null || exit 0
-if [ "$mode" = check ] && [ -x "$DL_CAP" ] && DEV=$DEV "$DL_CAP" check >/dev/null 2>&1; then
-  exit 0   # cap in place: nothing to do
+t 0 systemctl is-enabled --quiet "$UNIT" 2>/dev/null; rc=$?
+[ "$rc" = 124 ] && log "systemctl is-enabled timed out; leaving dl-cap alone"
+[ "$rc" = 0 ] || exit 0
+
+# Serialise. The lock is released when the hook exits (fd 9 closes). If the lock can't be opened, flock is missing
+# or the lock isn't free in time, carry on unlocked; steps 2-3 still catch most duplicates.
+if (exec 9>>"$LOCK") 2>/dev/null && command -v flock >/dev/null 2>&1; then
+  exec 9>>"$LOCK"
+  l=$(left "$RESERVE_S")
+  if [ "$l" -lt 1 ] || ! flock -w "$l" 9; then log "lock busy until the time limit, going on unlocked"; fi
+fi
+
+# Sets $state (ActiveState) and $job (job id, empty if none) of dl-cap.service; returns 1 if systemctl timed out
+# or failed (unknown state).
+read_unit() {
+  props=$(t "$RESERVE_S" systemctl show -p ActiveState -p Job "$UNIT" 2>/dev/null) || return 1
+  state=$(printf '%s\n' "$props" | sed -n 's/^ActiveState=//p')
+  job=$(printf '%s\n' "$props" | sed -n 's/^Job=//p')
+  case "$job" in 0|"("*) job="" ;; esac
+}
+busy() { case "$state" in activating|deactivating|reloading) return 0 ;; esac; return 1; }
+unknown() { log "systemctl show timed out or failed; leaving dl-cap alone"; exit 0; }
+
+read_unit || unknown
+if [ -n "$job" ] && ! busy; then
+  log "dl-cap.service already has job $job queued; leaving it (its start applies and verifies the cap)"
+  exit 0
+fi
+start=$(date +%s)
+while busy && [ "$(left "$RESERVE_S")" -ge 1 ]; do
+  sleep 1; read_unit || unknown
+done
+if busy || [ -n "$job" ]; then
+  log "dl-cap.service still $state${job:+ (job $job)} after $(( $(date +%s) - start ))s; leaving it (its start verifies the cap)"
+  exit 0
+fi
+
+if [ -x "$DL_CAP" ] && t 1 env DEV="$DEV" "$DL_CAP" check >/dev/null 2>&1; then
+  log "cap in place on $DEV, no restart"
+  exit 0
 fi
 # --no-block: queue the restart and return, so the dispatcher isn't held up; dl-cap.service is ordered after
-# network-online.target, which may still be pending while NetworkManager is activating eth0.
-systemctl --no-block restart dl-cap.service || true
+# network-online.target, which may still be pending while NetworkManager is activating eth0. The job is queued
+# before systemctl returns, so the next (serialised) event sees it in step 2.
+log "cap missing on $DEV (or dl-cap.sh not installed), restarting dl-cap.service"
+t 0 systemctl --no-block restart "$UNIT" || log "systemctl restart failed or timed out"
 exit 0

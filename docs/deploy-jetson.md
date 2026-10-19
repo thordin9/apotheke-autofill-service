@@ -320,11 +320,11 @@ resolve it:
 - otherwise (the new `autofill` works): `docker rm autofill-prev`.
 
 The script's behaviour is covered by [`deploy/jetson/tests/run-tests.sh`](../deploy/jetson/tests/run-tests.sh),
-which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl`, `tc`, `systemctl` and `journalctl`
+which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl`, `tc`, `systemctl`, `journalctl` and `logger`
 commands (no Docker, network or root needed) and checks: switches, rollbacks, signals before and during a rollback,
 the `/healthz` poll, the port check, the wall-clock `WAIT_S` and its validation, the bind-error hint,
 `build-image.sh` refs, `dl-cap.sh` (including a verbatim board `tc filter show` fixture), the NetworkManager hook,
-`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 1 min 45 s, because the
+`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 3 min, because the
 signal and wait-timeout cases use real timing, and removes its temporary files when it exits, also when interrupted
 with Ctrl-C.
 
@@ -417,15 +417,59 @@ sometimes takes over `eth0` a moment *after* that (journal: `device (eth0): stat
 `created default wired connection`, then `carrier: link connected`). That resets the device, the ingress qdisc
 goes with it, and the cap is silently gone while `dl-cap.service` still shows `active (exited)`; only a manual
 `systemctl restart dl-cap` brought it back. The NetworkManager dispatcher hook
-[`nm-dispatcher-90-dl-cap`](../deploy/jetson/nm-dispatcher-90-dl-cap) fixes that: when `eth0` (the `DEV` in
-`dl-cap.sh`) comes `up`, it runs `systemctl --no-block restart dl-cap.service`. On `dhcp4-change` for `eth0`, and
-on `connectivity-change` (which NetworkManager sends with an empty interface), it runs `dl-cap.sh check` first and
-only restarts if the cap is missing — a lease renewal must not leave a short uncapped gap or burn the unit's start
-limit (10 per 5 min). `--no-block` queues the restart and returns at once, so the hook never holds up
-NetworkManager's dispatcher while `network-online.target` is still pending. Other interfaces and other events are
-ignored, and the hook always exits 0. It does nothing while `dl-cap.service` is disabled, so
-`systemctl disable --now dl-cap` keeps the cap off. A plain `systemctl stop dl-cap` lasts only until the next
-`eth0` `up`.
+[`nm-dispatcher-90-dl-cap`](../deploy/jetson/nm-dispatcher-90-dl-cap) fixes that. It handles `up` and
+`dhcp4-change` for `eth0` (the `DEV` in `dl-cap.sh`) and `connectivity-change` (which NetworkManager sends with an
+empty interface). For each of them it runs `dl-cap.sh check` and only runs
+`systemctl --no-block restart dl-cap.service` if the cap is missing. A restart stops the cap first (`ExecStop`), so
+an unneeded one leaves a short uncapped gap and counts toward the unit's start limit (10 per 5 min).
+
+At boot NetworkManager sends `up` and `connectivity-change` at the same moment. Before this fix the hook restarted on every
+`up`, and the `connectivity-change` check could then see the cap removed by that restart's stop and queue a second
+restart. That second restart killed the first while it was starting (`status=15/TERM`, `Failed with result
+'signal'` in the journal), and the cap was off for about 0.4 s on every boot (QA follow-up N1). The hook now avoids
+that:
+
+1. Invocations are serialised with `flock` on `/run/lock/dl-cap-hook.lock`, so a second event waits for the first
+   instead of racing it. If the lock isn't free in time (see the time limit below), or `flock` is missing, it
+   carries on unlocked.
+2. If `dl-cap.service` already has a job queued (its boot start waiting for `network-online.target`, or a restart
+   queued by the previous event), the hook leaves it alone: that start applies the cap and verifies it.
+3. If the unit is in a transition (`activating`, `deactivating`, including the `Restart=on-failure` wait), the hook
+   waits for it to settle, then goes on to the check. If it is still busy when the time is up, the hook leaves it
+   alone as in step 2.
+4. Only then does it run the check, and restart if the cap is missing.
+
+**Time limit.** NetworkManager's dispatcher runs scripts one at a time, kills a script that runs too long, and makes
+every later event wait behind a running one. In NetworkManager 1.22 (Ubuntu 20.04 / L4T R35) the limit is 600 s
+per script (`SCRIPT_TIMEOUT` in `dispatcher/nm-dispatcher.c`) and 10 minutes for the whole call (`CALL_TIMEOUT` in
+`src/nm-dispatcher.c`), but the hook stays far below that so it never delays the next event noticeably. It has one
+deadline, `DL_CAP_HOOK_BUDGET_S` (default 8 s) after it starts: the lock wait and the settle wait share it and stop
+2 s before the deadline, which is kept for the check and the restart, and every `systemctl` and `dl-cap.sh check`
+call runs under `timeout` with the time left (at least 1 s). The worst case is about 9 s. When the time runs out,
+the hook falls through as above: no lock means it goes on unlocked, a unit still busy or with a job is left alone,
+and otherwise it checks and restarts with `--no-block`. A `systemctl` call that times out (PID 1 busy, as in QA's
+boot observation O4) counts as unknown, and the hook leaves dl-cap alone rather than risk killing a start; the
+boot start, or the next event, applies the cap, and failing that the periodic check below.
+
+**Periodic check (safety net).** [`dl-cap-check.timer`](../deploy/jetson/dl-cap-check.timer) runs
+[`dl-cap-check.service`](../deploy/jetson/dl-cap-check.service) 2 minutes after boot and then every 5 minutes
+(`AccuracySec=30s`). It runs [`dl-cap-check.sh`](../deploy/jetson/dl-cap-check.sh), which does nothing if
+`dl-cap.service` is disabled, has a job queued, or is starting or stopping. Otherwise it runs `dl-cap.sh check`
+and, only if that fails, logs under the tag `dl-cap-check` and runs `systemctl --no-block restart dl-cap.service`.
+So a cap the hook left off (for example after a `systemctl` timeout) comes back within about 5 minutes. It takes
+the hook's lock file (`/run/lock/dl-cap-hook.lock`, waiting at most 8 s), so the two never restart dl-cap at the
+same moment. If the hook holds the lock longer, the check skips that round. Every call is bounded (4 s each, about
+24 s in the worst case), and the unit has `TimeoutStartSec=30`. A check that finds the cap in place logs nothing.
+A plain `systemctl stop dl-cap` is therefore undone within 5 minutes too; use `systemctl disable --now dl-cap` to
+keep the cap off.
+
+`dl-cap.sh` is unchanged, so its post-apply check still fails the unit when the cap isn't there afterwards, and
+`Restart=on-failure` retries. `--no-block` queues the restart and returns at once, so the hook never holds up
+NetworkManager's dispatcher waiting for `network-online.target`; systemd registers the job before `systemctl`
+returns, so the next event sees it in step 2. Other interfaces and other events are ignored without any
+`systemctl`, `tc` or lock call, and the hook always exits 0. Each decision is logged with the tag `dl-cap-hook`. It
+does nothing while `dl-cap.service` is disabled, so `systemctl disable --now dl-cap` keeps the cap off. A plain
+`systemctl stop dl-cap` lasts only until the next handled event finds the cap missing.
 
 Install (as root). NetworkManager only runs dispatcher scripts that are owned by root and not writable by group or
 others:
@@ -435,6 +479,10 @@ install -m 755 $REPO/deploy/jetson/dl-cap.sh /usr/local/sbin/dl-cap.sh
 install -m 644 $REPO/deploy/jetson/dl-cap.service /etc/systemd/system/dl-cap.service
 install -o root -g root -m 755 $REPO/deploy/jetson/nm-dispatcher-90-dl-cap /etc/NetworkManager/dispatcher.d/90-dl-cap
 systemctl daemon-reload && systemctl enable --now dl-cap
+# periodic safety net (re-check every 5 min)
+install -m 755 $REPO/deploy/jetson/dl-cap-check.sh /usr/local/sbin/dl-cap-check.sh
+install -m 644 $REPO/deploy/jetson/dl-cap-check.service $REPO/deploy/jetson/dl-cap-check.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now dl-cap-check.timer
 ```
 
 Verify, now and **after every reboot** (the failure only showed up after a reboot):
@@ -443,12 +491,21 @@ Verify, now and **after every reboot** (the failure only showed up after a reboo
 tc -s filter show dev eth0 parent ffff:   # two filters (protocol ip and ipv6), each: police ... rate 30Mbit burst 384Kb ... drop
 /usr/local/sbin/dl-cap.sh check           # "cap is in place on eth0", exit 0; exit 1 if it's missing
 journalctl -b -u dl-cap -u NetworkManager-dispatcher   # after a reboot: dl-cap restarted once NetworkManager had eth0
+journalctl -b -t dl-cap-hook -o short-precise   # one line per event: "cap in place", "already has job", or "restarting"
+journalctl -b -u dl-cap | grep -c "Failed with result 'signal'"   # 0 (N1: was 1 on every boot)
+systemctl list-timers dl-cap-check.timer       # next run within 5 min
+journalctl -b -t dl-cap-check                  # empty while the cap stays in place; one line per restart
 ```
 
 With `-s`, each filter also shows `Sent ... bytes` and, under load, `dropped` and `overlimits` counters. If the
 filters are missing, run `systemctl restart dl-cap` and check that `/etc/NetworkManager/dispatcher.d/90-dl-cap`
 exists, is owned by root and has mode 755. The test harness covers the verify step, `check` and the hook (with fake
-`tc` and `systemctl`).
+`tc` and `systemctl`), including concurrent events against a fake `dl-cap.service` job that, like systemd, kills a
+running start when another restart arrives: two events at the same moment give one apply and no killed start. It
+also checks the worst-case runtime: with the lock held elsewhere, the unit stuck, or `systemctl` hanging, the hook
+exits 0 within 10 s. `dl-cap-check.sh` is tested the same way (cap present, missing, disabled, busy, lock held by
+the hook, the hook and the check at the same moment, hanging `systemctl`), and `systemd-analyze verify` checks the
+new units.
 
 `systemctl stop dl-cap` removes it. Effects: image builds and `ollama pull` are slow (see above), and a 1 MB photo
 upload takes about 0.3 s. Service timings measured on the board itself (loopback) are not affected.
@@ -502,7 +559,7 @@ fixes added after the 2026-10-19 reboot that left the inbound cap and Ollama on 
   `qwen2.5vl-jetson:3b` and, with `OLLAMA_KEEP_ALIVE=-1`, keeps it loaded. `/v1/info` reports `ready: true` once
   that's done (about 15 s after Ollama is up).
 - `dl-cap.service` is enabled and reapplies the 30 Mbit/s cap, and the NetworkManager hook reapplies it again if
-  NetworkManager takes over `eth0` afterwards. Check it with `tc -s filter show dev eth0 parent ffff:` or
+  NetworkManager takes over `eth0` afterwards. `dl-cap-check.timer` re-checks it 2 min after boot and every 5 min. Check it with `tc -s filter show dev eth0 parent ffff:` or
   `dl-cap.sh check` (see [Inbound bandwidth limit](#inbound-bandwidth-limit-30-mbits)).
 - The runner service is enabled and reconnects to GitHub.
 - The power mode persists (`nvpmodel` mode 8).

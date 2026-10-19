@@ -6,7 +6,17 @@
 #   "# --- restart ---" marker; default: a library=cpu start), INVOCATION_ID_EMPTY=1 (InvocationID is empty, so
 #   ollama-gpu-check falls back to --since). InvocationID is 31 hex digits plus the restart count, which the fake
 #   journalctl maps to that start's journal segment.
+# dl-cap.service (for the dispatcher hook): `show -p ActiveState -p Job` prints $DS/dlcap.state / $DS/dlcap.job, or
+#   DLCAP_STATE (default active) / DLCAP_JOB (default empty). SHOW_SLEEP=<s> delays that `show` (to line up
+#   concurrent hooks). DLCAP_SIM=1 makes `restart dl-cap.service` behave like systemd's job: queue a job, run
+#   ExecStop (DLCAP_SH stop, the cap goes), then the start (sleep DLCAP_START_S, default 1, then DLCAP_SH apply),
+#   in the background unless --no-block is absent. A restart while that start is still running kills it and logs
+#   "start killed" to $DS/dlcap.events (the board's status=15/TERM, QA #17 N1); a finished start logs "apply".
 echo "systemctl $*" >> "${DS:?}/systemctl.log"
+# SYSTEMCTL_SLEEP=<s>: every dl-cap.service call hangs that long first (PID 1 busy); RESTART_SLEEP=<s>: only the
+# restart. Sleeps run with their fds closed, so a `timeout` that kills this script also ends `$(...)` at once.
+case "$*" in *dl-cap.service*) [ -n "${SYSTEMCTL_SLEEP:-}" ] && sleep "$SYSTEMCTL_SLEEP" >/dev/null 2>&1 ;; esac
+case "$*" in *restart*dl-cap.service*) [ -n "${RESTART_SLEEP:-}" ] && sleep "$RESTART_SLEEP" >/dev/null 2>&1 ;; esac
 case "$*" in
   *is-enabled*) [ -n "${UNIT_DISABLED:-}" ] && exit 1; exit 0 ;;
   *is-active*ollama*)
@@ -33,6 +43,30 @@ case "$*" in
         echo 'time=2026-10-19T18:23:01+03:00 level=INFO msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu'
       fi
     } >> "$DS/journal.txt"
+    exit 0 ;;
+  *show*dl-cap.service*)
+    [ -n "${SHOW_SLEEP:-}" ] && sleep "$SHOW_SLEEP" >/dev/null 2>&1
+    echo "Job=$(cat "$DS/dlcap.job" 2>/dev/null || echo "${DLCAP_JOB:-}")"
+    echo "ActiveState=$(cat "$DS/dlcap.state" 2>/dev/null || echo "${DLCAP_STATE:-active}")"
+    exit 0 ;;
+  *restart*dl-cap.service*)
+    [ -n "${SYSTEMCTL_FAIL:-}" ] && exit 1
+    [ -n "${DLCAP_SIM:-}" ] || exit 0
+    exec 8>> "$DS/pid1.lock"; flock 8   # PID 1 handles one job request at a time
+    if [ -f "$DS/dlcap.pid" ] && kill -0 "$(cat "$DS/dlcap.pid")" 2>/dev/null; then
+      kill -TERM "$(cat "$DS/dlcap.pid")" 2>/dev/null
+      echo "start killed (status=15/TERM, Failed with result 'signal')" >> "$DS/dlcap.events"
+    fi
+    n=$(( $(cat "$DS/dlcap.jobs" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$DS/dlcap.jobs"; echo "$n" > "$DS/dlcap.job"
+    (
+      echo deactivating > "$DS/dlcap.state"; sh "${DLCAP_SH:?}" stop   # ExecStop: the cap is gone from here on
+      echo activating > "$DS/dlcap.state"; sleep "${DLCAP_START_S:-1}"
+      if sh "$DLCAP_SH"; then echo apply >> "$DS/dlcap.events"; echo active > "$DS/dlcap.state"
+      else echo "apply failed" >> "$DS/dlcap.events"; echo failed > "$DS/dlcap.state"; fi
+      rm -f "$DS/dlcap.job" "$DS/dlcap.pid"
+    ) > /dev/null 2>&1 8>&- &
+    echo "$!" > "$DS/dlcap.pid"; exec 8>&-
+    case " $* " in *" --no-block "*) ;; *) wait "$!" ;; esac
     exit 0 ;;
   *restart*) [ -n "${SYSTEMCTL_FAIL:-}" ] && exit 1; exit 0 ;;
   *) exit 0 ;;
