@@ -61,6 +61,7 @@ COPY app ./app
 EXPOSE 8080
 
 # Healthcheck hits FastAPI, not Ollama. /healthz is unauthenticated.
+# 503 when a resident production model has size_vram 0 (Ollama started before CUDA).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
   CMD python3.11 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')" || exit 1
 

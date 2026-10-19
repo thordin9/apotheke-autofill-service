@@ -18,6 +18,7 @@ from .backends import BackendUnavailable, create_backend
 from .backends.base import CAPABILITIES
 from .backends.echo import MalformedOutput
 from .errors import ApiError, error_response
+from .identity import identity_fields
 from .imagetype import accepted_mime
 from .settings import get_settings
 
@@ -77,7 +78,22 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz")
     async def healthz():
-        return {"status": "ok"}
+        body: dict[str, Any] = {"status": "ok"}
+        status = 200
+        snap = None
+        health = getattr(backend, "health_snapshot", None)
+        if health is not None:
+            try:
+                snap = await asyncio.wait_for(health(), timeout=2.5)
+            except Exception:
+                snap = None
+        if isinstance(snap, dict):
+            if snap.get("degraded") is True:
+                body["status"] = "degraded"
+                status = 503
+            if (models := sanitize_models(snap.get("models"))) is not None:
+                body["models"] = models
+        return JSONResponse(body, status_code=status)
 
     @app.get("/v1/info")
     async def info():
@@ -174,6 +190,11 @@ def sanitize_models(models: Any) -> list[dict[str, Any]] | None:
         entry: dict[str, Any] = {"id": m["id"], "default": m.get("default") is True}
         if isinstance(m.get("loaded"), bool):
             entry["loaded"] = m["loaded"]
+        if m.get("state") in ("cold", "loading", "warm"):
+            entry["state"] = m["state"]
+        vram = m.get("size_vram")
+        if isinstance(vram, int) and not isinstance(vram, bool) and vram >= 0:
+            entry["size_vram"] = vram
         if _ms(m.get("avg_latency_ms")):
             entry["avg_latency_ms"] = m["avg_latency_ms"]
         out.append(entry)
@@ -205,6 +226,12 @@ def sanitize(result: Any) -> dict[str, Any]:
     model_used = result.get("model_used")
     if isinstance(model_used, str) and model_used.strip():
         out["model_used"] = model_used
+    idents = identity_fields(result)
+    # Keep a body that had no suggestion fields as {}. Empty identity strings
+    # are added on a real suggestion so old clients still see the same shape
+    # plus three ignorable keys.
+    if out or any(idents.values()):
+        out.update(idents)
     return out
 
 
