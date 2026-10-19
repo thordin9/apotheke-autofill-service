@@ -1,0 +1,19 @@
+#!/bin/sh
+# Fake python3 for wait-cuda.sh's cuInit probe (CUDA_PROBE_PYTHON). Never loads libcuda. Each call is one probe:
+# it appends "uid=<id -u> <args>" to $DS/python.log and bumps $DS/probes.
+# Knobs (env): FAKE_CUINIT=ok (default) | fail (cuInit 100, 0 devices) | nolib (libcuda missing, exit 3) |
+#   hang (sleeps 60 s; wait-cuda's timeout must kill it) | nodev (cuInit 0, 0 devices);
+#   FAKE_CUINIT_FAIL_N=<n>: the first n probes fail, then ok; FAKE_CUINIT_OK_AFTER=<epoch s>: fail before that time.
+DS=${DS:?}
+n=$(( $(cat "$DS/probes" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$DS/probes"
+echo "uid=$(id -u) $*" | cut -c1-120 >> "$DS/python.log"
+mode=${FAKE_CUINIT:-ok}
+[ -n "${FAKE_CUINIT_FAIL_N:-}" ] && [ "$n" -le "$FAKE_CUINIT_FAIL_N" ] && mode=fail
+[ -n "${FAKE_CUINIT_OK_AFTER:-}" ] && { [ "$(date +%s)" -lt "$FAKE_CUINIT_OK_AFTER" ] && mode=fail || mode=ok; }
+case "$mode" in
+  ok) echo "cuInit=0 cuDeviceGetCount=0 devices=1"; exit 0 ;;
+  fail) echo "cuInit=100 cuDeviceGetCount=-1 devices=0"; exit 1 ;;
+  nodev) echo "cuInit=0 cuDeviceGetCount=0 devices=0"; exit 1 ;;
+  nolib) echo "libcuda.so.1 not loadable"; exit 3 ;;
+  hang) exec sleep 60 ;;
+esac

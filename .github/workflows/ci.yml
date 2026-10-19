@@ -41,7 +41,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version | head -2
-          shellcheck -x deploy/jetson/*.sh deploy/jetson/tests/run-tests.sh deploy/jetson/tests/fake-bin/*
+          shellcheck -x deploy/jetson/*.sh deploy/jetson/nm-dispatcher-* deploy/jetson/tests/run-tests.sh deploy/jetson/tests/fake-bin/*
 
       - name: Deploy script tests
         run: deploy/jetson/tests/run-tests.sh

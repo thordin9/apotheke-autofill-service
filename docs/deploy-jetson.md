@@ -82,6 +82,92 @@ the LAN call that API (CORS), for example to pull or delete models. If nothing e
 `OLLAMA_CONTEXT_LENGTH` is only Ollama's default: `qwen2.5vl-jetson:3b` sets `num_ctx 4096` in its Modelfile, which
 takes precedence, so the service's model runs at 4096 regardless.
 
+**Boot race: Ollama before CUDA.** After a reboot on 2026-10-19, `ollama.service` started while
+`/dev/nvhost-ctrl-gpu` and `/dev/nvmap` already existed, but GPU discovery still logged only `library=cpu`
+(`offloaded 0/37 layers to GPU`) 0.44 s after `discovering available GPUs`, until a manual
+`systemctl restart ollama`, after which it logged `library=CUDA compute=7.2 name=CUDA0 description=Xavier`.
+The race is CUDA initialisation, not the device nodes. Two pieces fix that:
+
+1. [`wait-cuda.sh`](../deploy/jetson/wait-cuda.sh) + drop-in
+   [`ollama-wait-cuda.conf`](../deploy/jetson/ollama-wait-cuda.conf) (`ExecStartPre`, `After=nv.service
+   nvpmodel.service`, `TimeoutStartSec=180`): waits up to `CUDA_WAIT_S` seconds (default 60, capped at 150) for
+   the device nodes **and** an nvgpu/gv11b sysfs path, then polls a bounded `cuInit` probe as the `ollama` user
+   (`python3` + `libcuda.so.1`, fresh process per try, 10 s per probe). Every check is logged with a wall-clock
+   timestamp and the elapsed seconds (`device/sysfs: present|missing`, `cuInit probe #N: …`), so the journal
+   shows whether `cuInit` ever failed early on that boot. On timeout it logs and exits 0 so the unit still
+   starts (never fails forever). `CUDA_WAIT_S=0` skips the wait entirely (including the cuInit probe).
+2. [`ollama-gpu-check.sh`](../deploy/jetson/ollama-gpu-check.sh) +
+   [`ollama-gpu-check.service`](../deploy/jetson/ollama-gpu-check.service) (`Requisite=`/`After=ollama.service`,
+   `TimeoutStartSec=600`): after Ollama is up, reads this start's journal (by `_SYSTEMD_INVOCATION_ID`) for any
+   `inference compute` line with `library=cuda` (any case). If only `library=cpu` was found, it waits
+   `OLLAMA_GPU_CHECK_RESTART_DELAY_S` (default 10) then restarts `ollama.service` **at most once per boot**
+   (marker in `/run/ollama-gpu-check.restarted`). It never loops when there is truly no GPU, never starts a
+   disabled Ollama, and never loads, pulls or allowlists models. `ollama-gpu-check.sh check` exits 0 for GPU and
+   1 for CPU-only; it needs root or the `systemd-journal` group to read the journal.
+
+Install with the drop-in above:
+
+```bash
+install -D -m 755 $REPO/deploy/jetson/wait-cuda.sh /usr/local/sbin/wait-cuda.sh
+install -D -m 644 $REPO/deploy/jetson/ollama-wait-cuda.conf   /etc/systemd/system/ollama.service.d/ollama-wait-cuda.conf
+install -D -m 755 $REPO/deploy/jetson/ollama-gpu-check.sh /usr/local/sbin/ollama-gpu-check.sh
+install -D -m 644 $REPO/deploy/jetson/ollama-gpu-check.service /etc/systemd/system/ollama-gpu-check.service
+systemctl daemon-reload
+systemctl enable ollama-gpu-check.service
+systemctl restart ollama          # picks up ExecStartPre (re-runs gpu-check too if it already ran this boot)
+systemctl start ollama-gpu-check  # first install only: run the check now (no-op once it has run this boot)
+sudo /usr/local/sbin/ollama-gpu-check.sh check   # exit 0 = library=CUDA (needs journal access)
+```
+
+**gpu-check after a manual restart.** gpu-check is ordered `After=ollama.service` and has
+`Requisite=ollama.service`, so systemd propagates a stop or restart of Ollama to it: once gpu-check has run this
+boot, every manual `systemctl restart ollama` re-runs `ollama-gpu-check` after Ollama's new start (and a
+`systemctl stop ollama` stops it). It still can't loop: while gpu-check does its own restart it is still activating,
+so that restart doesn't trigger it again, and the `/run` marker allows only one restart per boot. Because of
+`RemainAfterExit=yes`, `systemctl start ollama-gpu-check` does nothing once the unit has run this boot; use
+`systemctl restart ollama-gpu-check` to run it again by hand. If `ollama.service` is disabled at boot, gpu-check
+fails at once with a dependency error (the system shows as degraded) and does nothing.
+
+**Forced-race boot (QA, R1b).** The race happened once and may not recur, so to exercise the once-per-boot restart
+path on purpose, make Ollama's first start of one boot CPU-only and skip the wait. (An empty `After=` in a drop-in
+can't do this: systemd ignores it, so `After=nv.service nvpmodel.service` stays.) For one boot only, the first start
+runs with `CUDA_VISIBLE_DEVICES=-1` and `CUDA_WAIT_S=0`. On xavier12 (2026-10-19, 21:07 EEST) this gave
+`library=cpu`, and `ollama-gpu-check.sh check` exited 1 with `CPU-only`; without it Ollama logs `library=CUDA` again,
+so `OLLAMA_LLM_LIBRARY` isn't needed.
+
+`/run` is a tmpfs, so the variables have to be created at boot: a `tmpfiles.d` entry writes them to `/run` before
+Ollama starts, a persistent drop-in reads them with `EnvironmentFile=-` (read at each start, so no `daemon-reload` is
+needed in between), and `ExecStartPost` deletes them once the first start is running. gpu-check's restart (and any
+later start) then has neither variable and runs wait-cuda's cuInit gate as usual. As root:
+
+```bash
+cat > /etc/tmpfiles.d/zz-force-race.conf <<'EOF'
+f /run/ollama-force-race-cpu.env 0644 root root - CUDA_VISIBLE_DEVICES=-1
+f /run/ollama-force-race-nowait.env 0644 root root - CUDA_WAIT_S=0
+EOF
+cat > /etc/systemd/system/ollama.service.d/zz-force-race.conf <<'EOF'
+[Service]
+EnvironmentFile=-/run/ollama-force-race-cpu.env
+EnvironmentFile=-/run/ollama-force-race-nowait.env
+ExecStartPost=+/bin/rm -f /run/ollama-force-race-cpu.env /run/ollama-force-race-nowait.env
+EOF
+systemctl daemon-reload && reboot
+```
+
+Expect path (b) of the reboot checklist: on the first start `wait-cuda` logs `CUDA_WAIT_S=0; skipping the wait`
+and Ollama logs `library=cpu`; gpu-check waits 10 s, restarts Ollama
+once, and logs `after restart, library=CUDA`. After the checklist, remove both files, reload, and restart Ollama to
+exercise the manual-restart path (gpu-check re-runs and should log `GPU already in use (library=CUDA)`):
+
+```bash
+rm /etc/tmpfiles.d/zz-force-race.conf /etc/systemd/system/ollama.service.d/zz-force-race.conf
+systemctl daemon-reload && systemctl restart ollama
+journalctl -u ollama-gpu-check -n 5 -o cat
+```
+
+Leave the two files in place only for that one reboot test. The other forced boot (R1a, without the wait-cuda
+drop-in) is described in [`docs/qa/pr17-boot-race-qa.md`](qa/pr17-boot-race-qa.md).
+
 ## Build the image
 
 Build on the board itself (native arm64). Images are tagged **`apotheke-autofill:jetson-<short sha>`** with the
@@ -220,11 +306,13 @@ resolve it:
 - otherwise (the new `autofill` works): `docker rm autofill-prev`.
 
 The script's behaviour is covered by [`deploy/jetson/tests/run-tests.sh`](../deploy/jetson/tests/run-tests.sh),
-which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl` and `tc` commands (no Docker, network or root
-needed) and checks: switches, rollbacks, signals before and during a rollback, the `/healthz` poll, the port check,
-the wall-clock `WAIT_S` and its validation, the bind-error hint, `build-image.sh` refs and `dl-cap.sh`. Run it
-locally the same way. It takes about 1 min 30 s, because the signal cases use real timing, and removes its
-temporary files when it exits, also when interrupted with Ctrl-C.
+which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl`, `tc`, `systemctl` and `journalctl`
+commands (no Docker, network or root needed) and checks: switches, rollbacks, signals before and during a rollback,
+the `/healthz` poll, the port check, the wall-clock `WAIT_S` and its validation, the bind-error hint,
+`build-image.sh` refs, `dl-cap.sh` (including a verbatim board `tc filter show` fixture), the NetworkManager hook,
+`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 1 min 45 s, because the
+signal and wait-timeout cases use real timing, and removes its temporary files when it exits, also when interrupted
+with Ctrl-C.
 
 The new container is started with:
 
@@ -303,12 +391,48 @@ call (`set -e`), so the unit fails visibly instead of leaving a partial cap. The
 (every 10 s, at most 10 times in 5 minutes), for example while `eth0` isn't up yet. systemd allows that for
 `Type=oneshot` since version 244; L4T R35 (Ubuntu 20.04) has 245.
 
+After applying, the script checks that `tc filter show dev eth0 parent ffff:` lists a `police` filter for both
+`ip` and `ipv6`, and exits 1 if not, so `Restart=on-failure` tries again rather than reporting success with no cap.
+`dl-cap.sh check` runs the same check without changing anything: it exits 0 if the cap is in place and 1 if it's
+missing.
+
+**NetworkManager hook.** `dl-cap.service` runs once, after `network-online.target`. On the board, NetworkManager
+sometimes takes over `eth0` a moment *after* that (journal: `device (eth0): state change: unmanaged -> unavailable`,
+`created default wired connection`, then `carrier: link connected`). That resets the device, the ingress qdisc
+goes with it, and the cap is silently gone while `dl-cap.service` still shows `active (exited)`; only a manual
+`systemctl restart dl-cap` brought it back. The NetworkManager dispatcher hook
+[`nm-dispatcher-90-dl-cap`](../deploy/jetson/nm-dispatcher-90-dl-cap) fixes that: when `eth0` (the `DEV` in
+`dl-cap.sh`) comes `up`, it runs `systemctl --no-block restart dl-cap.service`. On `dhcp4-change` for `eth0`, and
+on `connectivity-change` (which NetworkManager sends with an empty interface), it runs `dl-cap.sh check` first and
+only restarts if the cap is missing — a lease renewal must not leave a short uncapped gap or burn the unit's start
+limit (10 per 5 min). `--no-block` queues the restart and returns at once, so the hook never holds up
+NetworkManager's dispatcher while `network-online.target` is still pending. Other interfaces and other events are
+ignored, and the hook always exits 0. It does nothing while `dl-cap.service` is disabled, so
+`systemctl disable --now dl-cap` keeps the cap off. A plain `systemctl stop dl-cap` lasts only until the next
+`eth0` `up`.
+
+Install (as root). NetworkManager only runs dispatcher scripts that are owned by root and not writable by group or
+others:
+
 ```bash
 install -m 755 $REPO/deploy/jetson/dl-cap.sh /usr/local/sbin/dl-cap.sh
 install -m 644 $REPO/deploy/jetson/dl-cap.service /etc/systemd/system/dl-cap.service
+install -o root -g root -m 755 $REPO/deploy/jetson/nm-dispatcher-90-dl-cap /etc/NetworkManager/dispatcher.d/90-dl-cap
 systemctl daemon-reload && systemctl enable --now dl-cap
-tc filter show dev eth0 ingress          # two filters: police rate 30Mbit burst 384Kb ... drop
 ```
+
+Verify, now and **after every reboot** (the failure only showed up after a reboot):
+
+```bash
+tc -s filter show dev eth0 parent ffff:   # two filters (protocol ip and ipv6), each: police ... rate 30Mbit burst 384Kb ... drop
+/usr/local/sbin/dl-cap.sh check           # "cap is in place on eth0", exit 0; exit 1 if it's missing
+journalctl -b -u dl-cap -u NetworkManager-dispatcher   # after a reboot: dl-cap restarted once NetworkManager had eth0
+```
+
+With `-s`, each filter also shows `Sent ... bytes` and, under load, `dropped` and `overlimits` counters. If the
+filters are missing, run `systemctl restart dl-cap` and check that `/etc/NetworkManager/dispatcher.d/90-dl-cap`
+exists, is owned by root and has mode 755. The test harness covers the verify step, `check` and the hook (with fake
+`tc` and `systemctl`).
 
 `systemctl stop dl-cap` removes it. Effects: image builds and `ollama pull` are slow (see above), and a 1 MB photo
 upload takes about 0.3 s. Service timings measured on the board itself (loopback) are not affected.
@@ -353,17 +477,34 @@ in `/opt/actions-runner/.credentials*`, which must not leave the board.
 
 ## Reboot behaviour
 
-Everything comes back on its own after a reboot or power cut, tested on 2026-10-18:
+Everything comes back on its own after a reboot or power cut, tested on 2026-10-18 (dl-cap / Ollama CUDA boot
+fixes added after the 2026-10-19 reboot that left the inbound cap and Ollama on CPU until a manual restart):
 
 - `docker.service` is enabled, and the `autofill` container has `--restart unless-stopped`.
-- `ollama.service` is enabled. On start the service warms the model up, which loads `qwen2.5vl-jetson:3b` and,
-  with `OLLAMA_KEEP_ALIVE=-1`, keeps it loaded. `/v1/info` reports `ready: true` once that's done (about 15 s
-  after Ollama is up).
-- `dl-cap.service` is enabled and reapplies the 30 Mbit/s cap.
+- `ollama.service` is enabled, with `wait-cuda.sh` as `ExecStartPre` and `ollama-gpu-check.service` after it
+  (see [Ollama and its drop-in](#ollama-and-its-drop-in)). On start the service warms the model up, which loads
+  `qwen2.5vl-jetson:3b` and, with `OLLAMA_KEEP_ALIVE=-1`, keeps it loaded. `/v1/info` reports `ready: true` once
+  that's done (about 15 s after Ollama is up).
+- `dl-cap.service` is enabled and reapplies the 30 Mbit/s cap, and the NetworkManager hook reapplies it again if
+  NetworkManager takes over `eth0` afterwards. Check it with `tc -s filter show dev eth0 parent ffff:` or
+  `dl-cap.sh check` (see [Inbound bandwidth limit](#inbound-bandwidth-limit-30-mbits)).
 - The runner service is enabled and reconnects to GitHub.
 - The power mode persists (`nvpmodel` mode 8).
 
-After a reboot, the quick check under [Verify](#verify) is enough.
+**Post-reboot checklist** (a reboot test is only green when all of these hold):
+
+```bash
+ollama ps                              # qwen2.5vl-jetson:3b at 100% GPU, keep_alive Forever
+/usr/local/sbin/ollama-gpu-check.sh check   # exit 0 (library=CUDA in this start's journal)
+/usr/local/sbin/dl-cap.sh check        # "cap is in place on eth0"
+tc filter show dev eth0 parent ffff:   # two police filters (protocol ip and ipv6), rate 30Mbit burst 384Kb
+curl -s localhost:8080/healthz         # {"status":"ok"} (liveness only)
+curl -s -H @/opt/autofill/auth.hdr localhost:8080/v1/info   # "ready":true, models: only qwen2.5vl-jetson:3b
+journalctl -b -u ollama-gpu-check -o cat   # which path: "GPU already in use" or "restarting ... once" + "after restart, library=CUDA"
+```
+
+After a reboot, the quick check under [Verify](#verify) is also enough once the checklist above has passed once
+on this image.
 
 ## Model and image size choice: ALLOWED_MODELS and IMAGE_SIZES
 

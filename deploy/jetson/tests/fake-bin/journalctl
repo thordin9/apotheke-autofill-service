@@ -1,0 +1,31 @@
+#!/bin/sh
+# Fake `journalctl` for ollama-gpu-check.sh. Logs calls to $DS/journalctl.log and prints $DS/journal.txt, which the
+# harness and the fake systemctl split into one segment per Ollama start with "# --- restart ---" lines
+# (segment 0 = the first start, segment N = after the Nth restart).
+#   _SYSTEMD_INVOCATION_ID=<id>: only that start's segment (the id's last character is the segment number; see the
+#     fake systemctl's InvocationID).
+#   --since: lines from the last restart marker on (or the whole file before any restart). SINCE_SAME_SECOND=1 also
+#     prints the previous start's last line, as the real --since does when both starts fall in the same second (L3).
+#   otherwise (-b): the whole file.
+echo "journalctl $*" >> "${DS:?}/journalctl.log"
+[ -f "$DS/journal.txt" ] || exit 0
+for a in "$@"; do
+  case "$a" in
+    _SYSTEMD_INVOCATION_ID=*)
+      id=${a#_SYSTEMD_INVOCATION_ID=}; seg=${id#"${id%?}"}
+      awk -v seg="$seg" 'BEGIN{s=0} /^# --- restart ---/{s++; next} s==seg' "$DS/journal.txt"
+      exit 0 ;;
+  esac
+done
+case " $* " in
+  *" --since "*)
+    if grep -q '^# --- restart ---' "$DS/journal.txt" 2>/dev/null; then
+      awk -v same="${SINCE_SAME_SECOND:-}" '
+        /^# --- restart ---/ { if (same != "" && prev != "") keep = prev; else keep = ""; buf = keep; p = 1; next }
+        { prev = $0; if (p) buf = (buf == "" ? $0 : buf "\n" $0) }
+        END { if (p && buf != "") print buf }' "$DS/journal.txt"
+      exit 0
+    fi ;;
+esac
+grep -v '^# --- restart ---' "$DS/journal.txt"
+exit 0
