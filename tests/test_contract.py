@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import unicodedata
 
 import pytest
 from conftest import GIF, HEIC, JPEG, PNG, WEBP, assert_contract, post_image
@@ -100,6 +102,52 @@ def test_400_bad_context(client, ctx):
     r = post_image(client, context=ctx)
     assert r.status_code == 400
     assert_contract(r, "/v1/suggest", "post")
+
+
+# A lone surrogate is valid JSON (\uD800) and cannot be encoded as UTF-8.
+_SURROGATE = "\ud800"
+
+
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        {"categories": [f"Tools{_SURROGATE}"]},
+        {"categories": [_SURROGATE]},
+        {"tags": [f"red{_SURROGATE}"]},
+        {"locale": f"en{_SURROGATE}"},
+        {"model": f"moondream{_SURROGATE}"},
+    ],
+)
+def test_unencodable_context_is_400(client, caplog, ctx):
+    with caplog.at_level(logging.DEBUG):
+        r = post_image(client, context=json.dumps(ctx))
+    assert r.status_code == 400
+    body = assert_contract(r, "/v1/suggest", "post")
+    assert set(body) == {"error"}
+    assert set(body["error"]) == {"code", "message"}
+    assert body["error"]["code"] == "bad_request"
+    assert _SURROGATE not in r.text
+    assert "Traceback" not in caplog.text
+
+
+def test_category_controls_never_come_back(client):
+    raw = "Too\x00ls\x07\u0085\u202e\u2066"
+    r = post_image(client, context=json.dumps({"categories": [raw], "tags": ["ok"]}))
+    assert r.status_code == 200
+    body = assert_contract(r, "/v1/suggest", "post")
+    assert body["category"]["value"] == "Tools"
+    text = r.content.decode("utf-8")
+    assert "\x00" not in text
+    assert "\u202e" not in text and "\u2066" not in text
+    assert all(unicodedata.category(ch) != "Cc" for ch in text)
+
+
+def test_category_of_only_controls_is_not_returned(client):
+    r = post_image(client, context=json.dumps({"categories": ["\x00\u0007\u202e"]}))
+    assert r.status_code == 200
+    body = assert_contract(r, "/v1/suggest", "post")
+    assert body["category"]["value"] == "Misc"
+    assert "\x00" not in r.content.decode("utf-8")
 
 
 @pytest.mark.parametrize(

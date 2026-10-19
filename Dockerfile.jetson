@@ -18,7 +18,8 @@
 #
 # Run (on device):
 #   docker run --runtime nvidia --network host \
-#     -e BACKEND=ollama \
+#     -e BACKEND=cloudflare \
+#     -e FALLBACK_BACKEND=ollama \
 #     -e OLLAMA_URL=http://127.0.0.1:11434 \
 #     -e OLLAMA_MODEL=qwen2.5vl-jetson:3b \
 #     -e BACKEND_TIMEOUT_S=45 \
@@ -35,7 +36,8 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    BACKEND=ollama \
+    BACKEND=cloudflare \
+    FALLBACK_BACKEND=ollama \
     PORT=8080 \
     OLLAMA_URL=http://127.0.0.1:11434 \
     OLLAMA_MODEL=qwen2.5vl-jetson:3b \
@@ -54,7 +56,8 @@ RUN curl -fsSL "${PYTHON_STANDALONE_URL}" -o /tmp/python.tgz \
     && python3.11 --version \
     && python3.11 -m pip --version \
     && python3.11 -m pip install --no-cache-dir -r requirements-jetson.txt \
-    && python3.11 -c "import fastapi, pydantic, uvicorn, multipart; print('jetson deps', fastapi.__version__, pydantic.VERSION, uvicorn.__version__)"
+    && python3.11 -c "import fastapi, pydantic, uvicorn, multipart; print('jetson deps', fastapi.__version__, pydantic.VERSION, uvicorn.__version__)" \
+    && mkdir -p /var/lib/autofill
 
 COPY app ./app
 

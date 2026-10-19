@@ -237,7 +237,7 @@ photo with a `with` block.
 
 | | |
 |---|---|
-| Board | NVIDIA Jetson Xavier NX Developer Kit, hostname `xavier12`, root filesystem on NVMe |
+| Board | NVIDIA Jetson Xavier NX Developer Kit, hostname `<jetson-host>`, root filesystem on NVMe |
 | OS | L4T R35.6.0 (JetPack 5), kernel 5.10.216-tegra |
 | Power | `nvpmodel` mode 8, `MODE_20W_6CORE` (the NX's fastest mode; mode 0 on the NX is a slower 15 W 2-core mode). `jetson_clocks` off unless stated |
 | Memory | 6.8 GB RAM shared between CPU and GPU, plus swap: 6 × 569 MB zram and an 8 GB swap file on NVMe |
@@ -393,7 +393,7 @@ below).
 
 ## Final deployment
 
-- Deployed on xavier12 on 2026-10-18 at `main` **7339211** (merge of PR #7; app code identical to e4e9033), image `apotheke-autofill:jetson-7339211`, model `qwen2.5vl-jetson:3b` with `OLLAMA_KEEP_ALIVE=-1`, `docker run --restart unless-stopped --env-file /opt/autofill/service.env`.
+- Deployed on `<jetson-host>` on 2026-10-18 at `main` **7339211** (merge of PR #7; app code identical to e4e9033), image `apotheke-autofill:jetson-7339211`, model `qwen2.5vl-jetson:3b` with `OLLAMA_KEEP_ALIVE=-1`, `docker run --restart unless-stopped --env-file /opt/autofill/service.env`.
 - `BACKEND_TIMEOUT_S=25` until Apotheke v2.3 ships (keeps v2.2.0 clients on the fast-503 path), then raise it to 45.
 - verify.sh: healthz ok; info ready with avg_latency_ms; cold after `ollama stop` → 503 in 0.08 s (Retry-After 15); two at once → second 503 in 0.03 s (Retry-After 14).
 - Reboot test: container, Ollama (Qwen reloaded), dl-cap, GitHub runner and WireGuard reachability all came back; healthz ok, info ready, suggest 200.

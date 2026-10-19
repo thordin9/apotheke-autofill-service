@@ -1,5 +1,9 @@
 name: CI
 
+# Checkout, lint, tests, and the history scan only read the repo.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -29,7 +33,44 @@ jobs:
       - name: Unit and contract tests
         env:
           BACKEND: echo
+          FALLBACK_BACKEND: none
         run: pytest -q
+
+  gitleaks:
+    # Full history. The CLI needs no license. contents: read is enough.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks 8.28.0
+        run: |
+          set -euo pipefail
+          if [ "$(uname -m)" != "x86_64" ]; then
+            echo "pinned gitleaks build is linux x64; this runner is $(uname -m)" >&2
+            exit 1
+          fi
+          version=8.28.0
+          file="gitleaks_${version}_linux_x64.tar.gz"
+          sums="gitleaks_${version}_checksums.txt"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${version}"
+          # From the official gitleaks_8.28.0_checksums.txt (linux_x64 line).
+          expected="a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb"
+          tmp="$RUNNER_TEMP/gitleaks-install"
+          mkdir -p "$tmp"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$file" "$url/$file"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$sums" "$url/$sums"
+          grep -qxF "${expected}  ${file}" "$tmp/$sums"
+          echo "${expected}  $tmp/$file" | sha256sum -c -
+          tar -xzf "$tmp/$file" -C "$tmp" gitleaks
+          install -m 0755 "$tmp/gitleaks" "$RUNNER_TEMP/gitleaks"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          # GITHUB_PATH applies only to later steps.
+          "$RUNNER_TEMP/gitleaks" version
+
+      - name: Scan git history
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --exit-code 1
 
   deploy-scripts:
     # Jetson deploy scripts: shellcheck and the fake-docker harness (bash only; no Docker, network or root).
@@ -56,7 +97,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(docker compose config --services)" = "autofill"
-          docker compose config | grep -q 'BACKEND: echo'
+          docker compose config | grep -q 'BACKEND: cloudflare'
+          docker compose config | grep -q 'FALLBACK_BACKEND: ollama'
           got="$(docker compose --profile ollama config --services | sort | tr '\n' ' ')"
           test "$got" = "autofill-ollama ollama ollama-init "
           docker compose --profile ollama config --format json > /tmp/compose-ollama.json
@@ -65,6 +107,7 @@ jobs:
           d = json.load(open("/tmp/compose-ollama.json"))
           af = d["services"]["autofill-ollama"]["environment"]
           assert af["BACKEND"] == "ollama", af
+          assert af["FALLBACK_BACKEND"] == "none", af
           assert af["OLLAMA_URL"] == "http://ollama:11434", af
           assert "OLLAMA_HOST" not in af, af
           assert af["OLLAMA_MODEL"] == "moondream", af
@@ -82,6 +125,7 @@ jobs:
           docker rm -f autofill-smoke >/dev/null 2>&1 || true
           docker run -d --name autofill-smoke -p 8080:8080 \
             -e BACKEND=echo \
+            -e FALLBACK_BACKEND=none \
             -e AUTOFILL_TOKEN=ci-token \
             apotheke-autofill:echo
           cleanup() { docker logs autofill-smoke || true; docker rm -f autofill-smoke >/dev/null 2>&1 || true; }

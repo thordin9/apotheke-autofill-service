@@ -3,6 +3,72 @@
 All notable changes to this service. The HTTP contract is versioned
 separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
+## [1.4.0] - 2026-10-19
+
+### Added
+
+- **Optional Cloudflare Workers AI backend (API v1.4).** Calls the Workers AI
+  REST API directly. Confirmed default `@cf/google/gemma-4-26b-a4b-it` with
+  thinking off and `response_format` JSON schema, from the bench in
+  `bench/results/cf-workers-ai-2026-10-19` (6.4 Neurons/photo). Mistral Small
+  3.1 uses `response_format` too (`guided_json` is ignored on image messages).
+  Qwen 3.8 is not recommended. Llama 3.2 Vision and Llama 4 Scout are rejected,
+  case-insensitively. The shipped default is `BACKEND=cloudflare` with
+  `FALLBACK_BACKEND=ollama`. `FALLBACK_BACKEND` accepts `none`, `ollama`, or
+  `cloudflare`. Ollama-primary with `FALLBACK_BACKEND=cloudflare` still works,
+  and `BACKEND=ollama` with `FALLBACK_BACKEND=none` stays local.
+- **Default changed.** A missing `CF_ACCOUNT_ID` or `CF_API_TOKEN`, a missing
+  or unreadable credential file (`CF_ACCOUNT_ID_FILE` / `CF_API_TOKEN_FILE`),
+  or a missing or unreadable budget state file, does not crash startup. One
+  warning is logged (no secret values) and the request is served by Ollama.
+  `/v1/info` then shows Cloudflare not configured and `can_serve` false. When
+  a token is set, the default sends photos to Cloudflare. The Jetson example
+  uses placeholder paths `/opt/autofill/cf-account-id` and
+  `/opt/autofill/cf-api-token`.
+- **Secret scan.** `.gitignore` ignores `service.env`, `*.env` (tracked `.env`
+  and `*.env.example` stay tracked), `*.pem`, and `*.key`. CI runs gitleaks
+  8.28.0 on the full history with the default rules enabled. The tarball
+  download checks the official checksum
+  `a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb`.
+  `.gitleaks.toml` allowlists only the historical placeholders
+  `generate-a-random-token` and `Bearer ci-token`.
+- **Deadline.** `REQUEST_DEADLINE_S` (default 45, must be under Apotheke's 50 s)
+  plus a warm reserve (15 s) or a cold/loading reserve (35 s). The Cloudflare
+  slice is 20 s when Ollama is warm and about 10 s when it is cold. Startup
+  refuses a config that does not fit. A fallback that would miss the deadline
+  is 503 with `Retry-After`.
+- **Daily Neuron budget.** `CF_DAILY_NEURON_BUDGET` defaults to 6000 (about 930
+  Gemma 4 photos). `usage.neurons` is charged when present; otherwise token
+  rates; otherwise a conservative estimate. The state file lives on
+  `/var/lib/autofill` (Jetson host dir `/opt/autofill/data`). A corrupt,
+  unreadable, or unwritable file spends the rest of the UTC day.
+- **v1.3 Jetson QA.** `docs/qa/v1.3-jetson-qa.md` records the Jetson pass. The
+  file is unchanged from the report.
+- **Contract.** `/v1/suggest` gains optional `backend_used` (`ollama` or
+  `cloudflare`). `model_used` is the model that answered. `/v1/info` gains
+  `backends`, the Cloudflare budget, and the effective slice and reserve.
+  `can_serve` is false after 401/403, Workers Paid, a used-up budget, or
+  missing config, and recovers on a later success or the UTC reset. `/healthz`
+  still probes local Ollama: `503` `{"status":"degraded"}`, plus
+  `"serving":"fallback"` or `"serving":"primary"` only while Cloudflare can
+  serve. `version` stays `"1"`.
+
+### Fixed
+
+- **Health-probe wording.** An Ollama error during `/healthz` keeps the last
+  result. It does not always leave the probe at `ok`.
+- **Category names.** Newlines in a client category are folded onto one prompt
+  line so the name cannot break the prompt.
+- **Unencodable context (QA F-1).** A lone surrogate, or any other value that
+  cannot be encoded, in a context string (`categories`, `tags`, `locale`, or
+  `model`) is `400` `bad_request` with the usual error object. The log has no
+  traceback.
+- **Category controls (QA F-2).** NUL and other C0/C1 controls, and bidi
+  overrides, are stripped from client category names before the prompt, the
+  schema enum, and the category returned to the client. The same classes as
+  the brand fields. A NUL never comes back in the response.
+- **v3_lean latency.** The changelog's v3_lean cost is the measured +0.7 s.
+
 ## [Unreleased]
 
 ### Fixed
@@ -46,7 +112,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   `systemctl enable --now dl-cap-check.timer` (see docs/deploy-jetson.md). Side effect: a plain `systemctl stop
   dl-cap` is undone within 5 minutes; `systemctl disable --now dl-cap` keeps the cap off.
 
-## [1.3.0]
+## [1.3.0] - 2026-10-19
 
 ### Added
 
@@ -93,7 +159,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 - **Brand/model/serial prompt variants and small-VLM shortlist (2026-10-19).** `docs/benchmarks.md`
   adds Feature 9 results: four prompt/schema variants on `qwen2.5vl-jetson:3b` at 560 and 1024 px.
-  Winner **`v3_lean`** (+0.8 s, fewest invented values). `v2_omit` invents heavily — do not use.
+  Winner **`v3_lean`** (+0.7 s, fewest invented values). `v2_omit` invents heavily — do not use.
   Small-model pulls: MiniCPM-V4 runs but category accuracy lags; library `gemma3:4b` needs a newer
   Ollama. InternVL3/SmolVLM2 are not inherently CPU-only. The earlier ~80–110 s/photo was the
   18:22–19:28 CPU-only Ollama boot window; after CUDA restore they run on GPU (~19.5 s InternVL,

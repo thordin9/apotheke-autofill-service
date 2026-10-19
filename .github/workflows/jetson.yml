@@ -9,6 +9,10 @@
 
 name: Jetson image
 
+# Checkout and a local image build. Nothing is pushed.
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   pull_request:

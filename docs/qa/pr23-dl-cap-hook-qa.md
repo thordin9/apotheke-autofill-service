@@ -2,7 +2,7 @@
 
 - PR #23, branch `fix/dl-cap-dispatcher-dedupe`, on main `4f25ede`. Reviewed heads: `db57831` (serialised hook),
   `ea46c13` (one runtime deadline), **`46ff335`** (final: adds `dl-cap-check.timer`).
-- **Verdict at `46ff335`: PASS, including the board reboot check on xavier12 (2026-10-19).** No High or Medium
+- **Verdict at `46ff335`: PASS, including the board reboot check on <jetson-host> (2026-10-19).** No High or Medium
   findings remain open; M1 (found at `ea46c13`) is closed by the timer. The Low and Info items below are follow-ups
   and don't block. See "Board check".
 - Changed: `deploy/jetson/nm-dispatcher-90-dl-cap`, new `dl-cap-check.sh`, `dl-cap-check.service`,
@@ -111,7 +111,7 @@ through the harness).
 
 ## Board check
 
-DevOps installed `46ff335` on xavier12 (the hook, `dl-cap-check.sh`, both units, `daemon-reload`,
+DevOps installed `46ff335` on <jetson-host> (the hook, `dl-cap-check.sh`, both units, `daemon-reload`,
 `systemctl enable --now dl-cap-check.timer`) and rebooted once at 22:26:14 EEST; the board was back at 22:27:05.
 QA then checked it independently, read-only over SSH, from 22:32 to 22:35 EEST. There were no unloads, restarts or
 writes on the board. Times are EEST; bracketed values are seconds since boot (`-o short-monotonic`).

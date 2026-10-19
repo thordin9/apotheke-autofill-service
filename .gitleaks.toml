@@ -1,0 +1,21 @@
+# Default gitleaks rules. Without [extend] this file loads zero rules.
+# CI runs: gitleaks detect --source . --config .gitleaks.toml --redact
+# Real tokens, account ids, keys, and private hostnames are not listed here.
+
+title = "apotheke-autofill-service"
+
+[extend]
+useDefault = true
+
+# Two historical placeholders, matched against the rule match (not a path).
+# generic-api-key starts at generate-a-random-token: the opening "<" is
+# outside the match, and ">" is the rule's delimiter, so the angle-bracket
+# form does not match. curl-auth-header ends at Bearer ci-token' ; the
+# extracted value is ci-token.
+[allowlist]
+description = "Historical placeholders only. Not real credentials."
+regexTarget = "match"
+regexes = [
+  '''^generate-a-random-token>''',
+  '''Bearer ci-token'$''',
+]

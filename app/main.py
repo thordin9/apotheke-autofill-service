@@ -17,10 +17,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .backends import BackendUnavailable, create_backend
 from .backends.base import CAPABILITIES
 from .backends.echo import MalformedOutput
+from .backends.failover import CLIENT_TIMEOUT_EXTRA_S
 from .errors import ApiError, error_response
-from .identity import identity_fields
+from .identity import clean_category, identity_fields
 from .imagetype import accepted_mime
-from .settings import get_settings
+from .settings import Settings, get_settings
 
 
 def create_app() -> FastAPI:
@@ -68,8 +69,13 @@ def create_app() -> FastAPI:
         return error_response(400, "bad_request", "invalid request")
 
     async def call_backend(coro):
+        # A failover router owns a budget of BACKEND_TIMEOUT_S + 5 s, which is
+        # Apotheke's client timeout, and finishes a second early itself.
+        timeout = get_settings().backend_timeout_s
+        if getattr(backend, "owns_deadline", False):
+            timeout += CLIENT_TIMEOUT_EXTRA_S
         try:
-            return await asyncio.wait_for(coro, timeout=get_settings().backend_timeout_s)
+            return await asyncio.wait_for(coro, timeout=timeout)
         except TimeoutError:
             raise ApiError(504, "backend_timeout", "backend timed out") from None
         except BackendUnavailable as exc:
@@ -90,6 +96,9 @@ def create_app() -> FastAPI:
         if isinstance(snap, dict) and snap.get("degraded") is True:
             body["status"] = "degraded"
             status = 503
+            serving = _serving_role(backend, get_settings())
+            if serving is not None:
+                body["serving"] = serving
         # Model ids, state, VRAM and latency stay on authenticated /v1/info.
         return JSONResponse(body, status_code=status)
 
@@ -113,6 +122,7 @@ def create_app() -> FastAPI:
             out["models"] = models
         if sizes := get_settings().image_sizes:
             out["image_sizes"] = [{"long_edge": n, "recommended": rec} for n, rec in sizes]
+        out["backends"] = backend_listing(backend, data, get_settings())
         return out
 
     @app.post("/v1/suggest")
@@ -159,22 +169,115 @@ def parse_context(raw: Any) -> dict[str, Any]:
         val = ctx.get(key, [])
         if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
             raise ApiError(400, "bad_request", f"'context.{key}' must be a list of strings")
-        out[key] = val
+        cleaned: list[str] = []
+        for item in val:
+            _require_encodable(item, f"context.{key}")
+            if key == "categories":
+                item = clean_category(item)
+            cleaned.append(item)
+        out[key] = cleaned
     locale = ctx.get("locale")
     if locale is not None:
         if not isinstance(locale, str):
             raise ApiError(400, "bad_request", "'context.locale' must be a string")
+        _require_encodable(locale, "context.locale")
         out["locale"] = locale
     model = ctx.get("model")
     if model is not None:
         if not isinstance(model, str):
             raise ApiError(400, "bad_request", "'context.model' must be a string")
+        _require_encodable(model, "context.model")
         out["model"] = model
     return out
 
 
+def _require_encodable(value: str, field: str) -> None:
+    """Reject text that cannot be encoded. The message never includes the value:
+    a lone surrogate in the error body is itself a 500."""
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        raise ApiError(
+            400, "bad_request", f"'{field}' contains text that cannot be encoded"
+        ) from None
+
+
 def _ms(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def _cloudflare_of(backend: Any) -> Any:
+    found = getattr(backend, "cloudflare_backend", None)
+    if found is not None:
+        return found
+    if getattr(backend, "id", None) == "cloudflare" and hasattr(backend, "budget"):
+        return backend
+    return None
+
+
+def _cf_can_serve(backend: Any) -> bool:
+    cf = _cloudflare_of(backend)
+    if cf is None:
+        return False
+    return bool(cf.can_serve())
+
+
+def _serving_role(backend: Any, settings: Settings) -> str | None:
+    """Who answers while the local Ollama probe is degraded.
+
+    Ollama primary: `fallback` when Cloudflare can take the request.
+    Cloudflare primary: `primary` when Cloudflare can take it. The probe
+    itself stays the local model, and the status stays 503.
+    """
+    if settings.fallback_backend == "cloudflare" and _cf_can_serve(backend):
+        return "fallback"
+    if (
+        settings.backend == "cloudflare"
+        and settings.fallback_backend == "ollama"
+        and _cf_can_serve(backend)
+    ):
+        return "primary"
+    return None
+
+
+def _primary_state(backend: Any, info: dict[str, Any]) -> str:
+    if info.get("unavailable") is True:
+        return "unavailable"
+    degraded = getattr(backend, "degraded", None)
+    if callable(degraded) and degraded():
+        return "degraded"
+    if info.get("ready") is False:
+        return "warming"
+    return "ok"
+
+
+def _attach_cloudflare(entry: dict[str, Any], info: dict[str, Any]) -> None:
+    model = info.get("model")
+    if isinstance(model, str) and model.strip():
+        entry["model"] = model
+    budget = info.get("budget")
+    if isinstance(budget, dict):
+        entry["budget"] = budget
+
+
+def backend_listing(backend: Any, info: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Primary and fallback as /v1/info reports them. No secrets."""
+    custom = info.get("_backends")
+    if isinstance(custom, dict):
+        return custom
+    primary: dict[str, Any] = {
+        "id": str(getattr(backend, "id", "unknown")),
+        "state": _primary_state(backend, info),
+    }
+    if getattr(backend, "id", None) == "cloudflare":
+        _attach_cloudflare(primary, info)
+    if settings.fallback_backend == "cloudflare" and _cf_can_serve(backend):
+        fallback: dict[str, Any] = {"id": "cloudflare", "state": "ready", "can_serve": True}
+    elif settings.fallback_backend == "none":
+        fallback = {"id": "none", "state": "off", "can_serve": False}
+    else:
+        fallback = {"id": "none", "state": "off", "can_serve": False}
+    return {"primary": primary, "fallback": fallback}
 
 
 def sanitize_models(models: Any) -> list[dict[str, Any]] | None:
@@ -224,6 +327,9 @@ def sanitize(result: Any) -> dict[str, Any]:
     model_used = result.get("model_used")
     if isinstance(model_used, str) and model_used.strip():
         out["model_used"] = model_used
+    backend_used = result.get("backend_used")
+    if backend_used in ("ollama", "cloudflare"):
+        out["backend_used"] = backend_used
     idents = identity_fields(result)
     # Keep a body that had no suggestion fields as {}. Empty identity strings
     # are added on a real suggestion so old clients still see the same shape

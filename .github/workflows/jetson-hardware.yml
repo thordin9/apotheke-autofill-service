@@ -148,6 +148,7 @@ jobs:
           docker run -d --name "$CONTAINER" --label "$CI_LABEL" \
             --network host --no-healthcheck \
             -e BACKEND=ollama \
+            -e FALLBACK_BACKEND=none \
             -e OLLAMA_URL -e OLLAMA_MODEL -e AUTOFILL_TOKEN \
             -e OLLAMA_LOG_RAW=1 \
             -e OLLAMA_KEEP_ALIVE=5m \

@@ -1,15 +1,19 @@
-# x86 / CI image for BACKEND=echo (no GPU). Used by docker compose and GitHub Actions.
+# x86 image. Shipped default is Cloudflare with an Ollama fallback.
+# CI smoke overrides BACKEND=echo and FALLBACK_BACKEND=none.
 FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    BACKEND=echo \
+    BACKEND=cloudflare \
+    FALLBACK_BACKEND=ollama \
+    BACKEND_TIMEOUT_S=45 \
     PORT=8080
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && mkdir -p /var/lib/autofill
 
 COPY app ./app
 
