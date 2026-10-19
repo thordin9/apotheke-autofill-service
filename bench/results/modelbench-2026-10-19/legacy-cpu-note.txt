@@ -1,0 +1,6 @@
+InternVL3 and SmolVLM2 use the legacy llama.cpp runner (clip projector).
+On this dustynv Ollama 0.15.6 / Jetson Xavier NX they ran with GR3D_FREQ=0%
+(CPU-only): ~108-112 s/photo warm, prompt_eval ~42 s for 381 tokens.
+Full 19-photo x 2-size bench aborted after 6 warm InternVL shots (exit 137).
+Kept partial raw/internvl3_2b-q4_K_M-560.jsonl and a 3-photo sample instead.
+MiniCPM-V4 and Qwen used GPU (earlier tegrastats during those runs).

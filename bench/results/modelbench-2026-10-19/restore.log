@@ -1,0 +1,6 @@
+restored 2026-10-19T19:06:01+03:00
+{"models":[{"name":"qwen2.5vl-jetson:3b","model":"qwen2.5vl-jetson:3b","size":4064273376,"digest":"c917b94b8c33ed72056561899688b67795d95252846a15e43582d181808216e5","details":{"parent_model":"","format":"gguf","family":"qwen25vl","families":["qwen25vl"],"parameter_size":"3.8B","quantization_level":"Q4_K_M"},"expires_at":"2319-01-29T17:53:18.501527493+02:00","size_vram":0,"context_length":4096}]}
+OLLAMA_MODEL=qwen2.5vl-jetson:3b
+IMAGE_SIZES=448,560*,1024
+ALLOWED_MODELS=qwen2.5vl-jetson:3b
+autofill Up 43 minutes (healthy)

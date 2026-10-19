@@ -1,0 +1,19 @@
+{
+  "_note": "Sidecar to ground_truth.json for bench/score_brand.py. For each photo and field (brand, model, serial): the image sizes (long side, px) at which a person can read the text in the photo. A ground-truth value missing here counts as readable at every size. visible_brand gives a brand printed on an original-set photo that has no brand in ground_truth.json. Judged by eye on the 560 and 1024 sets, 2026-10-18.",
+  "photos": {
+    "sony_cd_player_label.jpg": {"brand": [560, 1024], "model": [560, 1024], "serial": [560, 1024]},
+    "panasonic_vcr_label.jpg": {"brand": [], "model": [1024], "serial": [1024]},
+    "makita_drill_dhp453.jpg": {"brand": [1024], "model": []},
+    "ibuprofen_al400_pack.jpg": {"brand": [560, 1024], "model": [560, 1024]},
+    "raspberry_pi4.jpg": {"brand": [1024], "model": [1024], "serial": [1024]},
+    "fluke45_multimeter.jpg": {"brand": [1024], "model": [1024]},
+    "casio_fx991ex.jpg": {"brand": [560, 1024], "model": [1024]},
+    "tefal_kettle.jpg": {"brand": [560, 1024], "model": [560, 1024]},
+    "panadol_500_pack.jpg": {"brand": [560, 1024], "model": [560, 1024], "serial": [1024]},
+    "osram_lamp_box.jpg": {"brand": [560, 1024]},
+    "headphones.jpg": {"visible_brand": "Bose", "brand": [1024]},
+    "laptop.jpg": {"visible_brand": "IBM", "brand": [560, 1024]},
+    "sneakers.jpg": {"visible_brand": "Reebok", "brand": [560, 1024]},
+    "cordless_drill.jpg": {"visible_brand": "Ryobi", "brand": []}
+  }
+}

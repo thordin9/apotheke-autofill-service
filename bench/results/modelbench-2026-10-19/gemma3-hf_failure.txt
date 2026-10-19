@@ -1,0 +1,6 @@
+gemma3-hf:4b-q4_K_M (from hf.co/ggml-org/gemma-3-4b-it-GGUF:Q4_K_M)
+- library gemma3:4b refused on Ollama 0.15.6 (HTTP 412 needs newer Ollama)
+- HF GGUF loads for text (2.83 GB resident, JSON OK)
+- vision /api/chat with image hangs >180s; ollama log shows projector gemma3 loaded
+- first modelbench attempt left empty gemma3-hf_4b-q4_K_M-560.jsonl then container died
+- skipped remaining gemma configs 2026-10-19

@@ -1,0 +1,19 @@
+{
+  "label": "smolvlm2",
+  "model": "smolvlm2:2.2b-instruct-q4_K_M",
+  "wall_s": 17.108,
+  "error": null,
+  "content": "{\n  \"name\": \"hammer\",\n  \"category\": \"Tools\",\n  \"tags\": [\"hand tools\"],\n  \"description\": \"A hammer is a versatile tool used for driving nails or other small objects into wood, concrete, and other materials.\",\n  \"confidence\": 1.0\n}",
+  "load_duration": 11898902481,
+  "prompt_eval_count": 115,
+  "prompt_eval_duration": 514346291,
+  "eval_count": 63,
+  "eval_duration": 2174082842,
+  "ps": [
+    {
+      "name": "smolvlm2:2.2b-instruct-q4_K_M",
+      "size": 1674801152,
+      "size_vram": 1674801152
+    }
+  ]
+}

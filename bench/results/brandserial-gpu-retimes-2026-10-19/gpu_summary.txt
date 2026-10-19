@@ -1,0 +1,3 @@
+gr3d_max=99
+pct_samples_ge_50pct=0.873
+n=1743
