@@ -6,7 +6,9 @@ in the repo and keep the same HTTP contract, with a larger upload limit.
 
 The Worker is Workers Free plus the Workers AI free allocation. It does not
 use KV. The daily cap lives in one SQLite-backed Durable Object. Nothing here
-is a paid feature: `workers.dev` only, no custom domain, no Logpush.
+is a paid feature. `workers_dev` and preview URLs are off. The public name is
+the custom domain `apotheke-autofill-service.webapp.gr`. A fork uses its own
+`<your-domain>` in `worker/wrangler.toml`.
 
 ## What you need
 
@@ -28,8 +30,11 @@ Either:
 npx wrangler login
 ```
 
-or create an **account-scoped** API token and export it in the shell only.
-Do not commit it, do not put it in `wrangler.jsonc`, and do not put it in CI.
+or create an API token and export it in the shell only.
+Do not commit it, do not put it in `wrangler.toml`, and do not put it in the
+CI workflow. The deploy Action reads `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` from the GitHub environment `production` on that one
+step. It never prints them and it never runs `wrangler secret put`.
 
 Minimum permissions:
 
@@ -37,21 +42,23 @@ Minimum permissions:
 |---|---|---|
 | Account / Workers Scripts | Edit | `wrangler deploy` uploads the script and applies the Durable Object migration |
 | Account / Workers AI | Read | Attach the Workers AI binding. If deploy rejects the binding, add Workers AI Edit on the same account |
+| Zone / Workers Routes | Edit | Attach the custom-domain route |
+| Zone / DNS | Edit | Create the custom-domain record on the first deploy |
 | Account / Workers Tail | Read | Optional. Only for `npx wrangler tail` |
 
-The token does not need Workers KV, Logpush, or a zone. Durable Objects on
-the Free plan are covered by Workers Scripts Edit. Leave the account id out
-of the repo. Wrangler reads it from `wrangler login` or from
-`CLOUDFLARE_ACCOUNT_ID` in the environment.
+The token does not need Workers KV or Logpush. Durable Objects on the Free
+plan are covered by Workers Scripts Edit. Leave the account id out of the
+repo. Wrangler reads it from `wrangler login` or from `CLOUDFLARE_ACCOUNT_ID`
+in the environment.
 
-The first deploy may ask you to claim a `workers.dev` subdomain in the
-dashboard. `workers_dev` is true and `preview_urls` is false, so the URL is
-`https://apotheke-autofill.<account-subdomain>.workers.dev`. There is no
-route and no custom hostname in the config.
+`workers_dev` is false and `preview_urls` is false. The route in
+[`worker/wrangler.toml`](../worker/wrangler.toml) is the custom domain
+`apotheke-autofill-service.webapp.gr`. A fork changes that pattern to its own
+`<your-domain>` and does not reuse this hostname.
 
 ## Configure the caps
 
-These are plain vars in [`worker/wrangler.jsonc`](../worker/wrangler.jsonc),
+These are plain vars in [`worker/wrangler.toml`](../worker/wrangler.toml),
 not secrets. Change them and deploy again. Lowering the neuron budget is how
 to test exhaustion without spending the free allocation:
 
@@ -80,7 +87,7 @@ openssl rand -hex 32 | npx wrangler secret put AUTOFILL_TOKEN
 ```
 
 `wrangler secret put` stores the secret on the Worker. It is not in
-`wrangler.jsonc`. For local `wrangler dev` only, copy
+`wrangler.toml`. For local `wrangler dev` only, copy
 [`worker/.dev.vars.example`](../worker/.dev.vars.example) to `worker/.dev.vars`
 (gitignored) and put the same placeholder-replaced token there.
 
@@ -88,21 +95,54 @@ openssl rand -hex 32 | npx wrangler secret put AUTOFILL_TOKEN
 test suite does not: Vitest stubs `env.AI` and refuses the real binding.
 Prefer `npm test` over `wrangler dev` unless you mean to spend Neurons.
 
-If `AUTOFILL_TOKEN` is missing, `GET /healthz` is `503` `{"status":"degraded"}`
-and every other route is `503` `backend_unavailable`. The Worker does not run
-open.
+If `AUTOFILL_TOKEN` is missing or empty, `GET /healthz` is `503`
+`{"status":"degraded"}` and `/v1/info` and `/v1/suggest` are `503`
+`backend_unavailable`. The Worker does not run open.
 
 ## Deploy
 
+The first deploy is by hand, from `worker/`, after `npm ci`:
+
 ```bash
 npx wrangler deploy
+openssl rand -hex 32 | npx wrangler secret put AUTOFILL_TOKEN
 ```
 
-That is an upload, not a dry run. CI runs `npx wrangler deploy --dry-run`
-only, with no API token. Do not add a deploy step to CI.
+`wrangler deploy` creates the custom hostname. The certificate can take a
+few minutes. `GET /healthz` stays failing until the certificate is ready and
+the secret is set. Do this once. Later deploys keep the secret. Nothing in
+CI runs `wrangler secret put`.
 
-The command prints the `workers.dev` URL. In Apotheke, set the autofill base
-URL to that origin and the bearer token to the secret you just stored.
+After that, [`.github/workflows/deploy-worker.yml`](../.github/workflows/deploy-worker.yml)
+deploys on a push to `main` that changes `worker/**` or the workflow file,
+and from Actions with `workflow_dispatch` on `main`. The job uses the GitHub
+environment `production` (limit that environment to `main`). It runs `npm ci`,
+the stubbed Vitest suite (no Neurons), then `npx wrangler deploy` with the
+pinned Wrangler from `worker/package.json`. Secrets are step environment
+variables on the deploy step only.
+
+The smoke check then calls `https://apotheke-autofill-service.webapp.gr/healthz`
+(200) and `POST /v1/suggest` with no token (401). It retries while the
+certificate is issued. It does not send a photo.
+
+The CI workflow stays a dry run (`npx wrangler deploy --dry-run`, no token).
+It does not deploy.
+
+A fork sets its own `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in its
+own `production` environment, and sets `routes` in `wrangler.toml` to
+`<your-domain>`. This repository's example is
+`apotheke-autofill-service.webapp.gr`.
+
+## Point Apotheke at it
+
+1. Base URL: `https://apotheke-autofill-service.webapp.gr` (no path). A fork
+   uses `https://<your-domain>`.
+2. Token: the `AUTOFILL_TOKEN` secret.
+3. Apotheke reads `max_image_bytes` from `GET /v1/info` and skips larger
+   photos. On this Worker that value is 3145728.
+
+`POST /v1/suggest` is multipart, the same fields as the Python service
+(`image`, optional `context`). Type is decided from magic bytes.
 
 ## Rotate the token
 
@@ -163,8 +203,8 @@ reservation on one Durable Object.
 | Workers AI, 10,000 Neurons/day for the account | Cap at 6,000. Fail closed if the Durable Object errors |
 | Workers KV free, 1,000 writes/day, eventually consistent | Not used |
 | Rate limiting binding | 10 requests / 60 s per `CF-Connecting-IP`, after auth, on `POST /v1/suggest` only. `429` with `Retry-After: 60`. Per location and loosely enforced. The Durable Object is the real cap |
-| Durable Objects on Free | One SQLite class, one instance |
-| Logpush, custom domains, preview URLs | Off |
+| Durable Objects on Free | One SQLite class, one instance. The counter rolls forward at UTC midnight and stays put when the clock steps backwards |
+| Custom domain | `apotheke-autofill-service.webapp.gr`. A fork sets `<your-domain>`. Preview URLs and Logpush stay off |
 
 ## CPU and base64
 
@@ -198,26 +238,18 @@ The photo, and any brand, model number, or serial the model reads, are sent
 to Cloudflare Workers AI (`@cf/google/gemma-4-26b-a4b-it`). They are not
 written to the Worker logs. The Durable Object stores only counters.
 
-## Point Apotheke at it
-
-1. Base URL: the `workers.dev` origin from `wrangler deploy` (no path).
-2. Token: the `AUTOFILL_TOKEN` secret.
-3. Apotheke reads `max_image_bytes` from `GET /v1/info` and skips larger
-   photos. On this Worker that value is 3145728.
-
-`POST /v1/suggest` is multipart, the same fields as the Python service
-(`image`, optional `context`). Type is decided from magic bytes.
-
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
-| `GET /healthz` is `503` `{"status":"degraded"}` | `AUTOFILL_TOKEN` is not set. `npx wrangler secret put AUTOFILL_TOKEN` |
+| `GET /healthz` is `503` `{"status":"degraded"}` | `AUTOFILL_TOKEN` is missing or empty. `npx wrangler secret put AUTOFILL_TOKEN` |
 | `401` | Wrong or missing `Authorization: Bearer` token |
 | `413` | Body larger than `MAX_UPLOAD_BYTES`, including a chunked body with no `Content-Length`. Also Workers AI code 3006 |
 | `415` | Bytes are not JPEG, PNG, or WebP |
 | `429` `Retry-After: 60` | Per-location rate limit. Wait. The daily cap is separate |
 | `503` `daily capacity is exhausted` plus `Retry-After` | Neuron budget, request cap, Workers AI 3036, or Workers AI 3040. Resets at 00:00 UTC. `GET /v1/info` shows `remaining` |
+| `503` `the model is unavailable` | Workers AI returned some other HTTP 4xx. The client does not see the upstream body |
+| `503` `model output was not a JSON object` | The reply was still prose after the one repair. It is not used as a name |
 | `503` and the model was not called | Durable Object error. The Worker fails closed and does not serve uncapped |
 | Suggest works in tests but deploy spends Neurons | Tests stub `env.AI`. Production calls Workers AI |
 

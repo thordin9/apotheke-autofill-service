@@ -71,6 +71,19 @@ describe("budget", () => {
     expect((body.budget as { requests: { used: number } }).requests.used).toBe(1);
   });
 
+  it("keeps the counter when the clock goes backwards", async () => {
+    const ahead = Date.parse("2026-10-21T12:00:00.000Z");
+    const behind = Date.parse("2026-10-19T12:00:00.000Z");
+    const { ai } = scriptedAi([reply(VALID, { neurons: 30 }), reply(VALID, { neurons: 30 })]);
+    const env = { AI: ai, AUTOFILL_DAILY_NEURON_BUDGET: "30" };
+    expect((await call(suggestRequest(jpeg(), { now: ahead }), env)).status).toBe(200);
+    const blocked = await call(suggestRequest(jpeg(), { now: behind }), env);
+    expect(blocked.status).toBe(503);
+    const info = await bodyOf(await call(infoRequest(behind)));
+    expect((info.budget as { neurons: { used: number; remaining: number } }).neurons.used).toBe(30);
+    expect((info.budget as { neurons: { remaining: number } }).neurons.remaining).toBe(5970);
+  });
+
   it("returns 503 and Retry-After once the cap is reached, then resets at UTC midnight", async () => {
     const { ai } = scriptedAi([reply(VALID, { neurons: 30 }), reply(VALID, { neurons: 30 }), reply(VALID, { neurons: 30 })]);
     const env = { AI: ai, AUTOFILL_DAILY_NEURON_BUDGET: "30" };

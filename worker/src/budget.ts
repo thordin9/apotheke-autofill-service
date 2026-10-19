@@ -135,7 +135,9 @@ export class Budget extends DurableObject<Env> {
       return { day, used: 0, reserved: 0, requests: 0, requests_reserved: 0, exhausted: 0 };
     }
     const row = existing[0];
-    if (row.day !== day) {
+    // Roll forward only. A clock step backwards (stale RTC before NTP) keeps
+    // the stored counter so the day does not start over at zero.
+    if (row.day < day) {
       this.ctx.storage.sql.exec(
         "UPDATE budget SET day = ?, used = 0, reserved = 0, requests = 0, requests_reserved = 0, exhausted = 0 WHERE id = 1",
         day,

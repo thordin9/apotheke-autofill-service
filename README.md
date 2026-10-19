@@ -5,8 +5,10 @@ description) from a photo, for [Apotheke](https://github.com/thordin9/apotheke).
 
 Contract: [docs/api-v1.md](docs/api-v1.md) · [openapi.yaml](openapi.yaml)
 
-**Recommended deployment:** the Cloudflare Worker in [`worker/`](worker).
-Install, secret, and `wrangler deploy` are in
+**Recommended deployment:** the Cloudflare Worker in [`worker/`](worker),
+served at `https://apotheke-autofill-service.webapp.gr`. A fork sets its own
+`<your-domain>` and its own production secrets. Install, the one-time secret,
+and the main-only deploy Action are in
 [docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
 Apotheke only changes the base URL and the bearer token. The Worker reports
 `backend: "cloudflare-workers"` and `max_image_bytes: 3145728` (3 MiB).
@@ -184,7 +186,7 @@ failure does not block merging. Build on the Xavier for a result you can run.
 
 All variables are plain env vars and work with `uvicorn` directly; Docker is not required.
 
-Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history, with the default rules enabled. The download is checksum-pinned. `.gitleaks.toml` allowlists only two historical placeholders: `generate-a-random-token` and `Bearer ci-token`.
+Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history, with the default rules enabled. The download is checksum-pinned. `.gitleaks.toml` allowlists the two historical placeholders only in the commits that added them, and only when whitespace follows the closing angle bracket.
 
 | Variable | Default | Meaning |
 |---|---|---|

@@ -1,4 +1,4 @@
-import { aiInput, AI_MODEL, isAiStub, promptsFor, readTurn, workersAiCode } from "./ai";
+import { aiInput, AI_MODEL, isAiStub, promptsFor, readTurn, workersAiCode, workersAiHttpStatus } from "./ai";
 import { bearerToken, tokensMatch } from "./auth";
 import { bytesToBase64 } from "./base64";
 import { Budget } from "./budget";
@@ -18,7 +18,7 @@ import { clamp, extractJson, NOT_JSON, NO_FIELDS, publicSuggestion, SuggestionEr
 
 export { Budget };
 
-/** Keep equal to the `period` of RATE_LIMITER in wrangler.jsonc. */
+/** Keep equal to the `period` of RATE_LIMITER in wrangler.toml. */
 const RATE_LIMIT_PERIOD_S = 60;
 
 const CAPABILITIES = ["name", "category", "tags", "description"];
@@ -157,6 +157,9 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
       timing.aiCalls += 1;
       const embedded = workersAiCode(raw);
       if (embedded) throw Object.assign(new Error("workers ai"), { code: embedded });
+      if (raw instanceof Error) throw raw;
+      const returnedStatus = workersAiHttpStatus(raw);
+      if (returnedStatus !== null) throw Object.assign(new Error("workers ai"), { status: returnedStatus });
       const turn = readTurn(raw);
       const charge = neuronsFromUsage(turn.usage);
       reserved = false;
@@ -187,6 +190,10 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
       }
       if (code === 3040) throw capacityError(now);
       if (code === 3006) throw new HttpError(413, "payload_too_large", `image exceeds ${maxBytes} bytes`);
+      const httpStatus = workersAiHttpStatus(err);
+      if (httpStatus !== null) {
+        throw new HttpError(503, "backend_unavailable", "the model is unavailable");
+      }
       if (err instanceof HttpError) throw err;
       throw new HttpError(
         503,

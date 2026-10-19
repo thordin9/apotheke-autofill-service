@@ -25,9 +25,18 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 - Per-IP rate limit (10 / 60 s, after auth, suggest only) returns `429`.
   It is per location and loosely enforced. The Durable Object is the real cap.
 - Deploy guide: [docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
-  `wrangler deploy` with an account-scoped token (Workers Scripts Edit, plus
-  Workers AI Read). CI typechecks, runs Vitest with `env.AI` stubbed, and
+  `wrangler deploy` with an account-scoped token (Workers Scripts Edit,
+  Workers AI Read, Zone Workers Routes Edit, and DNS Edit). CI typechecks,
+  runs Vitest with `env.AI` stubbed, and
   `wrangler deploy --dry-run`. It does not deploy.
+- Custom domain `apotheke-autofill-service.webapp.gr` (`workers_dev` and
+  preview URLs off). A fork sets `<your-domain>`.
+  [`.github/workflows/deploy-worker.yml`](.github/workflows/deploy-worker.yml)
+  deploys on a push to `main` that touches `worker/**` or the workflow, and
+  on `workflow_dispatch`, using the `production` environment. The first
+  deploy is still by hand, including one `wrangler secret put AUTOFILL_TOKEN`.
+  CI never runs `secret put`. The post-deploy smoke checks `/healthz` and an
+  unauthenticated `/v1/suggest` and spends no Neurons.
 
 ### Fixed
 
@@ -39,6 +48,15 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   Ollama. The example and the Jetson deploy doc now use
   `/var/lib/autofill/cf-api-token` and `/var/lib/autofill/cf-account-id`.
   Put the files in `/opt/autofill/data/` with mode 600.
+- **Worker budget clock.** The Durable Object rolls the counter forward only.
+  A clock step backwards keeps the stored day. The Python state file still
+  resets; that is known issue M5 in
+  [docs/deploy-jetson.md](docs/deploy-jetson.md#known-issues), with H2, M6,
+  L6, and L7.
+- **Gitleaks allowlist.** Placeholder matches are ignored only in the two
+  commits that added them, and only when whitespace follows the closing
+  angle bracket. A value glued on, or a second bearer on the same curl line
+  in a later commit, stays a finding.
 
 ## [1.4.0] - 2026-10-19
 

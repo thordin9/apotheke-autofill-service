@@ -25,6 +25,7 @@ board (written `$REPO` below). All commands run as root unless noted otherwise.
 11. [Self-hosted GitHub Actions runner](#self-hosted-github-actions-runner)
 12. [Reboot behaviour](#reboot-behaviour)
 13. [Model and image size choice: ALLOWED_MODELS and IMAGE_SIZES](#model-and-image-size-choice-allowed_models-and-image_sizes)
+14. [Known issues](#known-issues)
 
 ## Platform
 
@@ -649,3 +650,38 @@ curl -s -H @/opt/autofill/auth.hdr localhost:8080/v1/info | python3 -m json.tool
 
 Only one model fits in memory, so if another model is ever listed, a request for a model other than the loaded one
 is a cold start of at least 15 s and follows the same fast-503 or wait rules.
+
+## Known issues
+
+These are open on the legacy Python path. The Worker does not share them.
+Credential files are the container paths in [service.env](#serviceenv)
+(`/var/lib/autofill/cf-api-token` and `/var/lib/autofill/cf-account-id`, host
+files in `/opt/autofill/data/`, mode 600).
+
+**H2. Cold Ollama leaves about 10 s for Cloudflare.** With the shipped
+defaults and Ollama cold, the Cloudflare slice is 45 − 35 = 10 s. A
+Cloudflare hang then returns 503 `not enough time left to fall back to the
+local model` with `Retry-After`, after about 10 s. It fails safe, inside the
+client timeout. The documented cold-then-Ollama path does not run. A warm
+Ollama is unaffected: the slice stays capped at 20 s.
+
+**M5. A clock step backwards resets the Python neuron budget.** The state
+file stores the UTC day, and any other day, including an earlier day from a
+stale clock, starts again at 0. The Worker Durable Object rolls forward only
+and keeps the stored counter when the clock goes backwards.
+
+**M6. `BACKEND=ollama` with no `FALLBACK_BACKEND` does not start outside
+`run-service.sh`.** The default fallback is `ollama`, and that pair is
+refused at startup. `run-service.sh` sets the fallback. `docker run` or
+Compose with a v1.3 env file that only sets `BACKEND=ollama` crashes. For an
+Ollama-only process, set `FALLBACK_BACKEND=none`. An explicit
+`FALLBACK_BACKEND=ollama` together with `BACKEND=ollama` stays an error.
+
+**L6. Cloudflare HTTP 413 and 422 stay 503.** They do not fall back to
+Ollama. The same is true of HTTP 400. The client gets 503 `backend_error`.
+
+**L7. Short non-JSON prose can be accepted as a name.** If Cloudflare still
+returns non-JSON text after the repair, the Python text fallback can take a
+short non-empty string as `name`. The Worker rejects that prose with 503
+`backend_error` (`model output was not a JSON object`) and does not use it
+as the name.

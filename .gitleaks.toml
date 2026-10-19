@@ -7,15 +7,31 @@ title = "apotheke-autofill-service"
 [extend]
 useDefault = true
 
-# Two historical placeholders, matched against the rule match (not a path).
-# generic-api-key starts at generate-a-random-token: the opening "<" is
-# outside the match. The allowlist requires whitespace after ">" so a value
-# glued on, such as generate-a-random-token><secret>, is still a finding.
-# The historical example is "<generate-a-random-token>" at end of line, so
-# the match continues with a newline, which is whitespace.
-# curl-auth-header ends at Bearer ci-token' ; the extracted value is ci-token.
-[allowlist]
+# Placeholders from the two commits that added them. condition AND means a
+# match is ignored only when it is in one of those commits AND it matches a
+# regex below. A later commit that reuses the placeholder next to a real
+# value is still a finding. The first regex requires whitespace after the
+# closing angle bracket, so a value glued on is still a finding even in
+# those commits.
+[[allowlists]]
 description = "Historical placeholders only. Not real credentials."
+condition = "AND"
+commits = [
+  "9d23ccbc482bbe0915aaea263abf33ca33980aec",
+  "2f5ce05dfb52eb29a14226af42a700041517207a",
+]
+regexTarget = "match"
+regexes = [
+  '''^generate-a-random-token>\s''',
+  '''Bearer ci-token'$''',
+]
+
+# The v1.4 QA note quotes the historical curl placeholder. The file is not
+# edited here. A value that does not match the regexes above is still a finding.
+[[allowlists]]
+description = "QA note quotes the historical curl placeholder."
+condition = "AND"
+paths = ['''docs/qa/v1\.4-stub-qa\.md''']
 regexTarget = "match"
 regexes = [
   '''^generate-a-random-token>\s''',

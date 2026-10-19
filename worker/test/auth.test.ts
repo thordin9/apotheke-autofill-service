@@ -58,14 +58,22 @@ describe("auth and health", () => {
     expect(right.status).toBe(200);
   });
 
-  it("fails closed on authed routes when the secret is missing", async () => {
-    const info = await call(new Request("https://autofill.example/v1/info"), { AUTOFILL_TOKEN: "" });
-    expect(info.status).toBe(503);
-    expect(await bodyOf(info)).toEqual({
-      error: { code: "backend_unavailable", message: "service is not configured" },
-    });
-    const suggest = await call(suggestRequest(), { AUTOFILL_TOKEN: "" });
-    expect(suggest.status).toBe(503);
+  it("fails closed on /v1 when the secret is missing or empty", async () => {
+    for (const token of [undefined, ""]) {
+      const info = await call(new Request("https://autofill.example/v1/info"), { AUTOFILL_TOKEN: token });
+      expect(info.status).toBe(503);
+      expect(await bodyOf(info)).toEqual({
+        error: { code: "backend_unavailable", message: "service is not configured" },
+      });
+      const suggest = await call(suggestRequest(), { AUTOFILL_TOKEN: token });
+      expect(suggest.status).toBe(503);
+      expect(await bodyOf(suggest)).toEqual({
+        error: { code: "backend_unavailable", message: "service is not configured" },
+      });
+      const health = await call(new Request("https://autofill.example/healthz"), { AUTOFILL_TOKEN: token });
+      expect(health.status).toBe(503);
+      expect(await health.json()).toEqual({ status: "degraded" });
+    }
   });
 
   it("compares unequal lengths without throwing", async () => {

@@ -92,6 +92,28 @@ export function workersAiCode(err: unknown): number | null {
   return null;
 }
 
+/** HTTP status on a Workers AI error, when the binding attached one. */
+export function workersAiHttpStatus(err: unknown): number | null {
+  const seen = new Set<unknown>();
+  const stack = [err];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    for (const key of ["status", "statusCode", "httpStatus"]) {
+      const value = record[key];
+      const code =
+        typeof value === "number" ? value : typeof value === "string" && /^\d{3}$/.test(value) ? Number(value) : null;
+      if (code !== null && code >= 400 && code <= 499) return code;
+    }
+    if (Array.isArray(record.errors)) stack.push(...record.errors);
+    if (record.error && typeof record.error === "object") stack.push(record.error);
+    if (record.cause && typeof record.cause === "object") stack.push(record.cause);
+  }
+  return null;
+}
+
 export function isAiStub(ai: unknown): boolean {
   try {
     if (!ai || typeof ai !== "object") return false;

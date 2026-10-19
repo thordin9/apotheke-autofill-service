@@ -134,6 +134,35 @@ describe("suggest", () => {
     expect(after.status).toBe(200);
   });
 
+  it("maps other Workers AI 4xx to 503 without upstream text", async () => {
+    for (const status of [400, 401, 422, 429]) {
+      await resetBudget();
+      const secret = `${UPSTREAM} status ${status}`;
+      const { ai } = scriptedAi([Object.assign(new Error(secret), { status, message: secret })]);
+      const response = await call(suggestRequest(), { AI: ai });
+      expect(response.status).toBe(503);
+      const body = await bodyOf(response);
+      expect(body).toEqual({
+        error: { code: "backend_unavailable", message: "the model is unavailable" },
+      });
+      expect(JSON.stringify(body)).not.toContain(UPSTREAM);
+    }
+  });
+
+  it("rejects prose that is still not JSON after the repair", async () => {
+    const prose = "Sorry, this looks like a red kettle on a wooden shelf.";
+    const { ai, calls } = scriptedAi([reply(prose, null), reply(prose, null)]);
+    const response = await call(suggestRequest(), { AI: ai });
+    expect(response.status).toBe(503);
+    const body = await bodyOf(response);
+    expect(body).toEqual({
+      error: { code: "backend_error", message: "model output was not a JSON object" },
+    });
+    expect(JSON.stringify(body)).not.toContain("kettle");
+    expect(body).not.toHaveProperty("name");
+    expect(calls).toHaveLength(2);
+  });
+
   it("strips controls and bidi from categories and rejects a lone surrogate", async () => {
     const { ai, calls } = scriptedAi([reply(VALID)]);
     const context = JSON.stringify({ categories: ["Tools\u0000\n", "\u202eKitchen"] });
