@@ -72,7 +72,8 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   `check` needs root or the journal group. Harness covers both orderings, cuInit fail-then-OK / missing python3 /
   missing libcuda / hang, the dispatcher check-then-restart, Requisite, InvocationID scoping, board journal lines,
   and an aggregate no-`/api/generate`|`/api/pull` assertion across every gpu-check case. Docs add install steps, a
-  post-reboot checklist, a QA race-reproduction override (`CUDA_WAIT_S=0`), and `docs/qa/pr17-boot-race-qa.md`.
+  post-reboot checklist, a one-boot forced-race procedure for QA (R1b: `CUDA_VISIBLE_DEVICES=-1` and `CUDA_WAIT_S=0`
+  for the first start only), and `docs/qa/pr17-boot-race-qa.md`.
 
 - **`deploy/jetson/run-service.sh`: refuse a switch when port 8080 is taken; wall-clock `WAIT_S`.** After the old
   container is stopped, the script refuses (and restores it) if `HEALTH_URL` still answers, because something else

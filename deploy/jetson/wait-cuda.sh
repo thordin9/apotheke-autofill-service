@@ -15,9 +15,11 @@
 #
 # Env: CUDA_WAIT_S — max seconds to wait for both gates together (default 60, at most 150 so ExecStartPre stays
 #   inside the drop-in's TimeoutStartSec=180). A whole number of seconds, no leading zero, at most 6 digits;
-#   0 = skip the wait entirely (including the cuInit probe): log and exit 0 at once, so a reboot can reproduce the
-#   old race (QA: drop After=nv.service nvpmodel.service and set CUDA_WAIT_S=0). Anything else is ignored and 60 is
-#   used; values above 150 are clamped; each with a warning (ExecStartPre must not fail the unit on a bad env).
+#   0 = skip the wait entirely (including the cuInit probe): log and exit 0 at once, so a reboot can force the
+#   old race (QA boot R1b in docs/deploy-jetson.md: CUDA_WAIT_S=0 and CUDA_VISIBLE_DEVICES=-1 for the first start
+#   only). Anything else is ignored and 60 is used; values above 150 are clamped; each with a warning (ExecStartPre
+#   must not fail the unit on a bad env). The total wait can exceed CUDA_WAIT_S by at most 3 s: the last probe gets
+#   only the time left (at least 1 s), plus timeout's 2 s kill grace.
 #   CUDA_PROBE_PYTHON — interpreter for the cuInit probe (default python3).
 #   CUDA_PROBE_USER — user the probe runs as when this script runs as root (default ollama).
 #   CUDA_TEST_ROOT — if set, device/sysfs paths are prefixed with this directory (harness only).

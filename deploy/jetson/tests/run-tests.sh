@@ -436,8 +436,28 @@ grep -qx 'Requisite=ollama.service' "$GCU" && grep -qx 'After=ollama.service' "$
   && grep -qx 'TimeoutStartSec=600' "$GCU" && ok=1 || ok=0
 result "gpu-check unit: Requisite+After ollama, no Wants=, TimeoutStartSec=600" "$ok" ""
 gw=$(sed -n 's/^DEFAULT_WAIT=//p' "$JET/ollama-gpu-check.sh"); gd=$(sed -n 's/^DEFAULT_DELAY=//p' "$JET/ollama-gpu-check.sh")
-[ $((2 * gw + gd + 180)) -lt 600 ] && ok=1 || ok=0
-result "gpu-check unit: 2 x wait + delay + one restart < TimeoutStartSec" "$ok" "wait=$gw delay=$gd"
+# One restart = Ollama's stop (systemd's default stop timeout, 90 s) + its start (TimeoutStartSec=180): 520 s.
+[ $((2 * gw + gd + 90 + 180)) -lt 600 ] && grep -q '= 520 s worst' "$GCU" && ok=1 || ok=0
+result "gpu-check unit: 2 x wait + delay + one restart (stop + start) < TimeoutStartSec, comment says 520 s" "$ok" "wait=$gw delay=$gd"
+# The documented overrun of the last probe (time left, at least 1 s, + 2 s kill grace) stays inside the drop-in.
+[ $((mw + 1 + 2)) -lt 180 ] && grep -q 'at most' "$DROPIN" && grep -q '3 s' "$DROPIN" && grep -q 'kill' "$DROPIN" \
+  && grep -q 'timeout -k 2 ' "$WC" && ok=1 || ok=0
+result "drop-in: comment's 3 s overrun matches wait-cuda (min 1 s + 2 s kill grace)" "$ok" "max=$mw"
+# Forced-race boot (R1b) in docs/deploy-jetson.md: no empty After= (systemd ignores it in a drop-in); the
+# tmpfiles entries and the drop-in carry exactly the one-boot env, and the drop-in deletes it after the first start.
+DOC=$JET/../../docs/deploy-jetson.md
+doc_heredoc() { sed -n "\|^cat > $1 <<'EOF'\$|,/^EOF\$/p" "$DOC" | sed '1d;$d'; }
+R1B_TMP=$(doc_heredoc /etc/tmpfiles.d/zz-force-race.conf)
+R1B_DROP=$(doc_heredoc /etc/systemd/system/ollama.service.d/zz-force-race.conf)
+! grep -qx 'After=' "$DOC" \
+  && printf '%s\n' "$R1B_TMP" | grep -qx 'f /run/ollama-force-race-cpu.env 0644 root root - CUDA_VISIBLE_DEVICES=-1' \
+  && printf '%s\n' "$R1B_TMP" | grep -qx 'f /run/ollama-force-race-nowait.env 0644 root root - CUDA_WAIT_S=0' \
+  && printf '%s\n' "$R1B_DROP" | grep -qx 'EnvironmentFile=-/run/ollama-force-race-cpu.env' \
+  && printf '%s\n' "$R1B_DROP" | grep -qx 'EnvironmentFile=-/run/ollama-force-race-nowait.env' \
+  && printf '%s\n' "$R1B_DROP" | grep -qx 'ExecStartPost=+/bin/rm -f /run/ollama-force-race-cpu.env /run/ollama-force-race-nowait.env' \
+  && grep -q 'rm /etc/tmpfiles.d/zz-force-race.conf /etc/systemd/system/ollama.service.d/zz-force-race.conf' "$DOC" \
+  && ok=1 || ok=0
+result "docs: forced-race boot R1b (tmpfiles env, self-cleaning drop-in, removal), no empty After=" "$ok" ""
 # systemd's own parser, where available (CI's ubuntu-latest has it). Paths rewritten to existing stubs.
 if command -v systemd-analyze >/dev/null 2>&1; then
   newds; mkdir -p "$DS/u/ollama.service.d"
@@ -448,6 +468,12 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   (cd "$DS/u" && SYSTEMD_UNIT_PATH="$DS/u:" systemd-analyze verify --man=no ollama-gpu-check.service ollama.service) > "$DS/out" 2>&1; rc=$?
   ! grep -qiE 'unknown (key|section)|invalid|failed to parse|bad' "$DS/out" && ok=1 || ok=0
   result "systemd-analyze verify: gpu-check unit and drop-in parse cleanly" "$ok" "exit=$rc"
+  # The documented R1b drop-in parses too, together with the wait-cuda drop-in.
+  printf '%s\n' "$R1B_DROP" > "$DS/u/ollama.service.d/zz-force-race.conf"
+  (cd "$DS/u" && SYSTEMD_UNIT_PATH="$DS/u:" systemd-analyze verify --man=no ollama.service) > "$DS/out" 2>&1; rc=$?
+  [ -s "$DS/u/ollama.service.d/zz-force-race.conf" ] && ! grep -qiE 'unknown (key|section)|invalid|failed to parse|bad' "$DS/out" && ok=1 || ok=0
+  result "systemd-analyze verify: docs' R1b zz-force-race.conf drop-in parses cleanly" "$ok" "exit=$rc"
+  rm "$DS/u/ollama.service.d/zz-force-race.conf"
   # Negative control: the same check catches a misspelt key (so a clean run means something).
   echo 'Requisitee=ollama.service' >> "$DS/u/ollama-gpu-check.service"
   (cd "$DS/u" && SYSTEMD_UNIT_PATH="$DS/u:" systemd-analyze verify --man=no ollama-gpu-check.service) > "$DS/out" 2>&1

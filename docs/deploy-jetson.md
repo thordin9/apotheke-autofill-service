@@ -114,33 +114,59 @@ install -D -m 755 $REPO/deploy/jetson/ollama-gpu-check.sh /usr/local/sbin/ollama
 install -D -m 644 $REPO/deploy/jetson/ollama-gpu-check.service /etc/systemd/system/ollama-gpu-check.service
 systemctl daemon-reload
 systemctl enable ollama-gpu-check.service
-systemctl restart ollama          # picks up ExecStartPre (gpu-check itself only runs at boot)
-systemctl start ollama-gpu-check  # optional: run the check now; restarts at most once per boot
+systemctl restart ollama          # picks up ExecStartPre (re-runs gpu-check too if it already ran this boot)
+systemctl start ollama-gpu-check  # first install only: run the check now (no-op once it has run this boot)
 sudo /usr/local/sbin/ollama-gpu-check.sh check   # exit 0 = library=CUDA (needs journal access)
 ```
 
-**Reproduce the old race (QA).** To skip the wait on one boot — so the reboot checklist can still exercise the
-once-per-boot restart path — drop the NVIDIA ordering and set `CUDA_WAIT_S=0` in a temporary drop-in, then remove
-it again:
+**gpu-check after a manual restart.** gpu-check is ordered `After=ollama.service` and has
+`Requisite=ollama.service`, so systemd propagates a stop or restart of Ollama to it: once gpu-check has run this
+boot, every manual `systemctl restart ollama` re-runs `ollama-gpu-check` after Ollama's new start (and a
+`systemctl stop ollama` stops it). It still can't loop: while gpu-check does its own restart it is still activating,
+so that restart doesn't trigger it again, and the `/run` marker allows only one restart per boot. Because of
+`RemainAfterExit=yes`, `systemctl start ollama-gpu-check` does nothing once the unit has run this boot; use
+`systemctl restart ollama-gpu-check` to run it again by hand. If `ollama.service` is disabled at boot, gpu-check
+fails at once with a dependency error (the system shows as degraded) and does nothing.
+
+**Forced-race boot (QA, R1b).** The race happened once and may not recur, so to exercise the once-per-boot restart
+path on purpose, make Ollama's first start of one boot CPU-only and skip the wait. (An empty `After=` in a drop-in
+can't do this: systemd ignores it, so `After=nv.service nvpmodel.service` stays.) For one boot only, the first start
+runs with `CUDA_VISIBLE_DEVICES=-1` and `CUDA_WAIT_S=0`. On xavier12 (2026-10-19, 21:07 EEST) this gave
+`library=cpu`, and `ollama-gpu-check.sh check` exited 1 with `CPU-only`; without it Ollama logs `library=CUDA` again,
+so `OLLAMA_LLM_LIBRARY` isn't needed.
+
+`/run` is a tmpfs, so the variables have to be created at boot: a `tmpfiles.d` entry writes them to `/run` before
+Ollama starts, a persistent drop-in reads them with `EnvironmentFile=-` (read at each start, so no `daemon-reload` is
+needed in between), and `ExecStartPost` deletes them once the first start is running. gpu-check's restart (and any
+later start) then has neither variable and runs wait-cuda's cuInit gate as usual. As root:
 
 ```bash
-# Enable the override (as root):
-mkdir -p /etc/systemd/system/ollama.service.d
-cat > /etc/systemd/system/ollama.service.d/99-qa-skip-wait-cuda.conf <<'EOF'
-[Unit]
-# Clear the After= from ollama-wait-cuda.conf so Ollama is not ordered after nv*/nvpmodel.
-After=
-[Service]
-Environment=CUDA_WAIT_S=0
+cat > /etc/tmpfiles.d/zz-force-race.conf <<'EOF'
+f /run/ollama-force-race-cpu.env 0644 root root - CUDA_VISIBLE_DEVICES=-1
+f /run/ollama-force-race-nowait.env 0644 root root - CUDA_WAIT_S=0
 EOF
-systemctl daemon-reload
-# …reboot, run the checklist, then remove the override:
-rm /etc/systemd/system/ollama.service.d/99-qa-skip-wait-cuda.conf
-systemctl daemon-reload
+cat > /etc/systemd/system/ollama.service.d/zz-force-race.conf <<'EOF'
+[Service]
+EnvironmentFile=-/run/ollama-force-race-cpu.env
+EnvironmentFile=-/run/ollama-force-race-nowait.env
+ExecStartPost=+/bin/rm -f /run/ollama-force-race-cpu.env /run/ollama-force-race-nowait.env
+EOF
+systemctl daemon-reload && reboot
 ```
 
-`wait-cuda.sh` then logs `CUDA_WAIT_S=0; skipping the wait` and exits at once; `ollama-gpu-check` is still the
-safety net. Leave the override in place only for that one reboot test.
+Expect path (b) of the reboot checklist: on the first start `wait-cuda` logs `CUDA_WAIT_S=0; skipping the wait`
+and Ollama logs `library=cpu`; gpu-check waits 10 s, restarts Ollama
+once, and logs `after restart, library=CUDA`. After the checklist, remove both files, reload, and restart Ollama to
+exercise the manual-restart path (gpu-check re-runs and should log `GPU already in use (library=CUDA)`):
+
+```bash
+rm /etc/tmpfiles.d/zz-force-race.conf /etc/systemd/system/ollama.service.d/zz-force-race.conf
+systemctl daemon-reload && systemctl restart ollama
+journalctl -u ollama-gpu-check -n 5 -o cat
+```
+
+Leave the two files in place only for that one reboot test. The other forced boot (R1a, without the wait-cuda
+drop-in) is described in [`docs/qa/pr17-boot-race-qa.md`](qa/pr17-boot-race-qa.md).
 
 ## Build the image
 
