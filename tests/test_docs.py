@@ -13,6 +13,9 @@ NEW_ENV = [
     "ECHO_MODEL",
     "ECHO_LOAD_MS",
     "ECHO_INSTALLED_MODELS",
+    "ECHO_BRAND",
+    "ECHO_MODEL_NUMBER",
+    "ECHO_SERIAL_NUMBER",
 ]
 
 
@@ -24,7 +27,20 @@ def test_new_env_vars_documented(name):
     )
 
 
-@pytest.mark.parametrize("field", ["models", "image_sizes", "model_used", "context.model"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "models",
+        "image_sizes",
+        "model_used",
+        "context.model",
+        "brand",
+        "model_number",
+        "serial_number",
+        "state",
+        "size_vram",
+    ],
+)
 def test_contract_fields_documented(field):
     assert f"`{field}`" in (ROOT / "docs" / "api-v1.md").read_text()
     assert field.rsplit(".", 1)[-1] + ":" in (ROOT / "openapi.yaml").read_text()
@@ -40,3 +56,4 @@ def test_env_example_has_no_inline_comments():
 def test_changelog_mentions_feature():
     text = (ROOT / "CHANGELOG.md").read_text()
     assert "ALLOWED_MODELS" in text and "IMAGE_SIZES" in text and "v1.2" in text
+    assert "v1.3" in text and "size_vram" in text and "brand" in text

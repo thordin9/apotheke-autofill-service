@@ -29,17 +29,20 @@ Env (read when the backend is created):
   OLLAMA_TEMPERATURE     sampling temperature (default 0, deterministic)
   OLLAMA_KEEP_ALIVE      how long Ollama keeps the model loaded after a request
                          (default 30m; -1 keeps it loaded forever)
-  OLLAMA_JSON_FORMAT     schema (default, also 1) sends a JSON schema as `format`, so
-                         Ollama constrains the answer to it (category = enum of the
-                         request's categories); json sends format=json; 0 lets the
-                         model answer freely
+  OLLAMA_JSON_FORMAT     schema (default, also 1) sends the v3_lean JSON schema as
+                         `format`. The category enum is context.categories when the
+                         client sends them, otherwise the v3_lean list. Tags are at
+                         most 3 and the description at most 100 characters, plus
+                         brand / model_number / serial_number. json sends format=json;
+                         0 lets the model answer freely
   OLLAMA_PLAIN_RETRY     1 (default): if the JSON answer is unusable and less than 40%
                          of BACKEND_TIMEOUT_S was spent generating (model load time
                          does not count), ask once more with a short plain-text
                          prompt and derive name/description from the text
   OLLAMA_LOG_RAW         1 logs every raw model answer at DEBUG (default 0). Unusable
                          answers are always logged at WARNING. Logged text is cut to
-                         2 KB; the image and the request token are never logged.
+                         2 KB; the image, the request token, and brand / model_number /
+                         serial_number values are never logged.
 """
 
 from __future__ import annotations
@@ -58,6 +61,7 @@ from typing import Any
 
 import httpx
 
+from ..identity import identity_fields, redact_for_log
 from ..settings import get_settings
 from .base import CAPABILITIES, Backend, BackendUnavailable, Busy
 from .selection import allowlist, cold_wait_fits, model_key, resolve_model, same_model
@@ -92,6 +96,29 @@ MAX_TAG = 40
 MAX_DESCRIPTION = 500
 MAX_CONTEXT_ITEMS = 50
 RAW_LOG_LIMIT = 2048
+# Feature 9 v3_lean category list; used when the client sends none.
+V3_CATEGORIES = [
+    "General",
+    "Tools",
+    "Electronics",
+    "Kitchen",
+    "Documents",
+    "Hobby",
+    "Clothing",
+    "Shoes",
+    "Books",
+    "Lighting",
+]
+
+
+def _context_list(context: dict[str, Any], key: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in context.get(key, []) or []:
+        if isinstance(v, str) and v.strip() and v.strip() not in seen:
+            seen.add(v.strip())
+            out.append(v.strip())
+    return out[:MAX_CONTEXT_ITEMS]
 
 
 class BackendError(BackendUnavailable):
@@ -101,62 +128,68 @@ class BackendError(BackendUnavailable):
 
 
 def build_prompt(context: dict[str, Any]) -> str:
-    """Short prompt that names the fields in words. It deliberately shows no
-    JSON template: small models (Moondream) copy a template's placeholders or
-    example values back instead of looking at the photo. The reply's shape
-    comes from the JSON schema sent as Ollama's `format` (see build_schema)."""
-    cats = _context_list(context, "categories")
-    tags = _context_list(context, "tags")
-    locale = context.get("locale") or "en"
-    parts = [
-        "What is the main object in this photo? Answer in JSON with:",
-        "name (the kind of object in 1-4 plain words, never a brand or a person's name),",
-    ]
-    if cats:
-        parts.append("category (exactly one of: " + ", ".join(cats) + "),")
-    else:
-        parts.append("category (one general word),")
-    # Tags are described in neutral words only: Qwen copied listed examples
-    # ("material", "colour") back as tags.
-    tag_part = "tags (up to 5 short lowercase tags for the item"
-    if tags:
-        tag_part += "; prefer: " + ", ".join(tags)
-    parts += [
-        tag_part + "),",
-        "description (one short sentence about the object only, not people or background),",
-        "confidence (0 to 1, how sure you are).",
-        f"Write the values in the language of locale '{locale}'.",
-    ]
-    return "\n".join(parts)
+    """Feature 9 v3_lean prompt. It names the fields in words and shows no JSON
+    template: small models copy a template's placeholders back instead of
+    looking at the photo. The reply's shape comes from build_schema. The locale
+    and, when the client sent them, the category names are interpolated. With
+    no categories the text matches the winning v3_lean file. Tag hints stay out."""
+    locale = context.get("locale") if isinstance(context.get("locale"), str) else ""
+    locale = locale.strip() or "en"
+    return "\n".join(
+        [
+            "What is the main object in this photo? Answer in JSON with:",
+            "name (the kind of object in 1-4 plain words, never a brand or a person's name),",
+            "category (exactly one of: " + ", ".join(_categories(context)) + "),",
+            "tags (up to 3 short lowercase tags for the item),",
+            "description (under 12 words, about the object only),",
+            "confidence (0 to 1, how sure you are).",
+            "brand, model_number, serial_number (copy only text that is printed on the item "
+            'and clearly readable in this photo; use "" for any of them you cannot read; '
+            "never guess).",
+            f"Write the values in the language of locale '{locale}'.",
+        ]
+    )
 
 
-def _context_list(context: dict[str, Any], key: str) -> list[str]:
-    seen: set[str] = set()
-    out = []
-    for v in context.get(key, []) or []:
-        if isinstance(v, str) and v.strip() and v.strip() not in seen:
-            seen.add(v.strip())
-            out.append(v.strip())
-    return out[:MAX_CONTEXT_ITEMS]
+def _categories(context: dict[str, Any]) -> list[str]:
+    """The client's categories (as before v1.3), else the v3_lean list. With the
+    v3_lean list the prompt and schema are byte-identical to the bench files."""
+    return _context_list(context, "categories") or V3_CATEGORIES
 
 
 def build_schema(context: dict[str, Any]) -> dict[str, Any]:
-    """JSON schema for Ollama's `format`: Ollama only lets the model produce
-    text matching it, so there is nothing to echo and, when the client sends
-    categories, the category is always one of them."""
-    category: dict[str, Any] = {"type": "string"}
-    if cats := _context_list(context, "categories"):
-        category["enum"] = cats
+    """JSON schema for Ollama's `format`: the Feature 9 v3_lean schema.
+
+    The category enum is the client's categories when they sent any, otherwise
+    the v3_lean list (the schema then matches the bench file). Tags are capped
+    at 3 and the description at 100 characters here; HTTP clamping is wider.
+    The service still snaps a returned category onto `context.categories`.
+    """
     return {
         "type": "object",
         "properties": {
             "name": {"type": "string", "minLength": 2, "maxLength": 40},
-            "category": category,
-            "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
-            "description": {"type": "string", "minLength": 10, "maxLength": 200},
+            "category": {
+                "type": "string",
+                "enum": _categories(context),
+            },
+            "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+            "description": {"type": "string", "minLength": 10, "maxLength": 100},
             "confidence": {"type": "number"},
+            "brand": {"type": "string", "maxLength": 30},
+            "model_number": {"type": "string", "maxLength": 30},
+            "serial_number": {"type": "string", "maxLength": 30},
         },
-        "required": ["name", "category", "tags", "description", "confidence"],
+        "required": [
+            "name",
+            "category",
+            "tags",
+            "description",
+            "confidence",
+            "brand",
+            "model_number",
+            "serial_number",
+        ],
     }
 
 
@@ -225,6 +258,11 @@ def truncate_for_log(text: str, limit: int = RAW_LOG_LIMIT) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}...[{len(text) - limit} more chars]"
+
+
+def logged_output(text: str) -> str:
+    """Model text safe to log: identity values redacted, then cut to 2 KB."""
+    return truncate_for_log(redact_for_log(text))
 
 
 def _enable_debug_logging() -> None:
@@ -497,6 +535,7 @@ def clean_tags(tags: list[Any]) -> list[Any]:
 
 
 def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    idents = identity_fields(raw)
     raw = normalize(raw)
     # Moondream often answers flat with a single top-level confidence; it
     # stands in for fields that carry none of their own.
@@ -544,6 +583,7 @@ def clamp(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             out["tags"] = tags
     if not out:
         raise BackendError("model output had no usable fields")
+    out.update(idents)
     return out
 
 
@@ -757,6 +797,13 @@ class OllamaBackend(Backend):
         self._waiting = 0
         # Model of the request in flight (or the last one), for the queue check.
         self._current = self.model
+        # Last /api/ps snapshot: model_key -> size_vram bytes, or None when the
+        # field was absent. None (the attribute) means /api/ps has not answered.
+        self._vram: dict[str, int | None] | None = None
+        # Models with a successful suggest since they left /api/ps or a load started.
+        self._succeeded: set[str] = set()
+        # (model, monotonic start) when the in-flight request is itself loading.
+        self._inflight_load: tuple[str, float] | None = None
         self._stats_by_model: dict[str, ModelStats] = {}
         self._installed: set[str] | None = None
         self._installed_at = -math.inf
@@ -824,6 +871,7 @@ class OllamaBackend(Backend):
                 r = httpx.post(f"{self.url}/api/generate", json=payload, timeout=600)
                 if r.status_code < 400:
                     self._record_load(time.monotonic() - t0)
+                    self._mark_load_done(self.model)
                     self.ready, self.warmup_error = True, None
                     return
                 self.warmup_error = f"HTTP {r.status_code}"
@@ -875,8 +923,14 @@ class OllamaBackend(Backend):
             if not is_default and (installed is None or model_key(m) not in installed):
                 continue
             entry: dict[str, Any] = {"id": m, "default": is_default}
+            key = model_key(m)
             if loaded is not None:
-                entry["loaded"] = model_key(m) in loaded
+                entry["loaded"] = key in loaded
+                if (state := self._state_of(m)) is not None:
+                    entry["state"] = state
+                vram = None if self._vram is None else self._vram.get(key)
+                if isinstance(vram, int):
+                    entry["size_vram"] = vram
             if (avg := self.stats(m).avg_s) is not None:
                 entry["avg_latency_ms"] = round(avg * 1000)
             entries.append(entry)
@@ -903,9 +957,8 @@ class OllamaBackend(Backend):
             self._installed_at = time.monotonic()
         return self._installed
 
-    async def _loaded_models(self) -> set[str] | None:
-        """model_key()s Ollama has in memory (GET /api/ps), or None when that
-        is unknown (error, old Ollama)."""
+    async def _ps_models(self) -> list[dict[str, Any]] | None:
+        """Raw /api/ps model objects, or None when that is unknown."""
         try:
             async with httpx.AsyncClient(base_url=self.url, timeout=2.0) as client:
                 r = await client.get("/api/ps")
@@ -914,11 +967,84 @@ class OllamaBackend(Backend):
             return None
         if not isinstance(models, list):
             return None
-        return {
-            model_key(str(m.get("name") or m.get("model") or ""))
-            for m in models
-            if isinstance(m, dict)
-        }
+        return [m for m in models if isinstance(m, dict)]
+
+    @staticmethod
+    def _vram_bytes(raw: Any) -> int | None:
+        """size_vram in bytes, or None when Ollama did not report a number."""
+        if isinstance(raw, bool) or not isinstance(raw, int | float):
+            return None
+        if raw < 0 or raw != raw:  # NaN
+            return None
+        return int(raw)
+
+    def _observe_ps(self, models: list[dict[str, Any]] | None) -> None:
+        """Remember who is in /api/ps and their size_vram.
+
+        A model that leaves /api/ps loses its warm mark. Appearing again does
+        not: the suggest that just loaded it may already have succeeded.
+        """
+        if models is None:
+            return
+        vram: dict[str, int | None] = {}
+        for m in models:
+            name = str(m.get("name") or m.get("model") or "")
+            if not name.strip():
+                continue
+            vram[model_key(name)] = self._vram_bytes(m.get("size_vram"))
+        if self._vram is not None:
+            for key in set(self._vram) - set(vram):
+                self._succeeded.discard(key)
+        self._vram = vram
+
+    def _mark_load_done(self, model: str) -> None:
+        """A background load finished, so the model is warm before any suggest."""
+        self._succeeded.add(model_key(model))
+
+    def _state_of(self, model: str) -> str | None:
+        """cold | loading | warm, or None when /api/ps has never answered.
+
+        warm: a background load or a suggest for this model has finished
+        successfully since it last left /api/ps. Merely appearing in /api/ps
+        (the runner can still be starting) stays loading.
+        """
+        if self._vram is None:
+            return None
+        key = model_key(model)
+        if key not in self._vram:
+            return "cold"
+        if key in self._succeeded:
+            return "warm"
+        return "loading"
+
+    def _cpu_only_resident(self) -> bool:
+        """True when a warm model, or the loaded production model, has 0 VRAM."""
+        if not self._vram:
+            return False
+        for key, vram in self._vram.items():
+            if vram != 0:
+                continue
+            if key in self._succeeded or same_model(key, self.model):
+                return True
+        return False
+
+    async def _loaded_models(self) -> set[str] | None:
+        """model_key()s Ollama has in memory (GET /api/ps), or None when that
+        is unknown (error, old Ollama)."""
+        models = await self._ps_models()
+        if models is None:
+            return None
+        self._observe_ps(models)
+        return set(self._vram or ())
+
+    async def health_snapshot(self) -> dict[str, Any]:
+        """Read-only /api/ps view for /healthz. Does not reload a model."""
+        self._observe_ps(await self._ps_models())
+        models = None
+        if self.allowed_configured:
+            loaded = None if self._vram is None else set(self._vram)
+            models = await self._model_entries(loaded)
+        return {"degraded": self._cpu_only_resident(), "models": models}
 
     async def _model_loaded(self, model: str | None = None) -> bool:
         """Whether Ollama has the model in memory (GET /api/ps). Any error
@@ -955,6 +1081,7 @@ class OllamaBackend(Backend):
             self._activity += 1
             self._pending = None
             self._loading = (model, time.monotonic())
+            self._succeeded.discard(model_key(model))
             self._reload_thread = threading.Thread(
                 target=self._load_once, args=(model,), daemon=True
             )
@@ -971,6 +1098,7 @@ class OllamaBackend(Backend):
                 )
                 if r.status_code < 400:
                     self._record_load(time.monotonic() - t0, model)
+                    self._mark_load_done(model)
             except httpx.HTTPError as exc:
                 log.warning("ollama model reload failed (model=%s): %s", model, exc)
             finally:
@@ -983,6 +1111,7 @@ class OllamaBackend(Backend):
                         self._loading, self._reload_active = None, False
                     else:
                         self._loading = (next_model, time.monotonic())
+                        self._succeeded.discard(model_key(next_model))
 
     def _load_budget_s(self, model: str) -> float:
         """Load estimate (last measured load, at least 15 s) plus a margin of
@@ -1019,13 +1148,13 @@ class OllamaBackend(Backend):
                 "ollama %s returned HTTP %d: %r",
                 path,
                 r.status_code,
-                truncate_for_log(r.text),
+                logged_output(r.text),
             )
             raise BackendError(f"ollama returned HTTP {r.status_code}")
         try:
             data = r.json()
         except ValueError:
-            log.warning("ollama %s returned a non-JSON body: %r", path, truncate_for_log(r.text))
+            log.warning("ollama %s returned a non-JSON body: %r", path, logged_output(r.text))
             raise BackendError("ollama returned a non-JSON body") from None
         if not isinstance(data, dict):
             raise BackendError("ollama returned an unexpected body")
@@ -1065,7 +1194,7 @@ class OllamaBackend(Backend):
                 "ollama raw output (model=%s, %d chars): %r",
                 model,
                 len(content),
-                truncate_for_log(content),
+                logged_output(content),
             )
         load = data.get("load_duration")
         load_s = load / 1e9 if isinstance(load, (int, float)) and load > 0 else 0.0
@@ -1085,7 +1214,7 @@ class OllamaBackend(Backend):
                 exc,
                 model,
                 len(content),
-                truncate_for_log(content),
+                logged_output(content),
             )
             raise
         if how == "text" and attempt == "json":
@@ -1094,7 +1223,7 @@ class OllamaBackend(Backend):
                 "(model=%s, %d chars): %r",
                 model,
                 len(content),
-                truncate_for_log(content),
+                logged_output(content),
             )
         return out
 
@@ -1161,17 +1290,21 @@ class OllamaBackend(Backend):
             # recent generation times, it would time out while waiting its
             # turn. A request for another model than the one in flight also
             # pays that model's load (Ollama holds one model at a time).
+            # The running request's own remaining load, and any background
+            # reload, count too: otherwise a cold request already in flight
+            # lets the next one in and that one dies with 504 (F5).
             # Plain counters + polling keep this independent of the event loop.
             if self._waiting >= self.queue_size:
-                raise Busy("backend busy, queue full", self._busy_retry_after())
+                raise Busy("backend busy, queue full", self._busy_retry_after(model))
             ahead = (self._waiting + 1) * self._slow_generate_s(self._current)
             need = ahead + self._slow_generate_s(model)
             switch = not same_model(model, self._current)
             if switch:
                 need += self._load_estimate_s(model)
+            need += self._unfinished_load_s()
             if need > timeout * 0.9:
                 reason = "a model switch" if switch else "a queued request"
-                raise Busy(f"backend busy, {reason} would time out", self._busy_retry_after())
+                raise Busy(f"backend busy, {reason} would time out", self._busy_retry_after(model))
         self._waiting += 1
         try:
             while self._in_flight:
@@ -1181,15 +1314,62 @@ class OllamaBackend(Backend):
         self._in_flight += 1
         self._activity += 1
         self._current = model
+        if self._pays_load(model):
+            self._inflight_load = (model, time.monotonic())
+            self._succeeded.discard(model_key(model))
+        else:
+            self._inflight_load = None
         try:
             out = await self.generate(image_bytes, context, model)
+            self._succeeded.add(model_key(model))
         finally:
+            self._inflight_load = None
             self._in_flight -= 1
             self._activity += 1
         return {**out, "model_used": model}
 
-    def _busy_retry_after(self) -> int:
+    def _pays_load(self, model: str) -> bool:
+        """Whether this request will wait for a model load, not a warm answer."""
+        if self._loading is not None:
+            return True
+        key = model_key(model)
+        if self._vram is not None:
+            return key not in self._vram
+        # /api/ps unknown. A model we have never finished, while another has,
+        # is a switch. With no evidence, keep the old "assume loaded" rule.
+        return bool(self._succeeded) and key not in self._succeeded
+
+    def _remaining_load_s(self, model: str, started: float) -> float:
+        return max(0.0, self._load_estimate_s(model) - (time.monotonic() - started))
+
+    def _unfinished_load_s(self) -> float:
+        """Load still unpaid: the in-flight cold request, plus a background reload."""
+        extra = 0.0
+        seen: set[str] = set()
+        if self._loading is not None:
+            model, started = self._loading
+            extra += self._remaining_load_s(model, started)
+            seen.add(model_key(model))
+        if self._inflight_load is not None:
+            model, started = self._inflight_load
+            if model_key(model) not in seen:
+                extra += self._remaining_load_s(model, started)
+        return extra
+
+    def _busy_retry_after(self, model: str) -> int:
+        """Retry-After for queue-full and switch-busy 503s.
+
+        Average generation time of the model in flight, times the requests
+        ahead, plus the load the refused request pays when it is a switch (F6).
+        """
         avg = self.stats(self._current).avg_s
         if avg is None:
-            return self.retry_after
-        return max(self.retry_after, math.ceil(avg * (self._waiting + 1)))
+            base = float(self.retry_after)
+        else:
+            base = max(float(self.retry_after), avg * (self._waiting + 1))
+        if not same_model(model, self._current):
+            # Same load budget (estimate + max(2 s, 30%)) and cap as the
+            # cold-start Retry-After, so Apotheke's single retry stays valid.
+            base += self._load_budget_s(model)
+        cap = max(1, math.floor(get_settings().backend_timeout_s + CLIENT_TIMEOUT_EXTRA_S))
+        return min(cap, max(1, math.ceil(base)))

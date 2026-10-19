@@ -19,7 +19,7 @@ paths:
   /healthz:
     get:
       operationId: healthz
-      summary: Liveness probe (never requires auth, never calls the backend)
+      summary: Liveness probe (never requires auth; status only, no model inventory)
       security: []
       responses:
         "200":
@@ -29,10 +29,27 @@ paths:
               schema:
                 type: object
                 required: [status]
+                additionalProperties: false
                 properties:
                   status:
                     type: string
                     const: ok
+        "503":
+          description: |
+            Degraded. A model that is warm, or the loaded production model, is
+            in Ollama's memory with size_vram 0 (no GPU memory — Ollama started
+            before CUDA). The process is up; it is not healthy for inference.
+            The body is status only; model ids stay on /v1/info.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+                    const: degraded
   /v1/info:
     get:
       operationId: getInfo
@@ -148,7 +165,30 @@ components:
           description: true for the model used when `context.model` is absent or not allowed
         loaded:
           type: boolean
-          description: Whether the model is in memory now. Picking a model that is not loaded makes the next request a cold start (it waits for the load or gets 503 + Retry-After). Absent when unknown.
+          description: |
+            Whether the model is listed in Ollama /api/ps right now. That is
+            true while it is resident or still loading, so it is not "ready
+            for a fast answer". Use `state` for that. Absent when unknown.
+        state:
+          type: string
+          enum: [cold, loading, warm]
+          description: |
+            Added in v1.3. cold = not in /api/ps. loading = in /api/ps, and
+            neither a background load nor a suggest for this model has finished
+            successfully since it entered /api/ps. warm = a startup warm-up or
+            later background reload of this model finished successfully, or a
+            suggest for it finished successfully, since that residency. Clients
+            use `state` to know when the model is ready for fast inference.
+            Absent when /api/ps could not be read.
+        size_vram:
+          type: integer
+          minimum: 0
+          description: |
+            Added in v1.3. Bytes of GPU memory Ollama reports as `size_vram`
+            on /api/ps for this model. This field is the source of truth for
+            GPU residency: 0 means the runner has the model but no VRAM (Ollama
+            started before CUDA and is on CPU). Absent when the model is not
+            in /api/ps or Ollama did not send the field.
         avg_latency_ms:
           type: integer
           minimum: 0
@@ -191,6 +231,21 @@ components:
           type: string
           examples: [qwen2.5vl-jetson:3b]
           description: Added in v1.2, optional. The model that produced this answer.
+        brand:
+          type: string
+          maxLength: 128
+          description: |
+            Added in v1.3, optional string. Text printed on the item that is
+            clearly readable; "" when missing or unreadable. Trimmed and
+            hard-cut to 128 characters. Old clients ignore it.
+        model_number:
+          type: string
+          maxLength: 128
+          description: Same rules as `brand`. The Ollama schema asks for at most 30 characters; the service still caps at 128.
+        serial_number:
+          type: string
+          maxLength: 128
+          description: Same rules as `brand`. Values are never written to service logs.
     Error:
       type: object
       required: [error]
@@ -221,7 +276,7 @@ components:
     BackendUnavailable:
       description: Backend not implemented, not ready, busy (queue full), or failed
       headers:
-        Retry-After: {schema: {type: integer}, description: "Sent when not ready, busy, or loading a model (a cold start, e.g. a model switch with context.model). For a cold start it is that model's remaining load time in whole seconds, at least 1: Ollama uses max(15, the model's last measured load) plus a margin of max(2 s, 30%), minus the time its background load has already run (a model queued behind another load also waits for the rest of that load), capped at BACKEND_TIMEOUT_S + 5 (the recommended client timeout); echo uses the remaining simulated load time."}
+        Retry-After: {schema: {type: integer}, description: "Sent when not ready, busy, or loading a model (a cold start, e.g. a model switch with context.model). For a cold start it is that model's remaining load time in whole seconds, at least 1: Ollama uses max(15, the model's last measured load) plus a margin of max(2 s, 30%), minus the time its background load has already run (a model queued behind another load also waits for the rest of that load), capped at BACKEND_TIMEOUT_S + 5 (the recommended client timeout); echo uses the remaining simulated load time. Queue-full and switch-busy values are the in-flight model's average generation time times (waiting + 1), plus the refused request's load estimate when it switches models."}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     BackendTimeout:
       description: Backend exceeded BACKEND_TIMEOUT_S

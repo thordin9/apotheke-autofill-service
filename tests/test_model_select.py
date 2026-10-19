@@ -126,7 +126,18 @@ def test_info_unchanged_without_new_env(client):
 def test_suggest_without_model_unchanged_plus_model_used(client):
     body = assert_contract(post_image(client, context=ctx()), "/v1/suggest", "post")
     assert body["model_used"] == "echo"
-    assert set(body) == {"name", "category", "tags", "description", "model_used"}
+    # v1.3 adds three strings. Older clients ignore them; the scored fields stay.
+    assert set(body) == {
+        "name",
+        "category",
+        "tags",
+        "description",
+        "model_used",
+        "brand",
+        "model_number",
+        "serial_number",
+    }
+    assert body["brand"] == body["model_number"] == body["serial_number"] == ""
 
 
 def test_context_model_ignored_without_allowed_models(make_client):
@@ -155,7 +166,12 @@ def test_info_image_sizes(make_client):
 def test_sanitize_keeps_only_string_model_used():
     from app.main import sanitize
 
-    assert sanitize({"model_used": "m"}) == {"model_used": "m"}
+    assert sanitize({"model_used": "m"}) == {
+        "model_used": "m",
+        "brand": "",
+        "model_number": "",
+        "serial_number": "",
+    }
     assert sanitize({"model_used": 3}) == {}
     assert sanitize({"model_used": " "}) == {}
 
@@ -204,8 +220,8 @@ def test_echo_info_models(make_client):
     body = assert_contract(c.get("/v1/info"), "/v1/info")
     assert body["ready"] is True
     assert body["models"] == [
-        {"id": QWEN, "default": True, "loaded": True},
-        {"id": MOON, "default": False, "loaded": False},
+        {"id": QWEN, "default": True, "loaded": True, "state": "warm"},
+        {"id": MOON, "default": False, "loaded": False, "state": "cold"},
     ]
 
 
@@ -313,8 +329,8 @@ def test_ollama_info_lists_installed_allowed_models(oclient, fake):
     c = oclient(ALLOWED_MODELS=f"{MOON},{QWEN3}", IMAGE_SIZES="448,672*,1024")
     body = assert_contract(c.get("/v1/info"), "/v1/info")
     assert body["models"] == [
-        {"id": QWEN, "default": True, "loaded": True},
-        {"id": MOON, "default": False, "loaded": False},
+        {"id": QWEN, "default": True, "loaded": True, "state": "loading"},
+        {"id": MOON, "default": False, "loaded": False, "state": "cold"},
     ]  # qwen3-vl is not installed, llava is not allowed
     assert [s["long_edge"] for s in body["image_sizes"]] == [448, 672, 1024]
 
@@ -745,7 +761,7 @@ def test_echo_concurrent_switch_refused_when_it_would_time_out(make_client):
     r = post_image(c, context=ctx(model=MOON))
     body = assert_contract(r, "/v1/suggest", "post")
     assert r.status_code == 503 and "model switch would time out" in body["error"]["message"]
-    assert r.headers["Retry-After"] == "1"
+    assert r.headers["Retry-After"] == "3"  # 1 s ahead + 1.5 s switch load
     t.join(5)
     assert results[0].status_code == 200 and results[0].json()["model_used"] == "echo"
 
@@ -908,3 +924,212 @@ def test_ollama_queued_switch_retry_after_is_capped(oclient, fake):
     b._loading, b._pending = (QWEN, time.monotonic() - 5.0), MOON
     assert b._cold_retry_after(MOON) == 30  # 34 uncapped
     assert _wait(lambda: not b._reload_active)
+
+
+def _states(body):
+    return {m["id"]: m for m in body["models"]}
+
+
+def test_state_is_loading_while_resident_until_a_load_or_suggest_finishes(oclient, fake):
+    # F4: /api/ps lists the model while it is still loading. With warm-up off
+    # and no background load of our own, loaded may be true and state stays
+    # loading until a suggest for that model finishes.
+    fake.loaded = [QWEN]
+    fake.release.clear()
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45")
+    before = _states(c.get("/v1/info").json())
+    assert before[QWEN]["loaded"] is True and before[QWEN]["state"] == "loading"
+    assert before[MOON]["state"] == "cold" and before[MOON]["loaded"] is False
+    assert c.get("/healthz").json() == {"status": "ok"}
+    results: list = []
+    t = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: len(fake.chats()) == 1)
+    mid = _states(c.get("/v1/info").json())
+    assert mid[QWEN]["loaded"] is True and mid[QWEN]["state"] == "loading"
+    assert "models" not in c.get("/healthz").json()
+    fake.release.set()
+    t.join(5)
+    assert results[0].status_code == 200
+    warm = _states(c.get("/v1/info").json())
+    assert warm[QWEN]["state"] == "warm" and warm[QWEN]["loaded"] is True
+    fake.loaded = []
+    assert _states(c.get("/v1/info").json())[QWEN]["state"] == "cold"
+    # That read starts a background reload. Once it finishes, the model is warm
+    # when /api/ps lists it again, without another suggest.
+    b = c.app.state.backend
+    assert _wait(lambda: model_key(QWEN) in b._succeeded and b._loading is None)
+    fake.loaded = [QWEN]
+    again = _states(c.get("/v1/info").json())[QWEN]
+    assert again["loaded"] is True and again["state"] == "warm"
+
+
+def test_size_vram_zero_degrades_healthz_for_the_production_model(oclient, fake):
+    fake.loaded = [QWEN]
+    fake.size_vram = 0
+    c = oclient(ALLOWED_MODELS=MOON)
+    info = c.get("/v1/info").json()
+    assert _states(info)[QWEN]["size_vram"] == 0
+    assert _states(info)[QWEN]["loaded"] is True
+    assert _states(info)[QWEN]["state"] == "loading"
+    health = c.get("/healthz")
+    assert health.status_code == 503
+    assert assert_contract(health, "/healthz")["status"] == "degraded"
+    assert health.json() == {"status": "degraded"}
+    fake.size_vram = 4_000_000_000
+    health = c.get("/healthz")
+    assert health.status_code == 200 and health.json()["status"] == "ok"
+    assert _states(c.get("/v1/info").json())[QWEN]["size_vram"] == 4_000_000_000
+    assert post_image(c).status_code == 200
+    assert _states(c.get("/v1/info").json())[QWEN]["state"] == "warm"
+    assert c.get("/healthz").status_code == 200
+
+
+def test_size_vram_zero_on_a_non_production_model_degrades_only_once_warm(oclient, fake):
+    fake.loaded = ["moondream:latest"]
+    fake.size_vram = 0
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45")
+    assert c.get("/healthz").status_code == 200
+    assert _states(c.get("/v1/info").json())[MOON]["state"] == "loading"
+    assert post_image(c, context=ctx(model=MOON)).status_code == 200
+    assert _states(c.get("/v1/info").json())[MOON]["state"] == "warm"
+    health = c.get("/healthz")
+    assert health.status_code == 503 and health.json()["status"] == "degraded"
+
+
+def test_f5_mixed_cold_sequence_refuses_the_trailing_request(oclient, fake):
+    # QA: nothing loaded, default reload, a switch in flight, then the default
+    # queued behind it. Measured times fit 0.9 x 45 s only if the in-flight
+    # load and the background reload are ignored — that path used to 504.
+    fake.loaded = []
+    fake.warm_delay = 3.0
+    fake.release.clear()
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45", OLLAMA_QUEUE_SIZE="1")
+    b = c.app.state.backend
+    b._record(8.0)
+    b._record(8.0, MOON)
+    assert c.get("/v1/info").json()["ready"] is False
+    assert b._loading is not None and b._loading[0] == QWEN
+    results: list = []
+    t = _post_in_thread(c, results, ctx(model=MOON))
+    assert _wait(lambda: b._in_flight == 1 and b._inflight_load is not None)
+    assert b._unfinished_load_s() > 20  # background qwen + in-flight moondream
+    r = post_image(c, context=ctx())
+    assert r.status_code == 503
+    assert "would time out" in r.json()["error"]["message"]
+    assert int(r.headers["Retry-After"]) >= 20
+    assert b._waiting == 0 and len(fake.chats()) == 1
+    fake.release.set()
+    t.join(5)
+    assert results[0].status_code == 200
+
+
+def test_f5_echo_counts_the_inflight_load(make_client):
+    c = make_client(
+        ALLOWED_MODELS=MOON, ECHO_DELAY_MS="400", ECHO_LOAD_MS="4000", BACKEND_TIMEOUT_S="6"
+    )
+    b = c.app.state.backend
+    results: list = []
+    t = _post_in_thread(c, results, ctx(model=MOON))
+    assert _wait(lambda: b._in_flight == 1 and b._ready_at > time.monotonic() + 2)
+    r = post_image(c, context=ctx())
+    assert r.status_code == 503 and "would time out" in r.json()["error"]["message"]
+    assert int(r.headers["Retry-After"]) >= 5  # 0.4 s ahead + 4 s switch load
+    t.join(8)
+    assert results[0].status_code == 200
+
+
+def test_f6_queue_full_retry_after_includes_switch_load(oclient, fake):
+    c = oclient(
+        ALLOWED_MODELS=MOON,
+        BACKEND_TIMEOUT_S="60",
+        OLLAMA_QUEUE_SIZE="1",
+        OLLAMA_RETRY_AFTER_S="1",
+    )
+    b = c.app.state.backend
+    b._record(10.0)
+    fake.loaded = [QWEN]
+    fake.release.clear()
+    results: list = []
+    t1 = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: b._in_flight == 1)
+    t2 = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: b._waiting == 1)
+    r = post_image(c, context=ctx(model=MOON))
+    assert r.status_code == 503 and "queue full" in r.json()["error"]["message"]
+    # avg 10 s x (waiting + 1) + load budget 15 s + max(2 s, 30%) = 39.5 -> 40
+    assert r.headers["Retry-After"] == "40"
+    fake.release.set()
+    t1.join(5)
+    t2.join(5)
+
+
+def test_f6_echo_queue_full_includes_switch_load(make_client):
+    c = make_client(
+        ALLOWED_MODELS=MOON, ECHO_DELAY_MS="600", ECHO_LOAD_MS="2500", BACKEND_TIMEOUT_S="30"
+    )
+    b = c.app.state.backend
+    results: list = []
+    t1 = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: b._in_flight == 1)
+    t2 = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: b._waiting == 1)
+    r = post_image(c, context=ctx(model=MOON))
+    assert r.status_code == 503 and "queue full" in r.json()["error"]["message"]
+    # 0.6 s x 2 + 2.5 s load = 3.7 → 4
+    assert r.headers["Retry-After"] == "4"
+    t1.join(5)
+    t2.join(5)
+
+
+def test_f6_queue_full_retry_after_is_capped(oclient, fake):
+    # avg 20 s x 2 + budget(22.4 s) 29.12 = 69.12 -> capped at BACKEND_TIMEOUT_S + 5.
+    c = oclient(ALLOWED_MODELS=MOON, BACKEND_TIMEOUT_S="45", OLLAMA_QUEUE_SIZE="1")
+    b = c.app.state.backend
+    b._record(20.0)
+    b._record_load(22.4, MOON)
+    fake.release.clear()
+    results: list = []
+    t1 = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: b._in_flight == 1)
+    t2 = _post_in_thread(c, results, ctx())
+    assert _wait(lambda: b._waiting == 1)
+    r = post_image(c, context=ctx(model=MOON))
+    fake.release.set()
+    t1.join(5)
+    t2.join(5)
+    assert r.status_code == 503 and "queue full" in r.json()["error"]["message"]
+    assert r.headers["Retry-After"] == "50"
+
+
+def test_healthz_does_not_list_models(oclient):
+    c = oclient(ALLOWED_MODELS=MOON, AUTOFILL_TOKEN="secret")
+    assert c.get("/healthz").json() == {"status": "ok"}
+    assert c.get("/v1/info").status_code == 401
+
+
+def test_warmup_marks_a_resident_model_warm_without_a_suggest(oclient, fake):
+    fake.warm_delay = 0.2
+    c = oclient(ALLOWED_MODELS=MOON, OLLAMA_WARMUP="1")
+    b = c.app.state.backend
+    b.start()
+    assert b.ready is False
+    assert _wait(lambda: b.ready)
+    entry = _states(c.get("/v1/info").json())[QWEN]
+    assert entry["loaded"] is True and entry["state"] == "warm"
+    assert fake.chats() == []
+
+
+def test_background_reload_marks_the_model_warm_when_it_finishes(oclient, fake):
+    fake.loaded = []
+    fake.track_loads = True
+    fake.warm_delay = 0.4
+    c = oclient(ALLOWED_MODELS=MOON)
+    b = c.app.state.backend
+    assert c.get("/v1/info").json()["ready"] is False
+    assert _wait(lambda: b._loading is not None)
+    assert _wait(lambda: _states(c.get("/v1/info").json())[QWEN]["loaded"] is True)
+    assert _states(c.get("/v1/info").json())[QWEN]["state"] == "loading"
+    assert _wait(lambda: model_key(QWEN) in b._succeeded and b._loading is None)
+    done = _states(c.get("/v1/info").json())[QWEN]
+    assert done["state"] == "warm" and done["loaded"] is True
+    assert fake.chats() == []
