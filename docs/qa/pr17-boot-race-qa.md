@@ -1,7 +1,7 @@
 # QA: PR #17 boot fixes (dl-cap after NetworkManager, Ollama CUDA race)
 
 - Final head: **`53196dc`** (fast-forward on `639c148`; comments, docs and tests only). Round 1: PR #17 commit `fe5f5ba` on main `23e51e2`. Recheck: `cde402e` (rebased on main `63806a1`) and its merge with main, `639c148` (parents `cde402e` and `6f43494`; the diff against `cde402e` is exactly #21's CHANGELOG change).
-- Harness with fake `tc`, `systemctl`, `journalctl` and `python3` (plus own probes with a `--since`-honouring journal fake and hanging cuInit fakes). Board (xavier12, `639c148` installed, same units and scripts as `53196dc`): one forced-race boot (R1b) and three normal boots, see "Board tests".
+- Harness with fake `tc`, `systemctl`, `journalctl` and `python3` (plus own probes with a `--since`-honouring journal fake and hanging cuInit fakes). Board (<jetson-host>, `639c148` installed, same units and scripts as `53196dc`): one forced-race boot (R1b) and three normal boots, see "Board tests".
 - Result round 1: **dl-cap / NetworkManager hook: PASS. Ollama boot race: changes requested** (M1, M2).
 - Result recheck (`639c148`): **PASS.** All round-1 findings are fixed. R1 (forced-race procedure) and the R2/R3 wording are fixed in the docs and comments at `53196dc`. Board: forced-race boot R1b **PASS** (path (b)); normal boots 1, 2 and 3 **PASS** (path (a)). See "Recheck" and "Board result".
 - **Overall verdict: PASS for merge at `53196dc`.** Every boot ended with Ollama on the GPU, and the restart path ran exactly once when forced. Non-blocking follow-ups are listed under "Follow-ups".
@@ -33,7 +33,7 @@
 - **L5** `dhcp4-change` re-applies the cap on every renewal and counts toward the start limit.
 
 ## Board tests
-All done on xavier12 on 2026-10-19 (Ollama 0.15.6, systemd 245, L4T R35 rev 6.0), read-only over SSH after each reboot:
+All done on <jetson-host> on 2026-10-19 (Ollama 0.15.6, systemd 245, L4T R35 rev 6.0), read-only over SSH after each reboot:
 
 | Boot | Expected | Result |
 |---|---|---|
@@ -195,7 +195,7 @@ comment's 430 s leaves out Ollama's stop time (up to 90 s); the worst case is 52
 if Ollama is disabled at boot, gpu-check fails with "dependency" (the system shows as degraded) rather than skipping
 quietly.
 
-## Board result: forced-race boot R1b (2026-10-19, xavier12, `639c148` installed)
+## Board result: forced-race boot R1b (2026-10-19, <jetson-host>, `639c148` installed)
 
 **Result: PASS (path (b)).** It was a read-only check over SSH after DevOps rebooted with the R1b files from this doc
 (`zz-qa-ollama-once.conf` / `99-qa-once.conf`). Those files are the same as the `zz-force-race.conf` pair in
@@ -233,7 +233,7 @@ Observations (none blocks the result):
   - systemd loaded the units while the clock read 2024, so `ollama.service` shows `NeedDaemonReload=yes`, and gpu-check's `systemctl restart` printed `Warning: The unit file … changed on disk`. That is harmless; the drop-ins were applied.
   - `--since` scoping would have been unreliable on this board. `_SYSTEMD_INVOCATION_ID` scoping (round-1 L3) is the right choice.
 
-## Board result: normal boot 1 of 3 (2026-10-19, xavier12, `639c148` installed)
+## Board result: normal boot 1 of 3 (2026-10-19, <jetson-host>, `639c148` installed)
 
 **Result: PASS (path (a)).** Read-only check over SSH after DevOps removed both R1b files and ran `daemon-reload`.
 No R1b leftovers: `/etc/tmpfiles.d` is empty, `ollama.service` DropInPaths lists only `10-autofill.conf`,
@@ -265,7 +265,7 @@ Observations (none blocks the result):
 - **O1 not repeated in this form.** gpu-check logged 1.0 s after the CUDA line (its poll interval).
 - Both dl-cap and Ollama started ~8 s after `network-online.target` ([18.70 s]), right after `nvpmodel` finished, as in R1b.
 
-## Board result: normal boot 2 of 3 (2026-10-19, xavier12, `639c148` installed)
+## Board result: normal boot 2 of 3 (2026-10-19, <jetson-host>, `639c148` installed)
 
 **Result: PASS (path (a)).** Same read-only checks as boot 1. The reboot started at 21:26:47 EEST; the board was up at
 21:27:36. Still no R1b leftovers (`/etc/tmpfiles.d` empty, DropInPaths = `10-autofill.conf`, `ollama-wait-cuda.conf`,
@@ -305,7 +305,7 @@ Observations (none blocks the result):
   in boot 1 the stall seems to have come before dl-cap/Ollama started (both ~8 s after `network-online.target`). Harmless
   to this PR; cause not investigated (read-only).
 
-## Board result: normal boot 3 of 3 (2026-10-19, xavier12, `639c148` installed)
+## Board result: normal boot 3 of 3 (2026-10-19, <jetson-host>, `639c148` installed)
 
 **Result: PASS (path (a)).** Same read-only checks. The reboot started at 21:31:03 EEST; the board was up at 21:31:52.
 No R1b leftovers (same three drop-ins, `/etc/tmpfiles.d` empty, no `/run` QA env files).
