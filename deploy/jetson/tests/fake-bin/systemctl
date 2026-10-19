@@ -1,9 +1,32 @@
 #!/bin/sh
-# Fake `systemctl` for the NetworkManager dispatcher hook: logs calls to $DS/systemctl.log.
-# Knobs (env): UNIT_DISABLED=1 (is-enabled fails), SYSTEMCTL_FAIL=1 (restart fails).
+# Fake `systemctl` for the NetworkManager dispatcher hook and ollama-gpu-check.sh.
+# Logs calls to $DS/systemctl.log.
+# Knobs (env): UNIT_DISABLED=1 (is-enabled fails), SYSTEMCTL_FAIL=1 (restart fails),
+#   OLLAMA_INACTIVE=1 (is-active ollama fails), RESTART_BRINGS_CUDA=1 / RESTART_STILL_CPU=1
+#   (restart appends a new inference-compute line after a "# --- restart ---" marker).
 echo "systemctl $*" >> "${DS:?}/systemctl.log"
 case "$*" in
   *is-enabled*) [ -n "${UNIT_DISABLED:-}" ] && exit 1; exit 0 ;;
+  *is-active*ollama*)
+    [ -n "${OLLAMA_INACTIVE:-}" ] && exit 1; exit 0 ;;
+  *show*ollama*)
+    if [ -f "$DS/ollama.active_enter" ]; then cat "$DS/ollama.active_enter"
+    else echo "Mon 2026-10-19 18:22:10 EEST"; fi
+    exit 0 ;;
+  *restart*ollama*)
+    [ -n "${SYSTEMCTL_FAIL:-}" ] && exit 1
+    echo "$(( $(cat "$DS/ollama.restarts" 2>/dev/null || echo 0) + 1 ))" > "$DS/ollama.restarts"
+    echo "Mon 2026-10-19 18:23:00 EEST" > "$DS/ollama.active_enter"
+    {
+      echo "# --- restart ---"
+      if [ -n "${RESTART_BRINGS_CUDA:-}" ]; then
+        echo 'time=2026-10-19T18:23:01+03:00 level=INFO msg="inference compute" id=CUDA0 library=CUDA compute=7.2 name=CUDA0 description=Xavier'
+      else
+        # Default after restart: still CPU (really-no-GPU / at-most-once cases). Override with RESTART_BRINGS_CUDA=1.
+        echo 'time=2026-10-19T18:23:01+03:00 level=INFO msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu'
+      fi
+    } >> "$DS/journal.txt"
+    exit 0 ;;
   *restart*) [ -n "${SYSTEMCTL_FAIL:-}" ] && exit 1; exit 0 ;;
   *) exit 0 ;;
 esac

@@ -1,0 +1,15 @@
+# /etc/systemd/system/ollama-gpu-check.service
+# Runs once after ollama.service at boot. If Ollama's GPU discovery logged only library=cpu, restarts
+# ollama.service at most once (marker in /run). See ollama-gpu-check.sh and docs/deploy-jetson.md.
+[Unit]
+Description=Restart Ollama once if it came up on CPU (Jetson CUDA race at boot)
+After=ollama.service
+Wants=ollama.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ollama-gpu-check.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

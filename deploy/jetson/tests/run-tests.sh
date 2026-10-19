@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for deploy/jetson/*.sh with fake docker/curl/tc on PATH (no Docker, no network, no root).
-# Usage: deploy/jetson/tests/run-tests.sh        (about 1 min 30 s; the signal cases use real timing)
+# Usage: deploy/jetson/tests/run-tests.sh        (about 1 min 45 s; the signal cases use real timing)
 # Exit code: number of failed cases (0 = all passed).
 set -u
 set -m   # job control: background jobs keep default SIGINT handling, so the signal cases can send it
@@ -200,6 +200,7 @@ result "  ...restart is queued (--no-block), not waited for" "$ok" ""
 d1=$(sed -n 's/^DEV=\${DEV:-\([^}]*\)}.*/\1/p' "$DC"); d2=$(sed -n 's/^DEV=\([^ ]*\).*/\1/p' "$NMD")
 [ -n "$d1" ] && [ "$d1" = "$d2" ] && ok=1 || ok=0; result "nm-dispatcher: interface matches DEV in dl-cap.sh" "$ok" "dl-cap=$d1 hook=$d2"
 
+
 echo "== dl-cap.sh: real board tc filter show fixture"
 # Verbatim iproute2-ss200127 output from the board (police on a separate line from protocol ip/ipv6).
 newds
@@ -227,6 +228,149 @@ result "dl-cap fake tc: police is on a separate line from protocol ipv6" "$ok" "
 # USE_FIXTURE=1 serves the file verbatim through the fake.
 newds; dc USE_FIXTURE=1 sh "$DC" check > "$DS/out" 2>&1; rc=$?
 [ "$rc" = 0 ] && ok=1 || ok=0; result "dl-cap check: USE_FIXTURE=1 (verbatim) -> 0" "$ok" "exit=$rc"
+
+echo "== wait-cuda.sh"
+WC=$JET/wait-cuda.sh
+# Helper: build a CUDA_TEST_ROOT with device nodes; optional sysfs readiness path.
+mk_gpu() { # root [sysfs=nvgpu|gpu.0|gv11b|none]
+  local r=$1 kind=${2:-nvgpu}
+  mkdir -p "$r/dev"
+  : > "$r/dev/nvhost-ctrl-gpu"; : > "$r/dev/nvmap"
+  case "$kind" in
+    nvgpu) mkdir -p "$r/sys/module/nvgpu" ;;
+    gpu.0) mkdir -p "$r/sys/devices"; : > "$r/sys/devices/gpu.0" ;;
+    gv11b) mkdir -p "$r/sys/class/devfreq/17000000.gv11b" ;;
+    none) ;;
+    *) echo "bad kind $kind" >&2; return 1 ;;
+  esac
+}
+newds; mk_gpu "$DS/root" nvgpu
+env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=2 sh "$WC" > "$DS/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q "GPU ready" "$DS/out" && ok=1 || ok=0
+result "wait-cuda: already ready (Ollama after CUDA) -> immediate" "$ok" "exit=$rc"
+# Device nodes alone are not enough (the board race).
+newds; mk_gpu "$DS/root" none
+SECONDS=0; env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=2 sh "$WC" > "$DS/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q "timed out" "$DS/out" && [ "$SECONDS" -ge 2 ] && ok=1 || ok=0
+result "wait-cuda: device nodes only (no sysfs) -> timeout, exit 0" "$ok" "exit=$rc ${SECONDS}s"
+# Ollama before CUDA: nodes appear after ~1 s.
+newds; mkdir -p "$DS/root"
+( sleep 1; mk_gpu "$DS/root" gv11b ) &
+SECONDS=0; env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=5 sh "$WC" > "$DS/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q "GPU ready after" "$DS/out" && [ "$SECONDS" -ge 1 ] && [ "$SECONDS" -le 5 ] && ok=1 || ok=0
+result "wait-cuda: ready appears after 1s (Ollama before CUDA)" "$ok" "exit=$rc ${SECONDS}s"
+# Timeout validation: bad values fall back to 60 but we use a ready root so it returns immediately;
+# the warning must mention the bad value.
+newds; mk_gpu "$DS/root" nvgpu
+for w in abc 0 -5 010 1.5 1000000; do
+  env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S="$w" sh "$WC" > "$DS/out" 2>&1; rc=$?
+  [ "$rc" = 0 ] && grep -q "CUDA_WAIT_S must be a positive whole number" "$DS/out" && grep -q "GPU ready" "$DS/out" && ok=1 || ok=0
+  result "wait-cuda: CUDA_WAIT_S='$w' -> warn, use 60, still exit 0" "$ok" "exit=$rc"
+done
+# Real timeout path with short wait (nodes never appear).
+newds; mkdir -p "$DS/root"
+SECONDS=0; env CUDA_TEST_ROOT="$DS/root" CUDA_WAIT_S=2 sh "$WC" > "$DS/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q "timed out after 2s" "$DS/out" && ok=1 || ok=0
+result "wait-cuda: nothing appears, CUDA_WAIT_S=2 -> timeout exit 0" "$ok" "exit=$rc ${SECONDS}s"
+
+echo "== ollama-gpu-check.sh"
+OG=$JET/ollama-gpu-check.sh
+# Strict curl/ollama on PATH ahead of fakes: any model pull/generate fails the case.
+strict_bins() {
+  mkdir -p "$DS/strict"
+  cat > "$DS/strict/curl" <<'C'
+#!/bin/sh
+echo "curl $*" >> "$DS/curl.log"
+case "$*" in */api/generate*|*/api/pull*|*/api/chat*) echo "FORBIDDEN: $*" >&2; exit 99 ;; esac
+exit 0
+C
+  cat > "$DS/strict/ollama" <<'O'
+#!/bin/sh
+echo "ollama $*" >> "$DS/ollama.log"
+echo "FORBIDDEN ollama call: $*" >&2
+exit 99
+O
+  chmod +x "$DS/strict/curl" "$DS/strict/ollama"
+}
+no_model_calls() {
+  if [ -s "$DS/ollama.log" ] 2>/dev/null; then return 1; fi
+  if [ -f "$DS/curl.log" ] && grep -qE '/api/(generate|pull|chat)' "$DS/curl.log"; then return 1; fi
+  return 0
+}
+og() { # og [ENV...] sh "$OG" [args]; uses FAKE + strict bins
+  env PATH="$DS/strict:$FAKE:$PATH" "$@" > "$DS/out" 2>&1
+}
+# check: CUDA -> 0
+newds; strict_bins
+echo 'msg="inference compute" id=CUDA0 library=CUDA compute=7.2 name=CUDA0 description=Xavier' > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG" check; rc=$?
+[ "$rc" = 0 ] && grep -q "library=CUDA" "$DS/out" && no_model_calls && ok=1 || ok=0
+result "ollama-gpu-check check: library=CUDA -> 0" "$ok" "exit=$rc"
+# check: CPU -> 1
+newds; strict_bins
+echo 'msg="inference compute" id=cpu library=cpu' > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG" check; rc=$?
+[ "$rc" = 1 ] && grep -q "CPU-only" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check check: library=cpu -> 1" "$ok" "exit=$rc"
+# check: empty journal -> 1
+newds; strict_bins; : > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG" check; rc=$?
+[ "$rc" = 1 ] && ok=1 || ok=0; result "ollama-gpu-check check: no compute line -> 1" "$ok" "exit=$rc"
+# apply: already CUDA -> no restart
+newds; strict_bins
+echo 'msg="inference compute" id=CUDA0 library=CUDA compute=7.2' > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$DS/ollama.restarts" ] && [ ! -e "$DS/marker" ] && no_model_calls && ok=1 || ok=0
+result "ollama-gpu-check apply: already CUDA -> no restart" "$ok" "exit=$rc"
+# apply: CPU, restart brings CUDA (Ollama before CUDA recovery)
+newds; strict_bins
+echo 'msg="inference compute" id=cpu library=cpu' > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 RESTART_BRINGS_CUDA=1 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$DS/ollama.restarts")" = 1 ] && [ -e "$DS/marker" ] \
+  && grep -q "after restart, library=CUDA" "$DS/out" && no_model_calls && ok=1 || ok=0
+result "ollama-gpu-check apply: CPU then CUDA after one restart" "$ok" "exit=$rc restarts=$(cat "$DS/ollama.restarts" 2>/dev/null)"
+# apply: really no GPU — one restart, still CPU, no loop; second apply does not restart again
+newds; strict_bins
+echo 'msg="inference compute" id=cpu library=cpu' > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$DS/ollama.restarts")" = 1 ] && [ -e "$DS/marker" ] \
+  && grep -q "not restarting again" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check apply: really-no-GPU, one restart then stop" "$ok" "exit=$rc"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$DS/ollama.restarts")" = 1 ] && grep -q "already restarted once" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check apply: second call same boot -> no second restart" "$ok" "exit=$rc restarts=$(cat "$DS/ollama.restarts")"
+# apply: ollama inactive -> nothing
+newds; strict_bins
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_INACTIVE=1 OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$DS/ollama.restarts" ] && grep -q "not active" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check apply: ollama inactive -> no restart" "$ok" "exit=$rc"
+# apply: restart fails -> marker kept, exit 0, no loop
+newds; strict_bins
+echo 'msg="inference compute" id=cpu library=cpu' > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 SYSTEMCTL_FAIL=1 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && [ -e "$DS/marker" ] && [ ! -e "$DS/ollama.restarts" ] && grep -q "restart ollama.service failed" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check apply: restart fails -> marker, exit 0" "$ok" "exit=$rc"
+# unknown arg
+newds; strict_bins
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" sh "$OG" bogus; rc=$?
+[ "$rc" = 2 ] && grep -q usage "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check: unknown argument -> usage, exit 2" "$ok" "exit=$rc"
+# WAIT_S validation warning
+newds; strict_bins
+echo 'msg="inference compute" id=CUDA0 library=CUDA' > "$DS/journal.txt"
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=abc sh "$OG" check; rc=$?
+[ "$rc" = 0 ] && grep -q "OLLAMA_GPU_CHECK_WAIT_S must be a positive whole number" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check: bad OLLAMA_GPU_CHECK_WAIT_S -> warn, still works" "$ok" "exit=$rc"
+# No inference line within wait -> exit 0 without restart (don't flail)
+newds; strict_bins; : > "$DS/journal.txt"
+SECONDS=0
+og OLLAMA_GPU_CHECK_MARKER="$DS/marker" OLLAMA_GPU_CHECK_WAIT_S=2 sh "$OG"; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$DS/ollama.restarts" ] && grep -q "no inference compute line" "$DS/out" && ok=1 || ok=0
+result "ollama-gpu-check apply: no compute line after wait -> exit 0, no restart" "$ok" "exit=$rc ${SECONDS}s"
+# Guarantee no model API calls across the ollama-gpu-check cases above (aggregate curl/ollama logs already per-ds).
+no_model_calls && ok=1 || ok=0
+result "ollama-gpu-check: no /api/generate|/api/pull|/api/chat and no ollama CLI" "$ok" ""
+
 
 echo
 echo "passed=$PASS failed=$FAIL"

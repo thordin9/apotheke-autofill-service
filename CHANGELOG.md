@@ -53,9 +53,22 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   only, and not while the unit is disabled. `dl-cap.sh` now checks after applying that
   `tc filter show dev eth0 parent ffff:` lists police filters for `ip` and `ipv6`, and exits 1 if not, so
   `Restart=on-failure` retries. A new `dl-cap.sh check` mode exits 1 when the cap is missing, and an unknown
-  argument exits 2. The fake `tc` in the test harness now keeps state and prints `filter show` output, with a new
-  fake `systemctl`. The harness gains 35 cases (100 in total), and CI shellchecks the hook. `docs/deploy-jetson.md`
-  covers why the hook exists, how to install it, and how to verify the cap, including after a reboot.
+  argument exits 2. The fake `tc` matches the board's iproute2-ss200127 `filter show` format (police on a separate
+  line from `protocol ip`/`ipv6`), with a verbatim fixture test. Fake `systemctl` covers the hook. CI shellchecks
+  the hook. `docs/deploy-jetson.md` covers why the hook exists, how to install it, and how to verify the cap,
+  including after a reboot.
+
+- **`deploy/jetson`: Ollama waits for CUDA at boot and restarts once if it came up on CPU.** After a reboot,
+  `ollama.service` could start while `/dev/nvhost-ctrl-gpu` and `/dev/nvmap` already existed but GPU discovery still
+  logged only `library=cpu` until a manual restart. New `wait-cuda.sh` (`ExecStartPre` via
+  `ollama-wait-cuda.conf`) waits up to `CUDA_WAIT_S` (default 60) for the device nodes and an nvgpu/gv11b sysfs
+  path, then exits 0 even on timeout so the unit never fails forever. New `ollama-gpu-check.sh` /
+  `ollama-gpu-check.service` reads this start's journal for `inference compute` with `library=CUDA` and, if only
+  CPU was found, restarts `ollama.service` at most once per boot (`/run` marker). It never loops when there is
+  truly no GPU and never loads or pulls models. `ollama-gpu-check.sh check` exits 0 for GPU and 1 for CPU-only.
+  Harness covers both orderings, the at-most-once restart, a really-no-GPU box, timeout validation, and asserts no
+  `/api/generate` or `/api/pull` calls. Docs add install steps and a post-reboot checklist (`ollama ps` at 100% GPU,
+  `dl-cap.sh check`, both police filters).
 
 - **`deploy/jetson/run-service.sh`: refuse a switch when port 8080 is taken; wall-clock `WAIT_S`.** After the old
   container is stopped, the script refuses (and restores it) if `HEALTH_URL` still answers, because something else

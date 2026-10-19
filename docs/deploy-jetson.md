@@ -82,6 +82,35 @@ the LAN call that API (CORS), for example to pull or delete models. If nothing e
 `OLLAMA_CONTEXT_LENGTH` is only Ollama's default: `qwen2.5vl-jetson:3b` sets `num_ctx 4096` in its Modelfile, which
 takes precedence, so the service's model runs at 4096 regardless.
 
+**Boot race: Ollama before CUDA.** After a reboot on 2026-10-19, `ollama.service` started while
+`/dev/nvhost-ctrl-gpu` and `/dev/nvmap` already existed, but GPU discovery still logged only `library=cpu`
+(`offloaded 0/37 layers to GPU`) until a manual `systemctl restart ollama`, after which it logged
+`library=CUDA compute=7.2 name=CUDA0 description=Xavier`. Two pieces fix that:
+
+1. [`wait-cuda.sh`](../deploy/jetson/wait-cuda.sh) + drop-in
+   [`ollama-wait-cuda.conf`](../deploy/jetson/ollama-wait-cuda.conf) (`ExecStartPre`): waits up to `CUDA_WAIT_S`
+   seconds (default 60) for the device nodes **and** an nvgpu/gv11b sysfs path. On timeout it logs and exits 0 so
+   the unit still starts (never fails forever).
+2. [`ollama-gpu-check.sh`](../deploy/jetson/ollama-gpu-check.sh) +
+   [`ollama-gpu-check.service`](../deploy/jetson/ollama-gpu-check.service): after Ollama is up, reads this start's
+   journal for an `inference compute` line with `library=CUDA`. If only `library=cpu` was found, it restarts
+   `ollama.service` **at most once per boot** (marker in `/run/ollama-gpu-check.restarted`). It never loops when
+   there is truly no GPU, and it never loads, pulls or allowlists models. `ollama-gpu-check.sh check` exits 0 for
+   GPU and 1 for CPU-only.
+
+Install with the drop-in above:
+
+```bash
+install -D -m 755 $REPO/deploy/jetson/wait-cuda.sh /usr/local/sbin/wait-cuda.sh
+install -D -m 644 $REPO/deploy/jetson/ollama-wait-cuda.conf   /etc/systemd/system/ollama.service.d/ollama-wait-cuda.conf
+install -D -m 755 $REPO/deploy/jetson/ollama-gpu-check.sh /usr/local/sbin/ollama-gpu-check.sh
+install -D -m 644 $REPO/deploy/jetson/ollama-gpu-check.service /etc/systemd/system/ollama-gpu-check.service
+systemctl daemon-reload
+systemctl enable ollama-gpu-check.service
+systemctl restart ollama          # picks up ExecStartPre; gpu-check runs after
+/usr/local/sbin/ollama-gpu-check.sh check   # exit 0 = library=CUDA
+```
+
 ## Build the image
 
 Build on the board itself (native arm64). Images are tagged **`apotheke-autofill:jetson-<short sha>`** with the
@@ -219,11 +248,13 @@ resolve it:
 - otherwise (the new `autofill` works): `docker rm autofill-prev`.
 
 The script's behaviour is covered by [`deploy/jetson/tests/run-tests.sh`](../deploy/jetson/tests/run-tests.sh),
-which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl` and `tc` commands (no Docker, network or root
-needed) and checks: switches, rollbacks, signals before and during a rollback, the `/healthz` poll, the port check,
-the wall-clock `WAIT_S` and its validation, the bind-error hint, `build-image.sh` refs and `dl-cap.sh`. Run it
-locally the same way. It takes about 1 min 30 s, because the signal cases use real timing, and removes its
-temporary files when it exits, also when interrupted with Ctrl-C.
+which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl`, `tc`, `systemctl` and `journalctl`
+commands (no Docker, network or root needed) and checks: switches, rollbacks, signals before and during a rollback,
+the `/healthz` poll, the port check, the wall-clock `WAIT_S` and its validation, the bind-error hint,
+`build-image.sh` refs, `dl-cap.sh` (including a verbatim board `tc filter show` fixture), the NetworkManager hook,
+`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 1 min 45 s, because the
+signal and wait-timeout cases use real timing, and removes its temporary files when it exits, also when interrupted
+with Ctrl-C.
 
 The new container is started with:
 
@@ -386,19 +417,32 @@ in `/opt/actions-runner/.credentials*`, which must not leave the board.
 
 ## Reboot behaviour
 
-Everything comes back on its own after a reboot or power cut, tested on 2026-10-18:
+Everything comes back on its own after a reboot or power cut, tested on 2026-10-18 (dl-cap / Ollama CUDA boot
+fixes added after the 2026-10-19 reboot that left the inbound cap and Ollama on CPU until a manual restart):
 
 - `docker.service` is enabled, and the `autofill` container has `--restart unless-stopped`.
-- `ollama.service` is enabled. On start the service warms the model up, which loads `qwen2.5vl-jetson:3b` and,
-  with `OLLAMA_KEEP_ALIVE=-1`, keeps it loaded. `/v1/info` reports `ready: true` once that's done (about 15 s
-  after Ollama is up).
+- `ollama.service` is enabled, with `wait-cuda.sh` as `ExecStartPre` and `ollama-gpu-check.service` after it
+  (see [Ollama and its drop-in](#ollama-and-its-drop-in)). On start the service warms the model up, which loads
+  `qwen2.5vl-jetson:3b` and, with `OLLAMA_KEEP_ALIVE=-1`, keeps it loaded. `/v1/info` reports `ready: true` once
+  that's done (about 15 s after Ollama is up).
 - `dl-cap.service` is enabled and reapplies the 30 Mbit/s cap, and the NetworkManager hook reapplies it again if
   NetworkManager takes over `eth0` afterwards. Check it with `tc -s filter show dev eth0 parent ffff:` or
   `dl-cap.sh check` (see [Inbound bandwidth limit](#inbound-bandwidth-limit-30-mbits)).
 - The runner service is enabled and reconnects to GitHub.
 - The power mode persists (`nvpmodel` mode 8).
 
-After a reboot, the quick check under [Verify](#verify) is enough.
+**Post-reboot checklist** (a reboot test is only green when all of these hold):
+
+```bash
+ollama ps                              # qwen2.5vl-jetson:3b at 100% GPU, keep_alive Forever
+/usr/local/sbin/ollama-gpu-check.sh check   # exit 0 (library=CUDA in this start's journal)
+/usr/local/sbin/dl-cap.sh check        # "cap is in place on eth0"
+tc filter show dev eth0 parent ffff:   # two police filters (protocol ip and ipv6), rate 30Mbit burst 384Kb
+curl -s localhost:8080/healthz         # ok / ready
+```
+
+After a reboot, the quick check under [Verify](#verify) is also enough once the checklist above has passed once
+on this image.
 
 ## Model and image size choice: ALLOWED_MODELS and IMAGE_SIZES
 

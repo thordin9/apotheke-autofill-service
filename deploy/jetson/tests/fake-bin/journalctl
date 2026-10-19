@@ -1,0 +1,17 @@
+#!/bin/sh
+# Fake `journalctl` for ollama-gpu-check.sh. Logs calls to $DS/journalctl.log and prints $DS/journal.txt.
+# If --since is present and $DS/journal.since_filter is set to that timestamp, only lines after a
+# "# since-cut" marker in journal.txt are shown (harness uses this to simulate pre/post restart).
+# Simpler approach: print the whole file; the harness rewrites journal.txt on restart via systemctl fake.
+echo "journalctl $*" >> "${DS:?}/journalctl.log"
+[ -f "$DS/journal.txt" ] || exit 0
+# If ActiveEnterTimestamp was bumped (restart), only show lines from the last "# --- restart ---" marker.
+if [ -f "$DS/ollama.restarts" ] && [ "$(cat "$DS/ollama.restarts")" -gt 0 ] 2>/dev/null; then
+  # Print from the last restart marker, or the whole file if none.
+  if grep -q '^# --- restart ---' "$DS/journal.txt" 2>/dev/null; then
+    awk 'BEGIN{p=0} /^# --- restart ---/{p=1; next} p' "$DS/journal.txt"
+    exit 0
+  fi
+fi
+cat "$DS/journal.txt"
+exit 0
