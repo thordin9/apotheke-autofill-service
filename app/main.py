@@ -19,7 +19,7 @@ from .backends.base import CAPABILITIES
 from .backends.echo import MalformedOutput
 from .backends.failover import CLIENT_TIMEOUT_EXTRA_S
 from .errors import ApiError, error_response
-from .identity import identity_fields
+from .identity import clean_category, identity_fields
 from .imagetype import accepted_mime
 from .settings import Settings, get_settings
 
@@ -169,18 +169,37 @@ def parse_context(raw: Any) -> dict[str, Any]:
         val = ctx.get(key, [])
         if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
             raise ApiError(400, "bad_request", f"'context.{key}' must be a list of strings")
-        out[key] = val
+        cleaned: list[str] = []
+        for item in val:
+            _require_encodable(item, f"context.{key}")
+            if key == "categories":
+                item = clean_category(item)
+            cleaned.append(item)
+        out[key] = cleaned
     locale = ctx.get("locale")
     if locale is not None:
         if not isinstance(locale, str):
             raise ApiError(400, "bad_request", "'context.locale' must be a string")
+        _require_encodable(locale, "context.locale")
         out["locale"] = locale
     model = ctx.get("model")
     if model is not None:
         if not isinstance(model, str):
             raise ApiError(400, "bad_request", "'context.model' must be a string")
+        _require_encodable(model, "context.model")
         out["model"] = model
     return out
+
+
+def _require_encodable(value: str, field: str) -> None:
+    """Reject text that cannot be encoded. The message never includes the value:
+    a lone surrogate in the error body is itself a 500."""
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        raise ApiError(
+            400, "bad_request", f"'{field}' contains text that cannot be encoded"
+        ) from None
 
 
 def _ms(v: Any) -> bool:

@@ -39,6 +39,8 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   rates; otherwise a conservative estimate. The state file lives on
   `/var/lib/autofill` (Jetson host dir `/opt/autofill/data`). A corrupt,
   unreadable, or unwritable file spends the rest of the UTC day.
+- **v1.3 Jetson QA.** `docs/qa/v1.3-jetson-qa.md` records the Jetson pass. The
+  file is unchanged from the report.
 - **Contract.** `/v1/suggest` gains optional `backend_used` (`ollama` or
   `cloudflare`). `model_used` is the model that answered. `/v1/info` gains
   `backends`, the Cloudflare budget, and the effective slice and reserve.
@@ -54,6 +56,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   result. It does not always leave the probe at `ok`.
 - **Category names.** Newlines in a client category are folded onto one prompt
   line so the name cannot break the prompt.
+- **Unencodable context (QA F-1).** A lone surrogate, or any other value that
+  cannot be encoded, in a context string (`categories`, `tags`, `locale`, or
+  `model`) is `400` `bad_request` with the usual error object. The log has no
+  traceback.
+- **Category controls (QA F-2).** NUL and other C0/C1 controls, and bidi
+  overrides, are stripped from client category names before the prompt, the
+  schema enum, and the category returned to the client. The same classes as
+  the brand fields. A NUL never comes back in the response.
 - **v3_lean latency.** The changelog's v3_lean cost is the measured +0.7 s.
 
 ## [Unreleased]

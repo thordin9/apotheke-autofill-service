@@ -61,7 +61,7 @@ from typing import Any
 
 import httpx
 
-from ..identity import identity_fields, redact_for_log
+from ..identity import clean_category, identity_fields, redact_for_log
 from ..settings import get_settings
 from .base import CAPABILITIES, Backend, BackendUnavailable, Busy
 from .selection import allowlist, cold_wait_fits, model_key, resolve_model, same_model
@@ -124,7 +124,13 @@ def _context_list(context: dict[str, Any], key: str) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for v in context.get(key, []) or []:
-        if isinstance(v, str) and (v := _one_line(v)) and v not in seen:
+        if not isinstance(v, str):
+            continue
+        # Categories are client text that is echoed into the prompt, the schema
+        # enum, and the suggestion. NUL and the other controls are stripped
+        # here, after line breaks have been folded to a space.
+        v = clean_category(v) if key == "categories" else _one_line(v)
+        if v and v not in seen:
             seen.add(v)
             out.append(v)
     return out[:MAX_CONTEXT_ITEMS]
