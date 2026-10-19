@@ -573,6 +573,73 @@ Every case through Apotheke stays well inside the 30 s client timeout (worst 16.
 | HEIC (no pillow-heif) | 415 `unsupported_media_type` | "the service cannot read this kind of image" |
 | Token exposure | – | not in any page, export, backup, log or error message |
 
+## Brand / model / serial prompt variants (2026-10-19)
+
+Feature 9 experiment: add optional `brand`, `model_number` and `serial_number` fields to the
+service prompt and JSON schema, fill them only when the text is visibly readable (never guess),
+and measure accuracy and latency against `bench/photos/ground_truth.json` plus
+`bench/photos/brand_readability.json` (which sizes a person can read each value at).
+
+### Recommendation
+
+| Item | Value | Why |
+|---|---|---|
+| Prompt / schema variant | **`v3_lean`** | Fewest invented values (9 failures over both sizes vs 10 for `v1_empty` and **62** for `v2_omit`), same name/category as better variants, smallest latency tax (+0.8 s median). |
+| Keep production model | `qwen2.5vl-jetson:3b` | Still best category score (16/19) and fastest practical VLM on this board among those tested. |
+| `IMAGE_SIZES` | unchanged `448,560*,1024` | Brand fields add ~0.8–1.5 s; 560 px remains the default. Use 1024 px when serials matter (none readable at 560 on this set). |
+| `ALLOWED_MODELS` | keep `qwen2.5vl-jetson:3b` | Do not allowlist MiniCPM / InternVL / SmolVLM / Gemma for production yet (see model shortlist below). |
+
+Service code still uses the base prompt today. Adopting `v3_lean` is a separate change to
+`app/backends/ollama.py` (or a Feature flag). Exact winning text:
+[`bench/results/brandserial-2026-10-19/winning_prompt.txt`](../bench/results/brandserial-2026-10-19/winning_prompt.txt) and
+[`winning_schema.json`](../bench/results/brandserial-2026-10-19/winning_schema.json).
+
+### Setup
+
+Same board and Ollama 0.15.6 / `qwen2.5vl-jetson:3b` as the 2026-10-18 size sweep. Ran 2026-10-19
+17:17–17:50 EEST via `bench/brand_sweep.sh` (variants `base`, `v1_empty`, `v2_omit`, `v3_lean` ×
+sizes 560 and 1024). Scored with `bench/score_brand.py`.
+
+Variants in short:
+
+- **`base`:** current service prompt and schema (no brand fields).
+- **`v1_empty`:** required `brand` / `model_number` / `serial_number` (`""` when unreadable).
+- **`v2_omit`:** same fields optional (omit when unreadable). Invents heavily — do not use.
+- **`v3_lean`:** like `v1_empty`, but tags max 3 and description under ~12 words.
+
+### Scores (`qwen2.5vl-jetson:3b`)
+
+| Config | Median s (Δ base) | Out tok (Δ) | Category (Δ) | Name (Δ) | Failures | Brand exact/partial of readable | Model no. | Serial |
+|---|---:|---:|---:|---:|---:|---|---|---|
+| base-560 | 8.52 | 65 | 16/19 | 18/19 | 0 | (in text 7/10) | (in text 3+1/9) | (in text 0/4) |
+| v1_empty-560 | 9.99 (+1.47) | 85 (+20) | 18/19 (+2) | 18/19 | 5 | 7/1 of 8 | 2/0 of 4 | 1/0 of 1 |
+| v2_omit-560 | 10.02 (+1.50) | 89 (+24) | 17/19 | 18/19 | **32** | 7/0 of 8 | 2/1 of 4 | 1/0 of 1 |
+| **v3_lean-560** | **9.36 (+0.84)** | **79 (+14)** | **18/19 (+2)** | **18/19** | **5** | **7/1 of 8** | **1/1 of 4** | **1/0 of 1** |
+| base-1024 | 13.95 | 66 | 16/19 | 17/19 | 0 | (in text 7/10) | (in text 3+2/9) | (in text 0/4) |
+| v1_empty-1024 | 15.44 (+1.49) | 87 (+21) | 16/19 | 17/19 | 5 | 11/0 of 12 | 4/1 of 8 | 2/1 of 4 |
+| v2_omit-1024 | 16.03 (+2.08) | 94 (+28) | 17/19 | 17/19 | **30** | 11/0 of 12 | 6/1 of 8 | 2/0 of 4 |
+| **v3_lean-1024** | **14.78 (+0.83)** | **78 (+12)** | **16/19** | **17/19** | **4** | **11/0 of 12** | **3/2 of 8** | **2/1 of 4** |
+
+Failures = invented + misread. "Readable" counts come from `brand_readability.json` (e.g. Panasonic
+brand is not on the label; several models/serials only at 1024). Raw per-photo JSONL:
+`bench/results/brandserial-2026-10-19/raw/`. Scripts: `bench/brand_variants.py`,
+`bench/brand_sweep.py`, `bench/brand_sweep.sh`, `bench/score_brand.py`.
+
+### Small-model shortlist on the same board (2026-10-19)
+
+Pulled and exercised under the 30 Mbit/s cap. Production allowlist left as Qwen-only.
+
+| Model | Tag used | Download | Result on Xavier NX 8 GB / Ollama 0.15.6 |
+|---|---|---|---|
+| Qwen2.5-VL 3B (baseline) | `qwen2.5vl-jetson:3b` | already installed | **Keep.** 560 px: 8.5 s median, category 16/19, name 18/19. |
+| MiniCPM-V 4.0 | `openbmb/minicpm-v4:4b` (3.0 GB) | OK | Runs on GPU. 560 px: 10.4 s, category **9/19**, name 17/19. Better at some model numbers (5 exact at 560) but too many category misses for Apotheke. Keep on disk for OCR experiments; do not allowlist. |
+| Gemma 3 4B | library `gemma3:4b` | **412** (needs newer Ollama) | HF `gemma3-hf:4b-q4_K_M` from `hf.co/ggml-org/gemma-3-4b-it-GGUF:Q4_K_M` loads for text; **vision `/api/chat` hangs >180 s**. Not usable on 0.15.6. |
+| InternVL3 2B | `internvl3:2b-q4_K_M` (1.5 GB) | OK | Legacy runner, **CPU-only** here (`GR3D_FREQ=0%`, `size_vram=0`): ~110 s/photo. Accuracy on a 3-photo sample is fine, but not a production candidate until GPU offload works. |
+| SmolVLM2 2.2B | `smolvlm2:2.2b-instruct-q4_K_M` (1.7 GB) | OK | Same legacy/CPU story: ~83 s/photo sample. |
+
+Full modelbench raw (Qwen + MiniCPM at 560/1024, partial InternVL): `bench/results/modelbench-2026-10-19/`.
+CPU-legacy sample: `bench/results/modelbench-2026-10-19/sample-cpu-legacy/`.
+
 ## Appendix: raw comparison straight against Ollama (d3f8c3c prompt, format=json)
 
 Measured 2026-10-18 00:28–00:32 with `bench/cmp2.sh` on the `d3f8c3c` image: its prompt (with a JSON template) and

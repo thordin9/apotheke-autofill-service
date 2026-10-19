@@ -1,0 +1,8 @@
+What is the main object in this photo? Answer in JSON with:
+name (the kind of object in 1-4 plain words, never a brand or a person's name),
+category (exactly one of: General, Tools, Electronics, Kitchen, Documents, Hobby, Clothing, Shoes, Books, Lighting),
+tags (up to 5 short lowercase tags for the item),
+description (one short sentence about the object only, not people or background),
+confidence (0 to 1, how sure you are).
+Only if printed on the item and clearly readable in this photo, also give: brand (the maker's name as written), model_number and serial_number (copied character by character, with dashes and spaces as printed). Leave out any of these three you cannot read; do not infer them from the shape, style or kind of object.
+Write the values in the language of locale 'en'.
