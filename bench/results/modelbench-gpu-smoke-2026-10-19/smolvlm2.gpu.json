@@ -1,0 +1,6 @@
+{
+  "label": "smolvlm2",
+  "gr3d_max": 99,
+  "gr3d_n": 80,
+  "pct_ge_50": 0.25
+}

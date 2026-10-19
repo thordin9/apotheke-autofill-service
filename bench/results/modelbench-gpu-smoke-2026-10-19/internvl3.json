@@ -1,0 +1,19 @@
+{
+  "label": "internvl3",
+  "model": "internvl3:2b-q4_K_M",
+  "wall_s": 19.492,
+  "error": null,
+  "content": "{\n  \"name\": \"Hammer\",\n  \"category\": \"Tools\",\n  \"tags\": [\"hand tool\", \"hammer\"],\n  \"description\": \"A hammer is a hand tool used for driving nails or other fasteners into materials.\",\n  \"confidence\": 95\n}",
+  "load_duration": 11599832610,
+  "prompt_eval_count": 286,
+  "prompt_eval_duration": 566920372,
+  "eval_count": 59,
+  "eval_duration": 2274742832,
+  "ps": [
+    {
+      "name": "internvl3:2b-q4_K_M",
+      "size": 1528422520,
+      "size_vram": 1528422520
+    }
+  ]
+}

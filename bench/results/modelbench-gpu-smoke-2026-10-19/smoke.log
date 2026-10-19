@@ -1,0 +1,51 @@
+=== smoke start 2026-10-19T19:46:04+03:00 ===
+--- minicpm (openbmb/minicpm-v4:4b) 2026-10-19T19:46:04+03:00 ---
+{
+  "wall_s": 33.398,
+  "error": null,
+  "content": "{\n\"name\": \"Hammer\", \"category\": \"Tools\", \"tags\": [\"construction\", \"home improvement\", \"DIY\"], \"description\": \"A hammer i",
+  "ps": [
+    {
+      "name": "openbmb/minicpm-v4:4b",
+      "size": 2403579680,
+      "size_vram": 2403579680
+    }
+  ]
+}
+GPU {'label': 'minicpm', 'gr3d_max': 99, 'gr3d_n': 155, 'pct_ge_50': 0.3741935483870968}
+--- internvl3 (internvl3:2b-q4_K_M) 2026-10-19T19:46:42+03:00 ---
+{
+  "wall_s": 19.492,
+  "error": null,
+  "content": "{\n  \"name\": \"Hammer\",\n  \"category\": \"Tools\",\n  \"tags\": [\"hand tool\", \"hammer\"],\n  \"description\": \"A hammer is a hand too",
+  "ps": [
+    {
+      "name": "internvl3:2b-q4_K_M",
+      "size": 1528422520,
+      "size_vram": 1528422520
+    }
+  ]
+}
+GPU {'label': 'internvl3', 'gr3d_max': 99, 'gr3d_n': 92, 'pct_ge_50': 0.2391304347826087}
+--- smolvlm2 (smolvlm2:2.2b-instruct-q4_K_M) 2026-10-19T19:47:05+03:00 ---
+{
+  "wall_s": 17.108,
+  "error": null,
+  "content": "{\n  \"name\": \"hammer\",\n  \"category\": \"Tools\",\n  \"tags\": [\"hand tools\"],\n  \"description\": \"A hammer is a versatile tool us",
+  "ps": [
+    {
+      "name": "smolvlm2:2.2b-instruct-q4_K_M",
+      "size": 1674801152,
+      "size_vram": 1674801152
+    }
+  ]
+}
+GPU {'label': 'smolvlm2', 'gr3d_max': 99, 'gr3d_n': 80, 'pct_ge_50': 0.25}
+--- restore qwen ---
+qwen_restore_wall 16.48 Hammer
+ps [('qwen2.5vl-jetson:3b', 4192202368)]
+OLLAMA_MODEL=qwen2.5vl-jetson:3b
+IMAGE_SIZES=448,560*,1024
+ALLOWED_MODELS=qwen2.5vl-jetson:3b
+autofill Up About an hour (healthy)
+=== smoke done 2026-10-19T19:47:47+03:00 ===

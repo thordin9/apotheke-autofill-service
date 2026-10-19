@@ -1,0 +1,19 @@
+{
+  "label": "minicpm",
+  "model": "openbmb/minicpm-v4:4b",
+  "wall_s": 33.398,
+  "error": null,
+  "content": "{\n\"name\": \"Hammer\", \"category\": \"Tools\", \"tags\": [\"construction\", \"home improvement\", \"DIY\"], \"description\": \"A hammer is a tool used to drive nails or other objects into materials such as wood, concrete, or metal. It typically consists of a heavy head with one or more striking surfaces (usually flat and smooth) attached by a short neck to the handle. The weight distribution between the heads allows for greater force when driving nails compared to using an axe-like hammer design which is better suited towards pounding objects like rocks rather than nailing them into wood, concrete etc",
+  "load_duration": 16448351036,
+  "prompt_eval_count": 234,
+  "prompt_eval_duration": 2280370527,
+  "eval_count": 128,
+  "eval_duration": 7832351292,
+  "ps": [
+    {
+      "name": "openbmb/minicpm-v4:4b",
+      "size": 2403579680,
+      "size_vram": 2403579680
+    }
+  ]
+}

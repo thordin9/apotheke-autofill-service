@@ -589,6 +589,13 @@ and measure accuracy and latency against `bench/photos/ground_truth.json` plus
 | `IMAGE_SIZES` | unchanged `448,560*,1024` | Brand fields add ~0.8–1.5 s; 560 px remains the default. Use 1024 px when serials matter (none readable at 560 on this set). |
 | `ALLOWED_MODELS` | keep `qwen2.5vl-jetson:3b` | Do not allowlist MiniCPM / InternVL / SmolVLM / Gemma for production yet (see model shortlist below). |
 
+**Timing note (GPU retime 2026-10-19 19:30–19:45 EEST):** after a board reboot at ~18:22 EEST, Ollama ran
+CPU-only until DevOps restarted it at 19:28. A full warm retime of `base` and `v3_lean` at 560/1024 with CUDA
+healthy (`GR3D` max 99%, `size_vram` equal to model size) reproduced the Feature 9 medians within noise:
+base **8.58** / v3_lean **9.27** s at 560 (**+0.69** s) and base **13.89** / v3_lean **14.62** s at 1024
+(**+0.73** s). Raw: `bench/results/brandserial-gpu-retimes-2026-10-19/`. The original Feature 9 accuracy
+and the winner (`v3_lean`) are unchanged.
+
 Service code still uses the base prompt today. Adopting `v3_lean` is a separate change to
 `app/backends/ollama.py` (or a Feature flag). Exact winning text:
 [`bench/results/brandserial-2026-10-19/winning_prompt.txt`](../bench/results/brandserial-2026-10-19/winning_prompt.txt) and
@@ -634,11 +641,12 @@ Pulled and exercised under the 30 Mbit/s cap. Production allowlist left as Qwen-
 | Qwen2.5-VL 3B (baseline) | `qwen2.5vl-jetson:3b` | already installed | **Keep.** 560 px: 8.5 s median, category 16/19, name 18/19. |
 | MiniCPM-V 4.0 | `openbmb/minicpm-v4:4b` (3.0 GB) | OK | Runs on GPU. 560 px: 10.4 s, category **9/19**, name 17/19. Better at some model numbers (5 exact at 560) but too many category misses for Apotheke. Keep on disk for OCR experiments; do not allowlist. |
 | Gemma 3 4B | library `gemma3:4b` | **412** (needs newer Ollama) | HF `gemma3-hf:4b-q4_K_M` from `hf.co/ggml-org/gemma-3-4b-it-GGUF:Q4_K_M` loads for text; **vision `/api/chat` hangs >180 s**. Not usable on 0.15.6. |
-| InternVL3 2B | `internvl3:2b-q4_K_M` (1.5 GB) | OK | Legacy runner, **CPU-only** here (`GR3D_FREQ=0%`, `size_vram=0`): ~110 s/photo. Accuracy on a 3-photo sample is fine, but not a production candidate until GPU offload works. |
-| SmolVLM2 2.2B | `smolvlm2:2.2b-instruct-q4_K_M` (1.7 GB) | OK | Same legacy/CPU story: ~83 s/photo sample. |
+| InternVL3 2B | `internvl3:2b-q4_K_M` (1.5 GB) | OK | **Not inherently CPU-only.** Early tests after the 18:22 reboot saw `GR3D=0%` / `size_vram=0` and ~110 s/photo. After CUDA restore: `size_vram` full, `GR3D` max 99%, hammer@560 **~19.5 s** (cold+vision). Still slower than Qwen; keep on disk, do not allowlist without a full accuracy sweep. |
+| SmolVLM2 2.2B | `smolvlm2:2.2b-instruct-q4_K_M` (1.7 GB) | OK | Same boot-race story: ~83 s when Ollama lacked CUDA; **~17.1 s** hammer@560 on GPU after restore. Not a production candidate yet. |
 
-Full modelbench raw (Qwen + MiniCPM at 560/1024, partial InternVL): `bench/results/modelbench-2026-10-19/`.
-CPU-legacy sample: `bench/results/modelbench-2026-10-19/sample-cpu-legacy/`.
+Full modelbench raw (Qwen + MiniCPM at 560/1024; MiniCPM was timed while CUDA was still up): `bench/results/modelbench-2026-10-19/`.
+Post-reboot CPU-only sample (historical): `bench/results/modelbench-2026-10-19/sample-cpu-legacy/`.
+GPU smoke after CUDA restore: `bench/results/modelbench-gpu-smoke-2026-10-19/`.
 
 ## Appendix: raw comparison straight against Ollama (d3f8c3c prompt, format=json)
 
