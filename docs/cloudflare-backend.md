@@ -446,7 +446,8 @@ Edit. Stay on the free plan; a paid-only model returns 403 with code 5035.
 
 **service.env.** `/opt/autofill/service.env`, root:root, mode `600`.
 `run-service.sh` passes it with `docker run --env-file`, so values never show
-on a command line or in `ps`. Never commit it. Placeholders:
+on a command line or in `ps`. Never commit it; CI runs gitleaks over the full
+history. Placeholders:
 
 ```bash
 BACKEND=cloudflare

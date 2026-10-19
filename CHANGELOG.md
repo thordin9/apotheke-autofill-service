@@ -27,8 +27,11 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   `/opt/autofill/cf-api-token`.
 - **Secret scan.** `.gitignore` ignores `service.env`, `*.env` (tracked `.env`
   and `*.env.example` stay tracked), `*.pem`, and `*.key`. CI runs gitleaks
-  8.28.0 on the full history. `.gitleaks.toml` allowlists only the test
-  sentinels and documented placeholders.
+  8.28.0 on the full history with the default rules enabled. The tarball
+  download checks the official checksum
+  `a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb`.
+  `.gitleaks.toml` allowlists only the historical placeholders
+  `generate-a-random-token` and `Bearer ci-token`.
 - **Deadline.** `REQUEST_DEADLINE_S` (default 45, must be under Apotheke's 50 s)
   plus a warm reserve (15 s) or a cold/loading reserve (35 s). The Cloudflare
   slice is 20 s when Ollama is warm and about 10 s when it is cold. Startup

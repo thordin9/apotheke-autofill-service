@@ -1,7 +1,7 @@
 # Hardware CI (Jetson)
 
 `.github/workflows/jetson-hardware.yml` runs the service against the real model
-(Moondream on the host Ollama) on the self-hosted runner `xavier12`, which has the
+(Moondream on the host Ollama) on the self-hosted runner `<jetson-host>`, which has the
 `jetson` label (Jetson Xavier NX, L4T R35). It is **informational only**:
 it is not a required status check, because the board can be offline. Don't add
 it to branch protection.
@@ -62,8 +62,8 @@ On any machine that can reach a running service (Python ≥ 3.8, stdlib only):
 
 ```bash
 export AUTOFILL_TOKEN=...            # the service's token
-python3 scripts/hardware_smoke.py wait --base-url http://xavier12:8080
-python3 scripts/hardware_smoke.py run  --base-url http://xavier12:8080 \
+python3 scripts/hardware_smoke.py wait --base-url http://<jetson-host>:8080
+python3 scripts/hardware_smoke.py run  --base-url http://<jetson-host>:8080 \
     --concurrency 3                  # = OLLAMA_QUEUE_SIZE + 2 for a default-queue service
 python3 scripts/hardware_smoke.py report --results hardware-smoke.json
 ```
