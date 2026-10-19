@@ -302,12 +302,46 @@ call (`set -e`), so the unit fails visibly instead of leaving a partial cap. The
 (every 10 s, at most 10 times in 5 minutes), for example while `eth0` isn't up yet. systemd allows that for
 `Type=oneshot` since version 244; L4T R35 (Ubuntu 20.04) has 245.
 
+After applying, the script checks that `tc filter show dev eth0 parent ffff:` lists a `police` filter for both
+`ip` and `ipv6`, and exits 1 if not, so `Restart=on-failure` tries again rather than reporting success with no cap.
+`dl-cap.sh check` runs the same check without changing anything: it exits 0 if the cap is in place and 1 if it's
+missing.
+
+**NetworkManager hook.** `dl-cap.service` runs once, after `network-online.target`. On the board, NetworkManager
+sometimes takes over `eth0` a moment *after* that (journal: `device (eth0): state change: unmanaged -> unavailable`,
+`created default wired connection`, then `carrier: link connected`). That resets the device, the ingress qdisc
+goes with it, and the cap is silently gone while `dl-cap.service` still shows `active (exited)`; only a manual
+`systemctl restart dl-cap` brought it back. The NetworkManager dispatcher hook
+[`nm-dispatcher-90-dl-cap`](../deploy/jetson/nm-dispatcher-90-dl-cap) fixes that: when `eth0` (the `DEV` in
+`dl-cap.sh`) gets the `up`, `connectivity-change` or `dhcp4-change` event, it runs
+`systemctl --no-block restart dl-cap.service`. `--no-block` queues the restart and returns at once, so the hook
+never holds up NetworkManager's dispatcher while `network-online.target` is still pending. Other interfaces and
+other events are ignored, and the hook always exits 0. It does nothing while `dl-cap.service` is disabled, so
+`systemctl disable --now dl-cap` keeps the cap off. A plain `systemctl stop dl-cap` lasts only until the next
+`eth0` event.
+
+Install (as root). NetworkManager only runs dispatcher scripts that are owned by root and not writable by group or
+others:
+
 ```bash
 install -m 755 $REPO/deploy/jetson/dl-cap.sh /usr/local/sbin/dl-cap.sh
 install -m 644 $REPO/deploy/jetson/dl-cap.service /etc/systemd/system/dl-cap.service
+install -o root -g root -m 755 $REPO/deploy/jetson/nm-dispatcher-90-dl-cap /etc/NetworkManager/dispatcher.d/90-dl-cap
 systemctl daemon-reload && systemctl enable --now dl-cap
-tc filter show dev eth0 ingress          # two filters: police rate 30Mbit burst 384Kb ... drop
 ```
+
+Verify, now and **after every reboot** (the failure only showed up after a reboot):
+
+```bash
+tc -s filter show dev eth0 parent ffff:   # two filters (protocol ip and ipv6), each: police ... rate 30Mbit burst 384Kb ... drop
+/usr/local/sbin/dl-cap.sh check           # "cap is in place on eth0", exit 0; exit 1 if it's missing
+journalctl -b -u dl-cap -u NetworkManager-dispatcher   # after a reboot: dl-cap restarted once NetworkManager had eth0
+```
+
+With `-s`, each filter also shows `Sent ... bytes` and, under load, `dropped` and `overlimits` counters. If the
+filters are missing, run `systemctl restart dl-cap` and check that `/etc/NetworkManager/dispatcher.d/90-dl-cap`
+exists, is owned by root and has mode 755. The test harness covers the verify step, `check` and the hook (with fake
+`tc` and `systemctl`).
 
 `systemctl stop dl-cap` removes it. Effects: image builds and `ollama pull` are slow (see above), and a 1 MB photo
 upload takes about 0.3 s. Service timings measured on the board itself (loopback) are not affected.
@@ -358,7 +392,9 @@ Everything comes back on its own after a reboot or power cut, tested on 2026-10-
 - `ollama.service` is enabled. On start the service warms the model up, which loads `qwen2.5vl-jetson:3b` and,
   with `OLLAMA_KEEP_ALIVE=-1`, keeps it loaded. `/v1/info` reports `ready: true` once that's done (about 15 s
   after Ollama is up).
-- `dl-cap.service` is enabled and reapplies the 30 Mbit/s cap.
+- `dl-cap.service` is enabled and reapplies the 30 Mbit/s cap, and the NetworkManager hook reapplies it again if
+  NetworkManager takes over `eth0` afterwards. Check it with `tc -s filter show dev eth0 parent ffff:` or
+  `dl-cap.sh check` (see [Inbound bandwidth limit](#inbound-bandwidth-limit-30-mbits)).
 - The runner service is enabled and reconnects to GitHub.
 - The power mode persists (`nvpmodel` mode 8).
 

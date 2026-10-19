@@ -45,6 +45,18 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Fixed
 
+- **`deploy/jetson`: the 30 Mbit/s inbound cap survives NetworkManager taking over `eth0` after boot.** On the
+  board, `dl-cap.service` ran and exited 0, then NetworkManager reset `eth0` a moment later and the ingress qdisc,
+  and with it the cap, was silently gone until a manual `systemctl restart dl-cap`. New NetworkManager dispatcher
+  hook `deploy/jetson/nm-dispatcher-90-dl-cap` (installed as `/etc/NetworkManager/dispatcher.d/90-dl-cap`, root,
+  mode 755) restarts `dl-cap.service` (`--no-block`) on `up`, `connectivity-change` and `dhcp4-change` for `eth0`
+  only, and not while the unit is disabled. `dl-cap.sh` now checks after applying that
+  `tc filter show dev eth0 parent ffff:` lists police filters for `ip` and `ipv6`, and exits 1 if not, so
+  `Restart=on-failure` retries. A new `dl-cap.sh check` mode exits 1 when the cap is missing, and an unknown
+  argument exits 2. The fake `tc` in the test harness now keeps state and prints `filter show` output, with a new
+  fake `systemctl`. The harness gains 35 cases (100 in total), and CI shellchecks the hook. `docs/deploy-jetson.md`
+  covers why the hook exists, how to install it, and how to verify the cap, including after a reboot.
+
 - **`deploy/jetson/run-service.sh`: refuse a switch when port 8080 is taken; wall-clock `WAIT_S`.** After the old
   container is stopped, the script refuses (and restores it) if `HEALTH_URL` still answers, because something else
   holds the port and its answer would be taken for the new container. On a first deploy it refuses before starting

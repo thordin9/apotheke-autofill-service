@@ -139,12 +139,66 @@ result "build-image: good ref -> jetson-<sha>" "$ok" "exit=$rc"
 result "build-image: unknown ref -> clear error" "$ok" "exit=$rc"
 
 echo "== dl-cap.sh"
-newds; env PATH="$FAKE:$PATH" sh "$JET/dl-cap.sh" > "$DS/out" 2>&1; rc=$?
-[ "$rc" = 0 ] && [ "$(grep -c 'filter add' "$DS/tc.log")" = 2 ] && ok=1 || ok=0; result "dl-cap: apply (IPv4 + IPv6)" "$ok" "exit=$rc"
-newds; env PATH="$FAKE:$PATH" FAIL_IP=1 sh "$JET/dl-cap.sh" > "$DS/out" 2>&1; rc=$?
+DC=$JET/dl-cap.sh
+dc() { env PATH="$FAKE:$PATH" "$@" > "$DS/out" 2>&1; }   # dc [ENV...] sh "$DC" [ARG]; exit code in $?
+newds; dc sh "$DC"; rc=$?
+[ "$rc" = 0 ] && [ "$(grep -c 'filter add' "$DS/tc.log")" = 2 ] && grep -q "filter show dev eth0 parent ffff:" "$DS/tc.log" \
+  && ok=1 || ok=0; result "dl-cap: apply (IPv4 + IPv6), then verified" "$ok" "exit=$rc"
+dc sh "$DC"; rc=$?
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' < "$DS/tc.filters")" = "ip ipv6 " ] && ok=1 || ok=0
+result "dl-cap: apply again (idempotent)" "$ok" "exit=$rc filters=[$(tr '\n' ' ' < "$DS/tc.filters")]"
+newds; dc FAIL_IP=1 sh "$DC"; rc=$?
 [ "$rc" != 0 ] && ! grep -q ipv6 "$DS/tc.log" && ok=1 || ok=0; result "dl-cap: failed IPv4 filter fails the script" "$ok" "exit=$rc"
-newds; env PATH="$FAKE:$PATH" sh "$JET/dl-cap.sh" stop > "$DS/out" 2>&1; rc=$?
+newds; dc sh "$DC" stop; rc=$?
 [ "$rc" = 0 ] && ! grep -q add "$DS/tc.log" && ok=1 || ok=0; result "dl-cap: stop" "$ok" "exit=$rc"
+echo "== dl-cap.sh: verify after apply"
+for knob in DROP_FILTERS=1 DROP_IPV6=1 NO_POLICE=1 SHOW_FAIL=1; do
+  newds; dc "$knob" sh "$DC"; rc=$?
+  [ "$rc" = 1 ] && grep -q "not found on eth0 after applying" "$DS/out" && ok=1 || ok=0
+  result "dl-cap: $knob: tc calls succeed, cap not there -> exit 1" "$ok" "exit=$rc"
+done
+echo "== dl-cap.sh check"
+newds; dc sh "$DC" check; rc=$?
+[ "$rc" = 1 ] && grep -q MISSING "$DS/out" && ok=1 || ok=0; result "dl-cap check: no qdisc -> 1" "$ok" "exit=$rc"
+dc sh "$DC"; : > "$DS/tc.log"; dc sh "$DC" check; rc=$?
+[ "$rc" = 0 ] && grep -q "in place on eth0" "$DS/out" && ok=1 || ok=0; result "dl-cap check: after apply -> 0" "$ok" "exit=$rc"
+[ "$(grep -c 'filter show' "$DS/tc.log")" -ge 1 ] && [ "$(grep -vc 'filter show' "$DS/tc.log")" = 0 ] && ok=1 || ok=0
+result "  ...check only reads (no add/del)" "$ok" "$(wc -l < "$DS/tc.log") tc call(s)"
+rm -f "$DS/tc.qdisc" "$DS/tc.filters"   # NetworkManager reset eth0 after dl-cap ran (the reboot case)
+dc sh "$DC" check; rc=$?; [ "$rc" = 1 ] && ok=1 || ok=0; result "dl-cap check: qdisc gone after apply -> 1" "$ok" "exit=$rc"
+newds; dc DROP_IPV6=1 sh "$DC"; dc sh "$DC" check; rc=$?
+[ "$rc" = 1 ] && ok=1 || ok=0; result "dl-cap check: IPv4 filter only -> 1" "$ok" "exit=$rc"
+newds; dc sh "$DC"; dc NO_POLICE=1 sh "$DC" check; rc=$?
+[ "$rc" = 1 ] && ok=1 || ok=0; result "dl-cap check: filters without police -> 1" "$ok" "exit=$rc"
+newds; dc sh "$DC"; dc SHOW_FAIL=1 sh "$DC" check; rc=$?
+[ "$rc" = 1 ] && ok=1 || ok=0; result "dl-cap check: tc filter show fails -> 1" "$ok" "exit=$rc"
+newds; dc sh "$DC"; dc sh "$DC" stop; dc sh "$DC" check; rc=$?
+[ "$rc" = 1 ] && ok=1 || ok=0; result "dl-cap check: after stop -> 1" "$ok" "exit=$rc"
+newds; dc sh "$DC" bogus; rc=$?
+[ "$rc" = 2 ] && grep -q usage "$DS/out" && [ ! -e "$DS/tc.log" ] && ok=1 || ok=0
+result "dl-cap: unknown argument -> usage, exit 2, no tc call" "$ok" "exit=$rc"
+
+echo "== nm-dispatcher-90-dl-cap"
+NMD=$JET/nm-dispatcher-90-dl-cap
+# nmd EXP_RESTART IFACE ACTION [ENV...]: EXP_RESTART=1 if dl-cap.service must be restarted. Always exits 0.
+nmd() {
+  local er=$1 i=$2 a=$3 rc n; shift 3
+  newds; env PATH="$FAKE:$PATH" "$@" sh "$NMD" "$i" "$a" > "$DS/out" 2>&1; rc=$?
+  n=$(grep -c "restart dl-cap.service" "$DS/systemctl.log" 2>/dev/null); n=${n:-0}
+  [ "$rc" = 0 ] && [ "$n" = "$er" ] && ok=1 || ok=0
+  result "nm-dispatcher: '$i' '$a'${1:+ $*} -> $([ "$er" = 1 ] && echo restart || echo nothing)" "$ok" "exit=$rc restarts=$n"
+}
+for a in up connectivity-change dhcp4-change; do nmd 1 eth0 "$a"; done
+for a in down pre-up pre-down dhcp6-change hostname reapply vpn-up ""; do nmd 0 eth0 "$a"; done
+for i in wlan0 eth1 lo eth0.5 docker0 ""; do nmd 0 "$i" up; done
+nmd 0 eth0 up UNIT_DISABLED=1
+nmd 1 eth0 up SYSTEMCTL_FAIL=1
+newds; env PATH="$FAKE:$PATH" sh "$NMD" eth0 up > "$DS/out" 2>&1
+grep -qx "systemctl --no-block restart dl-cap.service" "$DS/systemctl.log" && ok=1 || ok=0
+result "  ...restart is queued (--no-block), not waited for" "$ok" ""
+# shellcheck disable=SC2016  # a literal ${DEV:-...} in the sed pattern
+d1=$(sed -n 's/^DEV=\${DEV:-\([^}]*\)}.*/\1/p' "$DC"); d2=$(sed -n 's/^DEV=\([^ ]*\).*/\1/p' "$NMD")
+[ -n "$d1" ] && [ "$d1" = "$d2" ] && ok=1 || ok=0; result "nm-dispatcher: interface matches DEV in dl-cap.sh" "$ok" "dl-cap=$d1 hook=$d2"
 
 echo
 echo "passed=$PASS failed=$FAIL"

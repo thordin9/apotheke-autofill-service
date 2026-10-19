@@ -1,5 +1,34 @@
 #!/bin/sh
-# Fake `tc` for dl-cap.sh: logs calls; FAIL_IP=1 makes the IPv4 filter fail.
-echo "tc $*" >> "${DS:?}/tc.log"
-case "$*" in *"protocol ip "*) [ -n "${FAIL_IP:-}" ] && exit 2;; esac
+# Stateful fake `tc` for dl-cap.sh: logs calls to $DS/tc.log and keeps the ingress state in $DS/tc.qdisc (exists if
+# the ingress qdisc is there) and $DS/tc.filters (one protocol per filter). `filter show` prints iproute2-style output.
+# Knobs (env): FAIL_IP=1 (IPv4 filter add fails), DROP_FILTERS=1 (filter add succeeds but nothing is kept, as when
+#   NetworkManager resets the device right after), DROP_IPV6=1 (IPv6 filter not kept), NO_POLICE=1 (filters shown
+#   without a police action), SHOW_FAIL=1 (`filter show` fails).
+DS=${DS:?}; echo "tc $*" >> "$DS/tc.log"
+case "$*" in
+  "qdisc del"*) [ -e "$DS/tc.qdisc" ] || exit 2; rm -f "$DS/tc.qdisc" "$DS/tc.filters" ;;
+  "qdisc add"*) [ -e "$DS/tc.qdisc" ] && exit 2; touch "$DS/tc.qdisc" ;;
+  "filter add"*)
+    [ -e "$DS/tc.qdisc" ] || exit 2
+    case "$*" in
+      *"protocol ip "*) [ -n "${FAIL_IP:-}" ] && exit 2; p=ip ;;
+      *"protocol ipv6 "*) p=ipv6; [ -n "${DROP_IPV6:-}" ] && exit 0 ;;
+      *) exit 2 ;;
+    esac
+    [ -n "${DROP_FILTERS:-}" ] || echo "$p" >> "$DS/tc.filters" ;;
+  "filter show"*)
+    [ -n "${SHOW_FAIL:-}" ] && { echo "RTNETLINK answers: Invalid argument" >&2; exit 2; }
+    [ -e "$DS/tc.filters" ] || exit 0
+    while read -r p; do
+      [ "$p" = ip ] && pr=2 || pr=3
+      echo "filter parent ffff: protocol $p pref $pr u32 chain 0 "
+      echo "filter parent ffff: protocol $p pref $pr u32 chain 0 fh 800: ht divisor 1 "
+      echo "filter parent ffff: protocol $p pref $pr u32 chain 0 fh 800::800 order 2048 key ht 800 bkt 0 terminal flowid ??? not_in_hw "
+      echo "  match 00000000/00000000 at 0"
+      if [ -n "${NO_POLICE:-}" ]; then printf '\taction order 1: gact action pass\n'
+      else printf '\taction order 1:  police 0x1 rate 30Mbit burst 384Kb mtu 2Kb action drop overhead 0b \n'; fi
+      printf '\tref 1 bind 1 \n\n'
+    done < "$DS/tc.filters" ;;
+  *) echo "fake tc: unsupported '$*'" >&2; exit 2 ;;
+esac
 exit 0
