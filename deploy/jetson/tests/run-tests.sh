@@ -200,6 +200,34 @@ result "  ...restart is queued (--no-block), not waited for" "$ok" ""
 d1=$(sed -n 's/^DEV=\${DEV:-\([^}]*\)}.*/\1/p' "$DC"); d2=$(sed -n 's/^DEV=\([^ ]*\).*/\1/p' "$NMD")
 [ -n "$d1" ] && [ "$d1" = "$d2" ] && ok=1 || ok=0; result "nm-dispatcher: interface matches DEV in dl-cap.sh" "$ok" "dl-cap=$d1 hook=$d2"
 
+echo "== dl-cap.sh: real board tc filter show fixture"
+# Verbatim iproute2-ss200127 output from the board (police on a separate line from protocol ip/ipv6).
+newds
+FIX=$HERE/fixtures/tc-filter-show-eth0-ffff.txt
+[ -f "$FIX" ] || { result "dl-cap fixture: file missing" 0 "$FIX"; }
+# Stub tc that only serves filter show from the fixture (no FAKE tc).
+cat > "$DS/tc" <<T
+#!/bin/sh
+echo "tc \$*" >> "\$DS/tc.log"
+case "\$*" in "filter show"*) cat "$FIX" ;; *) echo "stub tc: \$*">&2; exit 2 ;; esac
+T
+chmod +x "$DS/tc"
+env PATH="$DS:$PATH" DS="$DS" sh "$DC" check > "$DS/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q "in place on eth0" "$DS/out" && ok=1 || ok=0
+result "dl-cap check: verbatim board tc fixture -> 0" "$ok" "exit=$rc"
+# Fake tc emit format matches the fixture's shape (protocol line, then police on its own line).
+newds; dc sh "$DC" >/dev/null; : > "$DS/tc.log"
+dc sh "$DC" check >/dev/null
+# Compare structural tokens: both have "filter protocol ip" and a later "police" before ipv6's police.
+fake_show=$("$FAKE/tc" filter show dev eth0 parent ffff: 2>/dev/null || true)
+echo "$fake_show" | awk '/^filter protocol ip /{ip=1} ip && /police/{pol=1; exit} END{exit !(ip && pol)}' && ok=1 || ok=0
+result "dl-cap fake tc: police is on a separate line from protocol ip" "$ok" ""
+echo "$fake_show" | awk '/^filter protocol ipv6 /{v=1} v && /police/{pol=1; exit} END{exit !(v && pol)}' && ok=1 || ok=0
+result "dl-cap fake tc: police is on a separate line from protocol ipv6" "$ok" ""
+# USE_FIXTURE=1 serves the file verbatim through the fake.
+newds; dc USE_FIXTURE=1 sh "$DC" check > "$DS/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && ok=1 || ok=0; result "dl-cap check: USE_FIXTURE=1 (verbatim) -> 0" "$ok" "exit=$rc"
+
 echo
 echo "passed=$PASS failed=$FAIL"
 exit "$FAIL"

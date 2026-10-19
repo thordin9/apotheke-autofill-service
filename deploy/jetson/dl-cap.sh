@@ -9,7 +9,8 @@
 DEV=${DEV:-eth0}
 
 # True if DEV's ingress qdisc carries a police filter for both IPv4 and IPv6. A missing qdisc, a failing
-# `tc` or empty output all count as missing.
+# `tc` or empty output all count as missing. Matches iproute2-ss200127 on the board, where `protocol ip`/`ipv6`
+# is on the `filter` line and `police` is on a following `action` line (see tests/fixtures/tc-filter-show-eth0-ffff.txt).
 has_cap() {
   tc filter show dev "$DEV" parent ffff: 2>/dev/null | awk '
     /^filter/ { p = ""; for (i = 1; i < NF; i++) if ($i == "protocol") p = $(i + 1) }
