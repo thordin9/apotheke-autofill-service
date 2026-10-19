@@ -434,30 +434,58 @@ false sends a photo only on a real failure (down, degraded, timeout, upstream
 
 ## DevOps
 
-This section is for DevOps. The service reads `CF_API_TOKEN` and
-`CF_ACCOUNT_ID` from the environment, or the files named by
-`CF_API_TOKEN_FILE` and `CF_ACCOUNT_ID_FILE` when the direct value is empty.
-A missing or unreadable file is not a crash.
+**Legacy.** Self-hosting this service in Docker on the Jetson is superseded by
+the Cloudflare Worker (`docs/cloudflare-workers-deploy.md`, coming in the
+Feature 11 PR). The Jetson is not getting v1.4. The notes below are for anyone
+who still self-hosts.
 
-- Put the token and account id in files such as `/opt/autofill/cf-api-token`
-  and `/opt/autofill/cf-account-id`, and point `service.env` at those paths.
-  `deploy/jetson/service.env.example` uses those placeholder paths. A direct
-  `CF_API_TOKEN` / `CF_ACCOUNT_ID` in the env file also works and wins.
-- Owner root, mode `600`. The container must keep receiving it with
-  `docker run --env-file`. Never as `-e` on the command line, never in a
-  compose label, never in `ps`.
-- Do not commit `service.env`, the token file, or the account file. `.gitignore`
-  ignores `service.env`, `*.env` (the tracked `.env` and `*.env.example` stay
-  tracked), `*.pem`, and `*.key`. CI runs gitleaks 8.28.0 over the full git
-  history (`.gitleaks.toml` allowlists only test sentinels and placeholders).
-- Create the budget directory and leave it mounted:
-  `install -d -m 755 /opt/autofill/data`, then the `-v
-  /opt/autofill/data:/var/lib/autofill` that `run-service.sh` already passes.
-  The default state file lives on that volume.
-- After the first suggest with Cloudflare enabled, confirm the token string is
-  not in the container logs. An INFO line may show usage numbers and the model
-  id. It must not show the token, the account id, the image, or brand / model
-  / serial values.
-- The shipped primary is `BACKEND=cloudflare` with `FALLBACK_BACKEND=ollama`.
-  Leave the token empty until the log check above is done; an empty token
-  serves from Ollama and does not call Cloudflare.
+**Token.** Create a custom API token with only **Account → Workers AI → Read**.
+Cloudflare's Workers AI template grants Read and Edit. Read alone ran `/ai/run`
+on 2026-10-19. If `/ai/run` returns an authentication error, add Workers AI
+Edit. Stay on the free plan; a paid-only model returns 403 with code 5035.
+
+**service.env.** `/opt/autofill/service.env`, root:root, mode `600`.
+`run-service.sh` passes it with `docker run --env-file`, so values never show
+on a command line or in `ps`. Never commit it. Placeholders:
+
+```bash
+BACKEND=cloudflare
+FALLBACK_BACKEND=ollama
+CF_ACCOUNT_ID=<CF_ACCOUNT_ID>
+CF_API_TOKEN=<CF_API_TOKEN>
+CF_MODEL=@cf/google/gemma-4-26b-a4b-it
+CF_DAILY_NEURON_BUDGET=6000
+```
+
+`CF_ACCOUNT_ID_FILE` / `CF_API_TOKEN_FILE` are read **inside the container**.
+`run-service.sh` mounts only `/opt/autofill/data` (as `/var/lib/autofill`), so a
+host path such as `/opt/autofill/cf-api-token` is not visible there; the
+service then logs one warning and serves from Ollama. Use the direct values
+above, or a path under `/var/lib/autofill`. Create the budget directory once:
+`install -d -m 755 /opt/autofill/data`.
+
+**Token not in logs.** After a suggest, this must print `0`. It reads the token
+from the file, so the token is not on the command line:
+
+```bash
+sudo bash -c 'docker logs autofill 2>&1 | grep -cF -f <(sed -n "s/^CF_API_TOKEN=//p" /opt/autofill/service.env)'
+```
+
+**Egress.** The host must reach `api.cloudflare.com` over HTTPS. Any HTTP code
+means TLS and routing work; `000` means they don't:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://api.cloudflare.com/client/v4/
+```
+
+**Budget.** The team cap is **6,000 Neurons a day, team-wide**, out of the
+account's 10,000 free Neurons. Benches and QA draw from the same pool. At about
+6.4 Neurons a photo (measured 2026-10-19), that is about 930 photos a day. See
+[Daily Neuron budget](#daily-neuron-budget). Usage appears as an INFO line
+`cloudflare usage model=...` with numbers only, and `/v1/info` shows the
+`budget` under `backends`.
+
+**Rollback.** Re-run `deploy/jetson/run-service.sh` with the previous image tag
+(`docker images apotheke-autofill`), and restore the `service.env` backup if
+you changed it. For local-only with v1.4, set `BACKEND=ollama` and
+`FALLBACK_BACKEND=none` and remove the `CF_*` lines.
