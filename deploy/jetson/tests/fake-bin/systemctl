@@ -13,6 +13,10 @@
 #   in the background unless --no-block is absent. A restart while that start is still running kills it and logs
 #   "start killed" to $DS/dlcap.events (the board's status=15/TERM, QA #17 N1); a finished start logs "apply".
 echo "systemctl $*" >> "${DS:?}/systemctl.log"
+# SYSTEMCTL_SLEEP=<s>: every dl-cap.service call hangs that long first (PID 1 busy); RESTART_SLEEP=<s>: only the
+# restart. Sleeps run with their fds closed, so a `timeout` that kills this script also ends `$(...)` at once.
+case "$*" in *dl-cap.service*) [ -n "${SYSTEMCTL_SLEEP:-}" ] && sleep "$SYSTEMCTL_SLEEP" >/dev/null 2>&1 ;; esac
+case "$*" in *restart*dl-cap.service*) [ -n "${RESTART_SLEEP:-}" ] && sleep "$RESTART_SLEEP" >/dev/null 2>&1 ;; esac
 case "$*" in
   *is-enabled*) [ -n "${UNIT_DISABLED:-}" ] && exit 1; exit 0 ;;
   *is-active*ollama*)
@@ -41,7 +45,7 @@ case "$*" in
     } >> "$DS/journal.txt"
     exit 0 ;;
   *show*dl-cap.service*)
-    [ -n "${SHOW_SLEEP:-}" ] && sleep "$SHOW_SLEEP"
+    [ -n "${SHOW_SLEEP:-}" ] && sleep "$SHOW_SLEEP" >/dev/null 2>&1
     echo "Job=$(cat "$DS/dlcap.job" 2>/dev/null || echo "${DLCAP_JOB:-}")"
     echo "ActiveState=$(cat "$DS/dlcap.state" 2>/dev/null || echo "${DLCAP_STATE:-active}")"
     exit 0 ;;

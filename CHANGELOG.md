@@ -12,11 +12,16 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   the `connectivity-change` check could then see the cap removed by that restart's stop, and the second restart killed
   the first while it was starting (`status=15/TERM`, `Failed with result 'signal'`), leaving the board without the
   inbound cap for about 0.4 s on every boot. `deploy/jetson/nm-dispatcher-90-dl-cap` now serialises invocations
-  with `flock` (`/run/lock/dl-cap-hook.lock`), leaves `dl-cap.service` alone while it has a job queued, waits up to
-  15 s for a start or stop in progress to settle, and then restarts (still `--no-block`) only if `dl-cap.sh check`
-  fails, on `up` as well. Each decision is logged with the tag `dl-cap-hook`. Ignored events and interfaces, the
-  disabled-unit rule, `dl-cap.sh` and `dl-cap.service` (including the post-apply check) are unchanged. The test
-  harness gains a systemd-like fake `dl-cap.service` job and concurrent-event tests. Board check over a reboot pending.
+  with `flock` (`/run/lock/dl-cap-hook.lock`), leaves `dl-cap.service` alone while it has a job queued, waits for a
+  start or stop in progress to settle, and then restarts (still `--no-block`) only if `dl-cap.sh check` fails, on
+  `up` as well. The lock wait and the settle wait share one deadline, `DL_CAP_HOOK_BUDGET_S` (default 8 s), and
+  every `systemctl`/`check` call is bounded by `timeout`, so the hook finishes in about 9 s at worst, well under
+  NetworkManager's dispatcher script timeout (600 s in NM 1.22), and never holds up later events for long. When
+  the time runs out it falls through: unlocked, a busy or queued unit is left alone, otherwise check and restart; a
+  `systemctl` call that times out leaves dl-cap alone. Each decision is logged with the tag `dl-cap-hook`. Ignored
+  events and interfaces, the disabled-unit rule, `dl-cap.sh` and `dl-cap.service` (including the post-apply check) are unchanged. The test
+  harness gains a systemd-like fake `dl-cap.service` job, concurrent-event tests and worst-case runtime tests
+  (at most 10 s). Board check over a reboot pending.
 
 ## [1.3.0]
 

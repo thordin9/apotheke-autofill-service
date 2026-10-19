@@ -310,7 +310,7 @@ which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl`, `tc`, `syst
 commands (no Docker, network or root needed) and checks: switches, rollbacks, signals before and during a rollback,
 the `/healthz` poll, the port check, the wall-clock `WAIT_S` and its validation, the bind-error hint,
 `build-image.sh` refs, `dl-cap.sh` (including a verbatim board `tc filter show` fixture), the NetworkManager hook,
-`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 2 min, because the
+`wait-cuda.sh` and `ollama-gpu-check.sh`. Run it locally the same way. It takes about 3 min, because the
 signal and wait-timeout cases use real timing, and removes its temporary files when it exits, also when interrupted
 with Ctrl-C.
 
@@ -414,13 +414,26 @@ restart. That second restart killed the first while it was starting (`status=15/
 that:
 
 1. Invocations are serialised with `flock` on `/run/lock/dl-cap-hook.lock`, so a second event waits for the first
-   instead of racing it. If the lock can't be taken within 60 s, or `flock` is missing, it carries on unlocked.
+   instead of racing it. If the lock isn't free in time (see the time limit below), or `flock` is missing, it
+   carries on unlocked.
 2. If `dl-cap.service` already has a job queued (its boot start waiting for `network-online.target`, or a restart
    queued by the previous event), the hook leaves it alone: that start applies the cap and verifies it.
 3. If the unit is in a transition (`activating`, `deactivating`, including the `Restart=on-failure` wait), the hook
-   waits for it to settle, at most 15 s, then goes on to the check. If it is still busy after that, the hook leaves
-   it alone as in step 2.
+   waits for it to settle, then goes on to the check. If it is still busy when the time is up, the hook leaves it
+   alone as in step 2.
 4. Only then does it run the check, and restart if the cap is missing.
+
+**Time limit.** NetworkManager's dispatcher runs scripts one at a time, kills a script that runs too long, and makes
+every later event wait behind a running one. In NetworkManager 1.22 (Ubuntu 20.04 / L4T R35) the limit is 600 s
+per script (`SCRIPT_TIMEOUT` in `dispatcher/nm-dispatcher.c`) and 10 minutes for the whole call (`CALL_TIMEOUT` in
+`src/nm-dispatcher.c`), but the hook stays far below that so it never delays the next event noticeably. It has one
+deadline, `DL_CAP_HOOK_BUDGET_S` (default 8 s) after it starts: the lock wait and the settle wait share it and stop
+2 s before the deadline, which is kept for the check and the restart, and every `systemctl` and `dl-cap.sh check`
+call runs under `timeout` with the time left (at least 1 s). The worst case is about 9 s. When the time runs out,
+the hook falls through as above: no lock means it goes on unlocked, a unit still busy or with a job is left alone,
+and otherwise it checks and restarts with `--no-block`. A `systemctl` call that times out (PID 1 busy, as in QA's
+boot observation O4) counts as unknown, and the hook leaves dl-cap alone rather than risk killing a start; the
+boot start, or the next event, applies the cap.
 
 `dl-cap.sh` is unchanged, so its post-apply check still fails the unit when the cap isn't there afterwards, and
 `Restart=on-failure` retries. `--no-block` queues the restart and returns at once, so the hook never holds up
@@ -454,7 +467,9 @@ With `-s`, each filter also shows `Sent ... bytes` and, under load, `dropped` an
 filters are missing, run `systemctl restart dl-cap` and check that `/etc/NetworkManager/dispatcher.d/90-dl-cap`
 exists, is owned by root and has mode 755. The test harness covers the verify step, `check` and the hook (with fake
 `tc` and `systemctl`), including concurrent events against a fake `dl-cap.service` job that, like systemd, kills a
-running start when another restart arrives: two events at the same moment give one apply and no killed start.
+running start when another restart arrives: two events at the same moment give one apply and no killed start. It
+also checks the worst-case runtime: with the lock held elsewhere, the unit stuck, or `systemctl` hanging, the hook
+exits 0 within 10 s.
 
 `systemctl stop dl-cap` removes it. Effects: image builds and `ollama pull` are slow (see above), and a 1 MB photo
 upload takes about 0.3 s. Service timings measured on the board itself (loopback) are not affected.
