@@ -15,16 +15,22 @@ export interface SuggestParts {
 }
 
 function findBytes(hay: Uint8Array, needle: Uint8Array, from: number): number {
+  if (needle.length === 0 || from > hay.length - needle.length) return -1;
+  const first = needle[0];
+  let i = from;
   const last = hay.length - needle.length;
-  for (let i = from; i <= last; i++) {
+  while (i <= last) {
+    const at = hay.indexOf(first, i);
+    if (at < 0 || at > last) return -1;
     let match = true;
-    for (let j = 0; j < needle.length; j++) {
-      if (hay[i + j] !== needle[j]) {
+    for (let j = 1; j < needle.length; j++) {
+      if (hay[at + j] !== needle[j]) {
         match = false;
         break;
       }
     }
-    if (match) return i;
+    if (match) return at;
+    i = at + 1;
   }
   return -1;
 }

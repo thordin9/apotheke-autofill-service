@@ -78,7 +78,14 @@ def test_deploy_workflow_is_main_only_and_pinned():
     suggest = smoke["run"].split("/v1/suggest", 1)[1]
     assert '[ "$code" = "401" ]' in suggest
     assert "200" not in suggest
+    assert "503" not in suggest
     assert "last HTTP code:" in smoke["run"]
+    success = [
+        line.strip()
+        for line in suggest.splitlines()
+        if line.strip().startswith("if ") and "code" in line
+    ]
+    assert success == ['if [ "$code" = "401" ]; then']
 
 
 def test_wrangler_has_observability_and_no_kv():
@@ -109,6 +116,8 @@ def test_deploy_workflow_installs_with_ci_and_checks_wrangler():
     assert "npx wrangler --version" in version["run"]
     deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
     assert set(deploy["env"]) == {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"}
+    names = [step.get("name") for step in job["steps"]]
+    assert names.index("Test") < names.index("Deploy")
 
 
 def test_deploy_checkout_drops_credentials_and_no_legacy_peer_deps():

@@ -329,13 +329,17 @@ stays `"1"`. Clients keep ignoring unknown fields.
   surrogate in a category is `400`.
 - Brand, model number, and serial follow v1.3 (trimmed, cut at 128, never
   logged).
-- Over the daily cap, or when Workers AI returns structured code 3036, the
-  status is `503` `backend_unavailable` with `Retry-After` until 00:00 UTC
-  and the message `daily capacity is exhausted`. 3036 also marks the day
-  exhausted. Structured code 3040 is the same status with `Retry-After: 30`
-  and the message `the model is out of capacity`. It does not mark the day
-  exhausted. A message that merely contains those digits is not mapped. The
-  body does not include the upstream error. 3006 is `413`.
+- Over the daily cap, or when Workers AI returns 3036, the status is `503`
+  `backend_unavailable` with `Retry-After` until 00:00 UTC and the message
+  `daily capacity is exhausted`. 3036 also marks the day exhausted. 3040 is
+  the same status with `Retry-After: 30` and the message `the model is out
+  of capacity`. It does not mark the day exhausted. 3006 is `413`. The code
+  is read from `code`, `internalCode`, or `error_code`, and from an
+  `InferenceUpstreamError` message that starts with `3036: `, `3040: `, or
+  `3006: ` (an optional `InferenceUpstreamError: ` prefix is allowed). A
+  message that merely contains those digits is not mapped.
+  `lastRequestInternalStatusCode` is not read. The body does not include
+  the upstream error.
 - Each suggest logs one JSON line. `base64_ms`, `parse_ms`, `validate_ms`,
   and `total_ms` are `Date.now()` deltas. On the production isolate that
   clock does not move during CPU, so a CPU-only slice can be 0. `total_ms`

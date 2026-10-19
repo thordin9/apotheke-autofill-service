@@ -203,10 +203,13 @@ internal code 3036 (daily free allocation already used, often as HTTP 429)
 is `503` with `Retry-After` until 00:00 UTC, and it marks the Durable Object
 exhausted. Code 3040 (out of capacity) is `503` with `Retry-After: 30` and
 the message `the model is out of capacity`. It does not mark the day
-exhausted. Only a structured `code`, `internalCode`, or `error_code` is
-mapped. A message that merely contains those digits is not. Neither
-response includes upstream text. 3006 (request too large) is `413` and names
-`max_image_bytes`.
+exhausted. The code is read from `code`, `internalCode`, or `error_code`,
+and from the binding's `InferenceUpstreamError` message when it starts with
+`3036: `, `3040: `, or `3006: ` (optional `InferenceUpstreamError: ` prefix).
+A message that merely contains those digits is not mapped.
+`lastRequestInternalStatusCode` is not read, because it is shared across
+requests. Neither response includes upstream text. 3006 (request too large)
+is `413` and names `max_image_bytes`.
 
 Each call reserves 30 Neurons, then settles `usage.neurons` when the binding
 returns it. Otherwise it charges Gemma 4 rates, 9091 Neurons per million

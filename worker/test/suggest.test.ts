@@ -13,6 +13,7 @@ import {
   resetBudget,
   scriptedAi,
   suggestRequest,
+  TOKEN,
 } from "./helpers";
 
 beforeEach(resetBudget);
@@ -174,7 +175,11 @@ describe("suggest", () => {
   it("does not treat a message that merely contains 3036 as quota exhaustion", async () => {
     expect(workersAiCode(new Error("network reset after 3036 ms"))).toBeNull();
     expect(workersAiCode(new Error("failed after 3006 ms"))).toBeNull();
+    expect(workersAiCode(new Error("see 3036: later"))).toBeNull();
+    expect(workersAiCode(new Error("3036"))).toBeNull();
+    expect(workersAiCode(new Error("3036:"))).toBeNull();
     expect(workersAiCode({ message: "3036" })).toBeNull();
+    expect(workersAiCode({ lastRequestInternalStatusCode: 3036, message: "nope" })).toBeNull();
     expect(workersAiCode({ errors: [{ code: "3040", message: "Capacity temporarily exceeded" }] })).toBe(3040);
     const { ai, calls } = scriptedAi([new Error("network reset after 3036 ms"), reply(VALID, { neurons: 10 })]);
     const response = await call(suggestRequest(), { AI: ai });
@@ -187,6 +192,88 @@ describe("suggest", () => {
     const again = await call(suggestRequest(), { AI: ai });
     expect(again.status).toBe(200);
     expect(calls).toHaveLength(2);
+  });
+
+  it("maps InferenceUpstreamError messages and ignores the shared status field", async () => {
+    const evening = Date.parse("2026-10-19T23:00:00.000Z");
+    const info = () =>
+      call(
+        new Request("https://autofill.example/v1/info", {
+          headers: { authorization: `Bearer ${TOKEN}`, "x-autofill-now": String(evening) },
+        }),
+      );
+
+    for (const prefix of ["", "InferenceUpstreamError: "]) {
+      await resetBudget();
+      const quota = scriptedAi([
+        () => {
+          throw bindingError(`${prefix}3036: ${UPSTREAM} daily allocation`);
+        },
+      ]);
+      const quotaResponse = await call(suggestRequest(jpeg(), { now: evening }), { AI: quota.ai });
+      expect(quotaResponse.status).toBe(503);
+      expect(quotaResponse.headers.get("retry-after")).toBe("3600");
+      const quotaBody = await bodyOf(quotaResponse);
+      expect(quotaBody).toEqual({
+        error: { code: "backend_unavailable", message: "daily capacity is exhausted" },
+      });
+      expect(JSON.stringify(quotaBody)).not.toContain(UPSTREAM);
+      expect((await bodyOf(await info())).ready).toBe(false);
+      const blocked = await call(suggestRequest(jpeg(), { now: evening }), { AI: quota.ai });
+      expect(blocked.status).toBe(503);
+      expect(quota.calls).toHaveLength(1);
+
+      await resetBudget();
+      const capacity = scriptedAi([
+        () => {
+          throw bindingError(`${prefix}3040: ${UPSTREAM} Capacity temporarily exceeded`);
+        },
+        reply(VALID),
+      ]);
+      const capacityResponse = await call(suggestRequest(jpeg(), { now: evening }), { AI: capacity.ai });
+      expect(capacityResponse.status).toBe(503);
+      expect(capacityResponse.headers.get("retry-after")).toBe("30");
+      const capacityBody = await bodyOf(capacityResponse);
+      expect(capacityBody).toEqual({
+        error: { code: "backend_unavailable", message: "the model is out of capacity" },
+      });
+      expect(JSON.stringify(capacityBody)).not.toContain(UPSTREAM);
+      expect((await bodyOf(await info())).ready).toBe(true);
+      const recovered = await call(suggestRequest(jpeg(), { now: evening }), { AI: capacity.ai });
+      expect(recovered.status).toBe(200);
+      expect(capacity.calls).toHaveLength(2);
+
+      await resetBudget();
+      const tooBig = scriptedAi([
+        () => {
+          throw bindingError(`${prefix}3006: ${UPSTREAM} request too large`);
+        },
+        reply(VALID),
+      ]);
+      const tooBigResponse = await call(suggestRequest(), { AI: tooBig.ai });
+      expect(tooBigResponse.status).toBe(413);
+      const tooBigBody = await bodyOf(tooBigResponse);
+      expect(tooBigBody).toEqual({
+        error: { code: "payload_too_large", message: "image exceeds 983040 bytes" },
+      });
+      expect(JSON.stringify(tooBigBody)).not.toContain(UPSTREAM);
+      expect((await call(suggestRequest(), { AI: tooBig.ai })).status).toBe(200);
+    }
+
+    await resetBudget();
+    const shared = scriptedAi([
+      () => {
+        throw new Error(`${UPSTREAM} upstream failed`);
+      },
+      reply(VALID),
+    ]);
+    (shared.ai as { lastRequestInternalStatusCode?: number }).lastRequestInternalStatusCode = 3036;
+    const ignored = await call(suggestRequest(jpeg(), { now: evening }), { AI: shared.ai });
+    expect(ignored.status).toBe(503);
+    expect(ignored.headers.get("retry-after")).toBeNull();
+    expect(JSON.stringify(await ignored.json())).not.toContain(UPSTREAM);
+    expect((await bodyOf(await info())).ready).toBe(true);
+    expect((await call(suggestRequest(jpeg(), { now: evening }), { AI: shared.ai })).status).toBe(200);
   });
 
   it("rejects prose that is still not JSON after the repair", async () => {
@@ -274,6 +361,12 @@ describe("suggest", () => {
 function messageContent(input: Record<string, unknown>): Array<Record<string, unknown>> {
   const messages = input.messages as Array<{ content: Array<Record<string, unknown>> }>;
   return messages[0].content;
+}
+
+function bindingError(message: string): Error {
+  const error = new Error(message);
+  error.name = "InferenceUpstreamError";
+  return error;
 }
 
 function imageUrl(input: Record<string, unknown>): string {

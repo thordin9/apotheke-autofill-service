@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { readLimitedBody } from "../src/http";
-import { maxImageBytes, MULTIPART_HEADROOM } from "../src/multipart";
+import { maxImageBytes, MULTIPART_HEADROOM, readSuggestParts } from "../src/multipart";
 import { VALID, bodyOf, call, jpeg, png, reply, resetBudget, scriptedAi, suggestRequest, webp } from "./helpers";
 
 beforeEach(resetBudget);
@@ -119,6 +119,22 @@ describe("upload limits and input errors", () => {
     });
   });
 
+  it("keeps image bytes identical for curl, PHP curl, and httpx bodies", () => {
+    const image = jpeg("CANARY-BYTES-\r\n--not-the-boundary");
+    const context = '{"locale":"en"}';
+    const shapes = [
+      clientBody("--------------------------curlform", image, context, "image/jpeg"),
+      clientBody("phpcurlboundary", image, context, "application/octet-stream"),
+      clientBody("httpxboundary", image, context, "image/jpeg", true),
+    ];
+    for (const part of shapes) {
+      const parsed = readSuggestParts(part.body, part.contentType, 983040);
+      expect(Array.from(parsed.image)).toEqual(Array.from(image));
+      expect(parsed.context).toBe(context);
+      expect(parsed.mime).toBe("image/jpeg");
+    }
+  });
+
   it("returns 415 from magic bytes, not the part content type", async () => {
     const gif = new TextEncoder().encode("GIF89a-not-an-image");
     const response = await call(suggestRequest(gif));
@@ -167,3 +183,25 @@ describe("upload limits and input errors", () => {
     expect(await bodyOf(response)).toEqual({ error: { code: "bad_request", message: "'context' is not valid JSON" } });
   });
 });
+
+function clientBody(
+  boundary: string,
+  image: Uint8Array,
+  context: string,
+  partType: string,
+  quoteBoundary = false,
+): { body: Uint8Array; contentType: string } {
+  const enc = new TextEncoder();
+  const head = enc.encode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="label.jpg"\r\nContent-Type: ${partType}\r\n\r\n`,
+  );
+  const mid = enc.encode(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="context"\r\n\r\n${context}`);
+  const tail = enc.encode(`\r\n--${boundary}--\r\n`);
+  const body = new Uint8Array(head.length + image.length + mid.length + tail.length);
+  body.set(head, 0);
+  body.set(image, head.length);
+  body.set(mid, head.length + image.length);
+  body.set(tail, head.length + image.length + mid.length);
+  const token = quoteBoundary ? `"${boundary}"` : boundary;
+  return { body, contentType: `multipart/form-data; boundary=${token}` };
+}
