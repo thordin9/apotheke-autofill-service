@@ -9,7 +9,7 @@ JET=$(cd "$HERE/.." && pwd)
 RS=$JET/run-service.sh
 FAKE=$HERE/fake-bin
 PASS=0; FAIL=0
-# Every case's scratch dir lives under one parent, removed on exit (also on Ctrl-C / SIGTERM).
+# Every case's scratch dir lives under one parent, removed on exit (also on Ctrl-C / SIGTERM / SIGHUP).
 TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/run-tests.XXXXXX") || { echo "cannot create a temp dir under ${TMPDIR:-/tmp}" >&2; exit 1; }
 trap 'rm -rf "$TMPROOT"' EXIT
 CASE_PID=""   # a case runs in its own process group (set -m): stop it before cleaning up, or it recreates its dir
