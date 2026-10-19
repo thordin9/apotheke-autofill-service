@@ -20,25 +20,17 @@ With ALLOWED_MODELS set, echo also handles one request at a time like Ollama
 (OLLAMA_NUM_PARALLEL=1, OLLAMA_QUEUE_SIZE=1): one request waits behind the one
 in flight and more get 503 "queue full". A queued request is refused at once
 (503 "a queued request / a model switch would time out") when the requests
-ahead of it (ECHO_DELAY_MS each), its own answer, the in-flight request's
-remaining load, and, for another model than the one in flight, ECHO_LOAD_MS
-exceed 90% of BACKEND_TIMEOUT_S. Busy 503s carry Retry-After =
-ECHO_DELAY_MS x (waiting + 1), plus ECHO_LOAD_MS when the refused request
-switches models, in whole seconds, at least 1.
+ahead of it (ECHO_DELAY_MS each), its own answer and, for another model than
+the one in flight, ECHO_LOAD_MS exceed 90% of BACKEND_TIMEOUT_S. Busy 503s
+carry Retry-After = ECHO_DELAY_MS x (waiting + 1) in whole seconds, at least 1.
 A single request behaves as before. Without ALLOWED_MODELS requests are not
 serialized (v1 behaviour).
-
-ECHO_BRAND, ECHO_MODEL_NUMBER and ECHO_SERIAL_NUMBER set the raw identity
-fields (unset = omitted). A value that starts with ``json:`` is JSON
-(``json:null``, ``json:""``, ``json:{"value":"x"}``); anything else is a
-literal string, including empty, over-long and unusual characters.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import math
 import os
 import time
@@ -72,31 +64,6 @@ def _delay_ms() -> int:
     return _env_ms("ECHO_DELAY_MS")
 
 
-def _identity_raw() -> dict[str, Any]:
-    """Raw brand / model_number / serial_number from ECHO_* (unset = omit).
-
-    ``json:`` prefix parses the rest as JSON so QA can send null, a nested
-    ``{"value": ...}`` object, or a string. Any other value is literal text.
-    """
-    out: dict[str, Any] = {}
-    for env, key in (
-        ("ECHO_BRAND", "brand"),
-        ("ECHO_MODEL_NUMBER", "model_number"),
-        ("ECHO_SERIAL_NUMBER", "serial_number"),
-    ):
-        if env not in os.environ:
-            continue
-        raw = os.environ.get(env, "")
-        if raw.startswith("json:"):
-            try:
-                out[key] = json.loads(raw[5:])
-            except ValueError:
-                out[key] = raw[5:]
-        else:
-            out[key] = raw
-    return out
-
-
 def _default_model() -> str:
     return os.environ.get("ECHO_MODEL", "").strip() or DEFAULT_ECHO_MODEL
 
@@ -124,25 +91,18 @@ class EchoBackend(Backend):
         self._in_flight = 0
         self._waiting = 0
         self._current: str | None = None  # model of the request in flight
-        # model_key()s with a successful suggest since they became resident.
-        self._warm: set[str] = set()
 
     async def _take_turn(self, model: str, delay_ms: int) -> None:
         """Wait for the request in flight, with Ollama's queue rules."""
         if self._in_flight:
             gen_s = delay_ms / 1000
-            switch = self._current is not None and not same_model(model, self._current)
-            retry_s = gen_s * (self._waiting + 1)
-            if switch:
-                retry_s += _env_ms("ECHO_LOAD_MS") / 1000
-            retry = max(1, math.ceil(retry_s))
+            retry = max(1, math.ceil(gen_s * (self._waiting + 1)))
             if self._waiting >= QUEUE_SIZE:
                 raise Busy("backend busy, queue full", retry)
             need = (self._waiting + 2) * gen_s
+            switch = self._current is not None and not same_model(model, self._current)
             if switch:
                 need += _env_ms("ECHO_LOAD_MS") / 1000
-            # Remaining load of the request already in flight (F5).
-            need += max(0.0, self._ready_at - time.monotonic())
             if need > get_settings().backend_timeout_s * TIMEOUT_SHARE:
                 reason = "a model switch" if switch else "a queued request"
                 raise Busy(f"backend busy, {reason} would time out", retry)
@@ -183,7 +143,6 @@ class EchoBackend(Backend):
                     "id": m,
                     "default": m == default,
                     "loaded": same_model(m, loaded) and not loading,
-                    "state": self._state(m, loaded, loading),
                 }
                 if delay_ms > 0:
                     entry["avg_latency_ms"] = delay_ms
@@ -191,25 +150,11 @@ class EchoBackend(Backend):
             out["models"] = entries
         return out
 
-    def _state(self, model: str, resident: str, loading: bool) -> str:
-        if not same_model(model, resident):
-            return "cold"
-        if loading or model_key(model) not in self._warm:
-            return "loading"
-        return "warm"
-
-    async def health_snapshot(self) -> dict[str, Any]:
-        data = await self.info()
-        return {"degraded": False, "models": data.get("models")}
-
     async def _admit(self, model: str, default: str, delay_ms: int) -> None:
         """Simulated cold start, with the Ollama backend's fast-503 / wait rule."""
         now = time.monotonic()
         switch = not same_model(model, self._loaded_model(default))
         remaining = _env_ms("ECHO_LOAD_MS") / 1000 if switch else max(0.0, self._ready_at - now)
-        if switch:
-            # A new residency is not warm until this suggest finishes.
-            self._warm.discard(model_key(model))
         if remaining <= 0:
             if switch:
                 self._loaded = model
@@ -233,9 +178,7 @@ class EchoBackend(Backend):
         await self._take_turn(model, delay_ms)
         try:
             await self._admit(model, default, delay_ms)
-            out = await self._answer(image_bytes, mime, context, mode, delay_ms, model)
-            self._warm.add(model_key(model))
-            return out
+            return await self._answer(image_bytes, mime, context, mode, delay_ms, model)
         finally:
             self._in_flight -= 1
 
@@ -261,7 +204,7 @@ class EchoBackend(Backend):
         digest = hashlib.sha256(image_bytes).hexdigest()[:8]
         categories = [c for c in context.get("categories", []) if c.strip()]
         tags = [t for t in context.get("tags", []) if t.strip()][:3] or DEFAULT_TAGS
-        out: dict[str, Any] = {
+        return {
             "name": {"value": f"Echo item {digest}", "confidence": 0.5},
             "category": {"value": categories[0] if categories else "Misc", "confidence": 0.5},
             "tags": [{"value": t, "confidence": 0.5} for t in tags],
@@ -271,5 +214,3 @@ class EchoBackend(Backend):
             },
             "model_used": model,
         }
-        out.update(_identity_raw())
-        return out

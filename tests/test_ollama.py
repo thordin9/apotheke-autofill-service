@@ -24,7 +24,6 @@ from app.backends.ollama import (
     suggestion_from_text,
     truncate_for_log,
 )
-from app.identity import clean_identity, identity_fields, redact_for_log
 
 LOGGER = "app.backends.ollama"
 IMAGE = b"\xff\xd8\xff\xe0" + bytes(range(256)) * 4  # distinctive base64
@@ -98,11 +97,10 @@ def test_context_in_prompt_and_exact_spelling(oclient, fake):
     r = post_image(oclient(), context=json.dumps(ctx))
     body = assert_contract(r, "/v1/suggest", "post")
     prompt = fake.chats()[-1]["messages"][0]["content"]
-    assert prompt == build_prompt(ctx)
-    assert "de-DE" in prompt and "prefer:" not in prompt
+    assert "one of: Tools, Kitchen" in prompt and "prefer: Bosch" in prompt
+    assert "de-DE" in prompt
     schema = fake.chats()[-1]["format"]
-    assert schema == build_schema(ctx)
-    assert "brand" in schema["required"]
+    assert schema["properties"]["category"]["enum"] == ["Tools", "Kitchen"]
     assert body["category"]["value"] == "Tools"  # model said "tools"
     assert body["tags"][0]["value"] == "Bosch"
 
@@ -166,77 +164,6 @@ def test_good_output_not_logged_by_default(oclient, fake, caplog):
     caplog.set_level(logging.DEBUG, logger=LOGGER)
     assert post_image(oclient()).status_code == 200
     assert not [r for r in caplog.records if r.name == LOGGER]
-
-
-def test_identity_fields_trim_cap_and_aliases():
-    raw = {
-        "name": "drill",
-        "brand": "  Makita  ",
-        "modelNumber": {"value": "  DHP453  ", "confidence": 0.4},
-        "serialNumber": None,
-    }
-    assert identity_fields(raw) == {
-        "brand": "Makita",
-        "model_number": "DHP453",
-        "serial_number": "",
-    }
-    assert clean_identity("n/a") == ""
-    assert clean_identity("  " + ("x" * 300)) == "x" * 128
-    weird = '\x01עברית\u200f🔧"q"'
-    assert clean_identity(f"  {weird}  ") == weird
-    out = clamp(
-        {
-            "name": "drill",
-            "category": "Tools",
-            "description": "a cordless drill on the bench",
-            "tags": ["drill"],
-            "manufacturer": {"value": " Makita "},
-            "model": "DHP453",
-            "serial_no": "  SN-1  ",
-        },
-        {},
-    )
-    assert out["brand"] == "Makita"
-    assert out["model_number"] == "DHP453"
-    assert out["serial_number"] == "SN-1"
-
-
-def test_identity_values_are_redacted_in_raw_logs(oclient, fake, caplog):
-    caplog.set_level(logging.DEBUG, logger=LOGGER)
-    secret_brand = "BoschSecret"
-    secret_model = "GSB-18V-99"
-    secret_serial = "SN-99881-KEEP-OUT"
-    fake.chat_content = json.dumps(
-        {
-            "name": {"value": "Cordless drill", "confidence": 0.8},
-            "category": {"value": "Tools", "confidence": 0.9},
-            "tags": ["drill"],
-            "description": {"value": "A red cordless drill", "confidence": 0.7},
-            "confidence": 0.8,
-            "brand": secret_brand,
-            "model_number": {"value": secret_model},
-            "serial_number": secret_serial,
-        }
-    )
-    c = oclient(OLLAMA_LOG_RAW="1")
-    body = post_image(c).json()
-    assert body["brand"] == secret_brand
-    assert body["model_number"] == secret_model
-    assert body["serial_number"] == secret_serial
-    text = _log_text(caplog)
-    assert secret_brand not in text and secret_model not in text and secret_serial not in text
-    assert "[redacted]" in text and "Cordless drill" in text
-    # Unusable output is logged too, and still must not keep the values.
-    caplog.clear()
-    fake.chat_content = (
-        '{"name": "str", "brand": "' + secret_brand + '", "serial_number": "' + secret_serial + '"}'
-    )
-    assert post_image(oclient(OLLAMA_PLAIN_RETRY="0")).status_code == 503
-    text = _log_text(caplog)
-    assert secret_brand not in text and secret_serial not in text
-    assert "[redacted]" in text
-    raw = '{"brand": "Hidden", "note": "still here"} broken'
-    assert "Hidden" not in redact_for_log(raw) and "still here" in redact_for_log(raw)
 
 
 def test_log_raw_flag_logs_every_output_at_debug(oclient, fake, caplog):
@@ -314,25 +241,17 @@ def test_clamps_via_http(oclient, fake):
     assert len(body["tags"]) == MAX_TAGS
 
 
-def test_prompt_is_the_v3_lean_text():
+def test_prompt_without_context_has_defaults():
     p = build_prompt({})
-    assert "locale 'en'" in p and "prefer:" not in p
-    assert "exactly one of: General, Tools, Electronics, Kitchen, Documents, Hobby, " in p
-    assert "Clothing, Shoes, Books, Lighting" in p
-    assert "up to 3 short lowercase tags" in p
-    assert "under 12 words" in p
-    assert 'use "" for any of them you cannot read' in p
-    assert "brand, model_number, serial_number" in p
+    assert "locale 'en'" in p and "prefer:" not in p and "exactly one of" not in p
+
+
+def test_prompt_lists_categories_as_a_closed_choice():
+    p = build_prompt({"categories": ["Tools", " ", "Kitchen"], "tags": ["bosch"]})
+    assert "exactly one of: Tools, Kitchen)" in p
+    assert "prefer: bosch" in p
     assert "brand or a person's name" in p and "object only" in p
     assert len(p) < 800  # small models do better with short prompts
-
-
-def test_prompt_interpolates_only_the_locale():
-    plain = build_prompt({})
-    with_lists = build_prompt({"categories": ["Tools", "Kitchen"], "tags": ["bosch"]})
-    assert plain == with_lists
-    german = build_prompt({"locale": "de-DE"})
-    assert "locale 'de-DE'" in german and "locale 'en'" not in german
 
 
 @pytest.mark.parametrize("ctx", [{}, {"categories": ["Tools", "Kitchen"], "tags": ["bosch"]}])
@@ -342,37 +261,13 @@ def test_prompt_has_no_json_template_to_echo(ctx):
     assert "{" not in p and "..." not in p and '"name"' not in p
 
 
-def test_schema_is_the_v3_lean_schema():
+def test_schema_constrains_category_to_the_client_list():
     s = build_schema({"categories": ["Tools", " ", "Kitchen", "Tools"]})
-    assert s == build_schema({})
-    assert s["properties"]["category"]["enum"] == [
-        "General",
-        "Tools",
-        "Electronics",
-        "Kitchen",
-        "Documents",
-        "Hobby",
-        "Clothing",
-        "Shoes",
-        "Books",
-        "Lighting",
-    ]
-    assert s["properties"]["tags"]["maxItems"] == 3
-    assert s["properties"]["description"]["maxLength"] == 100
-    for key in ("brand", "model_number", "serial_number"):
-        assert s["properties"][key] == {"type": "string", "maxLength": 30}
-    assert set(s["required"]) == {
-        "name",
-        "category",
-        "tags",
-        "description",
-        "confidence",
-        "brand",
-        "model_number",
-        "serial_number",
-    }
+    assert s["properties"]["category"] == {"type": "string", "enum": ["Tools", "Kitchen"]}
+    assert set(s["required"]) == {"name", "category", "tags", "description", "confidence"}
     assert s["properties"]["name"]["minLength"] >= 2
     assert s["properties"]["description"]["minLength"] >= 10
+    assert "enum" not in build_schema({})["properties"]["category"]
 
 
 def test_json_format_modes(oclient, fake):
@@ -552,13 +447,7 @@ def test_canonical_key_wins_over_alias():
 
 def test_single_wrapper_object_is_unwrapped():
     out = clamp({"item": {"name": "Lamp", "category": "Lighting"}}, {})
-    assert out == {
-        "name": {"value": "Lamp"},
-        "category": {"value": "Lighting"},
-        "brand": "",
-        "model_number": "",
-        "serial_number": "",
-    }
+    assert out == {"name": {"value": "Lamp"}, "category": {"value": "Lighting"}}
 
 
 def test_schema_placeholders_are_dropped():

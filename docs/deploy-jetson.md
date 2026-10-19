@@ -191,8 +191,7 @@ only runs after 30 s, and the old container is already stopped by then. On the b
 Docker's health status and took 36 s from start to finish. With `/healthz` polled directly, later switches took
 8–10 s, which includes stopping the old container. The fast poll uses `curl` on the host (L4T has it). Without
 `curl`, or with `HEALTH_URL` set to empty, the script falls back to Docker's health status. `WAIT_S` counts
-wall-clock time, so a hanging `/healthz` (each poll times out after 3 s) can't stretch the wait.
-`/healthz` stays `200` until a model is resident. Once a warm model, or the loaded production model, has Ollama `size_vram` 0, it answers `503` `{"status":"degraded"}` so a CPU-only runner (Ollama started before CUDA) does not look healthy. `curl -fsS` then fails. It must be a
+wall-clock time, so a hanging `/healthz` (each poll times out after 3 s) can't stretch the wait. It must be a
 positive whole number of seconds with no leading zero and at most 6 digits (up to 999999); anything else (`abc`,
 `1.5`, `0`, a 7-digit or larger number) stops the script with a clear message before it touches any container.
 

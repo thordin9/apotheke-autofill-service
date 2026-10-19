@@ -96,5 +96,4 @@ def test_prompt_lists_no_example_tag_words():
     tag_line = next(line for line in prompt.splitlines() if line.startswith("tags"))
     assert "material" not in tag_line and "colour" not in tag_line
     assert "brand" not in tag_line
-    assert "prefer:" not in tag_line
-    assert "up to 3 short lowercase tags" in tag_line
+    assert "prefer: bosch, red" in tag_line

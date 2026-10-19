@@ -28,10 +28,6 @@ class FakeOllama:
         self.load_duration_ns = 0  # reported on every chat answer
         # GET /api/ps: models Ollama has in memory; None answers 404 (old Ollama).
         self.loaded: list[str] | None = ["moondream:latest"]
-        # size_vram bytes copied onto every /api/ps entry. None omits the field.
-        # size_vram_by_model overrides per name (None omits that entry's field).
-        self.size_vram: int | None = None
-        self.size_vram_by_model: dict[str, int | None] = {}
         # GET /api/tags: installed models; None answers 404.
         self.tags: list[str] | None = None
         # When set, loads and chats replace `loaded` with their model, like
@@ -51,17 +47,7 @@ class FakeOllama:
             def do_GET(self):
                 fake.requests.append((self.path, {}))
                 if self.path == "/api/ps" and fake.loaded is not None:
-                    entries = []
-                    for n in fake.loaded:
-                        entry: dict = {"name": n, "model": n}
-                        if n in fake.size_vram_by_model:
-                            vram = fake.size_vram_by_model[n]
-                        else:
-                            vram = fake.size_vram
-                        if vram is not None:
-                            entry["size_vram"] = vram
-                        entries.append(entry)
-                    body = {"models": entries}
+                    body = {"models": [{"name": n, "model": n} for n in fake.loaded]}
                     time.sleep(fake.ps_delay)
                     self._send(200, json.dumps(body).encode())
                 elif self.path == "/api/tags" and fake.tags is not None:
