@@ -97,6 +97,7 @@ paths:
         "401": {$ref: "#/components/responses/Unauthorized"}
         "413": {$ref: "#/components/responses/TooLarge"}
         "415": {$ref: "#/components/responses/UnsupportedType"}
+        "429": {$ref: "#/components/responses/RateLimited"}
         "503": {$ref: "#/components/responses/BackendUnavailable"}
         "504": {$ref: "#/components/responses/BackendTimeout"}
 components:
@@ -119,8 +120,16 @@ components:
           type: array
           uniqueItems: true
           items: {$ref: "#/components/schemas/Capability"}
-        backend: {type: string, examples: [echo, ollama]}
-        max_image_bytes: {type: integer, minimum: 1}
+        backend: {type: string, examples: [echo, ollama, cloudflare-workers]}
+        backend_used:
+          type: string
+          description: Worker only. Mirrors backend. Value cloudflare-workers.
+        max_image_bytes:
+          type: integer
+          minimum: 1
+          description: |
+            Python default 10485760 (MAX_IMAGE_BYTES). Worker default 3145728
+            (MAX_UPLOAD_BYTES), the whole request body, reported to Apotheke.
         ready:
           type: boolean
           description: false while the backend is still loading its model (suggest answers 503 + Retry-After)
@@ -256,7 +265,7 @@ components:
           properties:
             code:
               type: string
-              enum: [bad_request, unauthorized, payload_too_large, unsupported_media_type, backend_unavailable, backend_timeout, backend_error]
+              enum: [bad_request, unauthorized, payload_too_large, unsupported_media_type, rate_limited, backend_unavailable, backend_timeout, backend_error]
             message: {type: string}
   responses:
     BadRequest:
@@ -268,7 +277,15 @@ components:
         WWW-Authenticate: {schema: {type: string}}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     TooLarge:
-      description: Image exceeds MAX_IMAGE_BYTES (default 10 MiB), advertised as max_image_bytes
+      description: |
+        Python: image exceeds MAX_IMAGE_BYTES (default 10 MiB). Worker: the
+        request body exceeds MAX_UPLOAD_BYTES (default 3 MiB), or Workers AI
+        returned code 3006. Advertised as max_image_bytes.
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+    RateLimited:
+      description: Worker only. Per-location rate limit after auth. Retry-After is 60.
+      headers:
+        Retry-After: {schema: {type: integer}}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     UnsupportedType:
       description: Image bytes are not a supported format

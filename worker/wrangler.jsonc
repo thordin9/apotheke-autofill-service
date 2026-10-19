@@ -1,0 +1,64 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Account-specific values stay out of this file. Set the account with
+  // `wrangler login` or CLOUDFLARE_ACCOUNT_ID in the deployer's environment,
+  // never committed here. There is no KV namespace: the daily cap is the
+  // SQLite Durable Object below.
+  "name": "apotheke-autofill",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  // Plain vars so a deploy can lower the cap without a code change.
+  // AUTOFILL_TOKEN is not a var: `wrangler secret put AUTOFILL_TOKEN`.
+  // AUTOFILL_DAILY_REQUEST_CAP empty means no request cap.
+  "vars": {
+    "AUTOFILL_DAILY_NEURON_BUDGET": "6000",
+    "AUTOFILL_DAILY_REQUEST_CAP": "",
+    "MAX_UPLOAD_BYTES": "3145728"
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BUDGET",
+        "class_name": "Budget"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Budget"]
+    }
+  ],
+  // Abuse damping only. The Durable Object is the real daily cap.
+  // namespace_id is an integer you choose, unique among rate-limit bindings
+  // on the account (bindings that share one id share counters). It is not an
+  // account id. Period must be 10 or 60. Limit is per Cloudflare location and
+  // only loosely enforced; keep it in sync with RATE_LIMIT_PERIOD_S in src/index.ts.
+  "ratelimits": [
+    {
+      "name": "RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ]
+}

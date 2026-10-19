@@ -3,6 +3,32 @@
 All notable changes to this service. The HTTP contract is versioned
 separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
+## [2.0.0]
+
+### Added
+
+- **Cloudflare Worker (`worker/`).** Recommended deployment. Apotheke keeps
+  the same multipart `POST /v1/suggest`, `GET /v1/info`, and `GET /healthz`.
+  Set the base URL and the bearer token. `backend` and `backend_used` are
+  `cloudflare-workers`. Model `@cf/google/gemma-4-26b-a4b-it`, thinking off,
+  JSON schema, one repair call. Docker and Jetson remain legacy self-hosting.
+- Daily neuron cap in one SQLite Durable Object (default 6000, plain wrangler
+  var `AUTOFILL_DAILY_NEURON_BUDGET`). No KV. Optional
+  `AUTOFILL_DAILY_REQUEST_CAP`. Over the cap: `503` and `Retry-After` until
+  00:00 UTC. `/v1/info` adds `budget` (limit, used, remaining, `resets_at`)
+  and `max_image_bytes`.
+- Workers AI 3036 and 3040 map to that same `503`. 3006 maps to `413`.
+  Upstream text is not returned. A Durable Object error fails closed.
+- Upload cap is the whole body, `MAX_UPLOAD_BYTES` default **3145728 (3 MiB)**,
+  checked from `Content-Length` and then from bytes actually read (chunked
+  bodies included). The Python service stays at 10 MiB.
+- Per-IP rate limit (10 / 60 s, after auth, suggest only) returns `429`.
+  It is per location and loosely enforced. The Durable Object is the real cap.
+- Deploy guide: [docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
+  `wrangler deploy` with an account-scoped token (Workers Scripts Edit, plus
+  Workers AI Read). CI typechecks, runs Vitest with `env.AI` stubbed, and
+  `wrangler deploy --dry-run`. It does not deploy.
+
 ## [Unreleased]
 
 ### Fixed

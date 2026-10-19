@@ -1,5 +1,9 @@
 name: CI
 
+# Checkout, lint, tests, the history scan, and the Worker dry run only read the repo.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -30,6 +34,71 @@ jobs:
         env:
           BACKEND: echo
         run: pytest -q
+
+  gitleaks:
+    # Full history. The CLI needs no license. contents: read is enough.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks 8.28.0
+        run: |
+          set -euo pipefail
+          if [ "$(uname -m)" != "x86_64" ]; then
+            echo "pinned gitleaks build is linux x64; this runner is $(uname -m)" >&2
+            exit 1
+          fi
+          version=8.28.0
+          file="gitleaks_${version}_linux_x64.tar.gz"
+          sums="gitleaks_${version}_checksums.txt"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${version}"
+          # From the official gitleaks_8.28.0_checksums.txt (linux_x64 line).
+          expected="a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb"
+          tmp="$RUNNER_TEMP/gitleaks-install"
+          mkdir -p "$tmp"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$file" "$url/$file"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$sums" "$url/$sums"
+          grep -qxF "${expected}  ${file}" "$tmp/$sums"
+          echo "${expected}  $tmp/$file" | sha256sum -c -
+          tar -xzf "$tmp/$file" -C "$tmp" gitleaks
+          install -m 0755 "$tmp/gitleaks" "$RUNNER_TEMP/gitleaks"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          # GITHUB_PATH applies only to later steps.
+          "$RUNNER_TEMP/gitleaks" version
+
+      - name: Scan git history
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --exit-code 1
+
+      - name: Glued placeholder is still a finding
+        run: scripts/gitleaks-allowlist-fixture.sh
+
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Package dry run
+        run: npx wrangler deploy --dry-run
 
   deploy-scripts:
     # Jetson deploy scripts: shellcheck and the fake-docker harness (bash only; no Docker, network or root).
