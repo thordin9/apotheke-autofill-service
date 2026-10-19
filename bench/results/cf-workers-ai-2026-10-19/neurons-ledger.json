@@ -1,0 +1,1776 @@
+{
+ "note": "Neuron ledger for ITAdvisor's CF bench. neurons = usage tokens x CF per-model rates (pricing page 2026-10-19). Day = UTC (resets 00:00 UTC = 03:00 Athens). Cap is mine; team cap 8000/day.",
+ "cap_per_utc_day": 6000.0,
+ "days": {
+  "2026-10-19": {
+   "total": 3979.64,
+   "per_model": {
+    "@cf/google/gemma-4-26b-a4b-it": 563.379,
+    "@cf/qwen/qwen3.8-27b": 2987.506,
+    "@cf/mistralai/mistral-small-3.1-24b-instruct": 428.755
+   },
+   "calls": [
+    {
+     "ts": "2026-10-19T18:33:31+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "smoke",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 437,
+      "completion_tokens": 638,
+      "total_tokens": 1075,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 21.372726440429688
+     },
+     "neurons": 21.373
+    },
+    {
+     "ts": "2026-10-19T18:33:53+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "smoke",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 397,
+      "completion_tokens": 338,
+      "total_tokens": 735,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 114.56817626953125
+     },
+     "neurons": 114.568
+    },
+    {
+     "ts": "2026-10-19T18:34:03+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "smoke",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 431,
+      "completion_tokens": 97,
+      "total_tokens": 528,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 18.635892868041992
+     },
+     "neurons": 18.636
+    },
+    {
+     "ts": "2026-10-19T18:34:06+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "smoke-repair",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 559,
+      "completion_tokens": 97,
+      "total_tokens": 656,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 22.716022491455078
+     },
+     "neurons": 22.716
+    },
+    {
+     "ts": "2026-10-19T18:34:26+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "smoke",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 431,
+      "completion_tokens": 101,
+      "total_tokens": 532,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 18.837844848632812
+     },
+     "neurons": 18.838
+    },
+    {
+     "ts": "2026-10-19T18:34:40+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "smoke",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 434,
+      "completion_tokens": 112,
+      "total_tokens": 546,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 7
+     },
+     "neurons": 7
+    },
+    {
+     "ts": "2026-10-19T18:34:59+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "smoke",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 369,
+      "completion_tokens": 107,
+      "total_tokens": 476,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 46.22272491455078
+     },
+     "neurons": 46.223
+    },
+    {
+     "ts": "2026-10-19T18:35:22+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "casio_fx991ex.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 443,
+      "completion_tokens": 516,
+      "total_tokens": 959,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 18.100000381469727
+     },
+     "neurons": 18.1
+    },
+    {
+     "ts": "2026-10-19T18:35:31+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "cordless_drill.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 429,
+      "completion_tokens": 430,
+      "total_tokens": 859,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 15.627272605895996
+     },
+     "neurons": 15.627
+    },
+    {
+     "ts": "2026-10-19T18:35:43+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "desk_lamp.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 437,
+      "completion_tokens": 406,
+      "total_tokens": 843,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 15.045454025268555
+     },
+     "neurons": 15.045
+    },
+    {
+     "ts": "2026-10-19T18:35:56+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "fluke45_multimeter.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 443,
+      "completion_tokens": 619,
+      "total_tokens": 1062,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 20.90909194946289
+     },
+     "neurons": 20.909
+    },
+    {
+     "ts": "2026-10-19T18:36:03+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "hammer.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 441,
+      "completion_tokens": 546,
+      "total_tokens": 987,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 18.899999618530273
+     },
+     "neurons": 18.9
+    },
+    {
+     "ts": "2026-10-19T18:36:10+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "headphones.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 443,
+      "completion_tokens": 367,
+      "total_tokens": 810,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 14.03636360168457
+     },
+     "neurons": 14.036
+    },
+    {
+     "ts": "2026-10-19T18:36:17+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "ibuprofen_al400_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 449,
+      "completion_tokens": 857,
+      "total_tokens": 1306,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 27.454544067382812
+     },
+     "neurons": 27.455
+    },
+    {
+     "ts": "2026-10-19T18:36:24+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "kitchen_knife.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 452,
+      "completion_tokens": 366,
+      "total_tokens": 818,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 14.090909004211426
+     },
+     "neurons": 14.091
+    },
+    {
+     "ts": "2026-10-19T18:36:35+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "laptop.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 449,
+      "completion_tokens": 770,
+      "total_tokens": 1219,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 25.081817626953125
+     },
+     "neurons": 25.082
+    },
+    {
+     "ts": "2026-10-19T18:36:42+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "makita_drill_dhp453.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 437,
+      "completion_tokens": 799,
+      "total_tokens": 1236,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 25.763635635375977
+     },
+     "neurons": 25.764
+    },
+    {
+     "ts": "2026-10-19T18:36:53+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "osram_lamp_box.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 443,
+      "completion_tokens": 558,
+      "total_tokens": 1001,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.245454788208008
+     },
+     "neurons": 19.245
+    },
+    {
+     "ts": "2026-10-19T18:37:11+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "panadol_500_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 443,
+      "completion_tokens": 803,
+      "total_tokens": 1246,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 25.92727279663086
+     },
+     "neurons": 25.927
+    },
+    {
+     "ts": "2026-10-19T18:37:31+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "panasonic_vcr_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 453,
+      "completion_tokens": 1024,
+      "total_tokens": 1477,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 32.04545593261719
+     },
+     "neurons": 32.045
+    },
+    {
+     "ts": "2026-10-19T18:37:52+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "panasonic_vcr_label.jpg",
+     "kind": "run-repair",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 492,
+      "completion_tokens": 846,
+      "total_tokens": 1338,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 27.545454025268555
+     },
+     "neurons": 27.545
+    },
+    {
+     "ts": "2026-10-19T18:38:00+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "paperback_book.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 443,
+      "completion_tokens": 367,
+      "total_tokens": 810,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 14.03636360168457
+     },
+     "neurons": 14.036
+    },
+    {
+     "ts": "2026-10-19T18:38:15+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "raspberry_pi4.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 437,
+      "completion_tokens": 685,
+      "total_tokens": 1122,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 22.654544830322266
+     },
+     "neurons": 22.655
+    },
+    {
+     "ts": "2026-10-19T18:38:25+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "sneakers.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 443,
+      "completion_tokens": 507,
+      "total_tokens": 950,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 17.85454559326172
+     },
+     "neurons": 17.855
+    },
+    {
+     "ts": "2026-10-19T18:38:37+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 437,
+      "completion_tokens": 604,
+      "total_tokens": 1041,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 20.445453643798828
+     },
+     "neurons": 20.445
+    },
+    {
+     "ts": "2026-10-19T18:38:59+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "t-shirt.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 433,
+      "completion_tokens": 800,
+      "total_tokens": 1233,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 25.754545211791992
+     },
+     "neurons": 25.755
+    },
+    {
+     "ts": "2026-10-19T18:39:09+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "tefal_kettle.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 433,
+      "completion_tokens": 363,
+      "total_tokens": 796,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 13.836362838745117
+     },
+     "neurons": 13.836
+    },
+    {
+     "ts": "2026-10-19T18:39:12+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "casio_fx991ex.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 440,
+      "completion_tokens": 100,
+      "total_tokens": 540,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.7272725105285645
+     },
+     "neurons": 6.727
+    },
+    {
+     "ts": "2026-10-19T18:39:15+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "cordless_drill.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 426,
+      "completion_tokens": 95,
+      "total_tokens": 521,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.46363639831543
+     },
+     "neurons": 6.464
+    },
+    {
+     "ts": "2026-10-19T18:39:17+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "desk_lamp.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 434,
+      "completion_tokens": 63,
+      "total_tokens": 497,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 5.663636207580566
+     },
+     "neurons": 5.664
+    },
+    {
+     "ts": "2026-10-19T18:39:18+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "fluke45_multimeter.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 440,
+      "completion_tokens": 100,
+      "total_tokens": 540,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.7272725105285645
+     },
+     "neurons": 6.727
+    },
+    {
+     "ts": "2026-10-19T18:39:19+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "hammer.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 438,
+      "completion_tokens": 66,
+      "total_tokens": 504,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 5.78181791305542
+     },
+     "neurons": 5.782
+    },
+    {
+     "ts": "2026-10-19T18:39:20+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "headphones.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 440,
+      "completion_tokens": 93,
+      "total_tokens": 533,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.53636360168457
+     },
+     "neurons": 6.536
+    },
+    {
+     "ts": "2026-10-19T18:39:22+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "ibuprofen_al400_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 446,
+      "completion_tokens": 102,
+      "total_tokens": 548,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.836363792419434
+     },
+     "neurons": 6.836
+    },
+    {
+     "ts": "2026-10-19T18:39:24+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "kitchen_knife.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 449,
+      "completion_tokens": 68,
+      "total_tokens": 517,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 5.936363697052002
+     },
+     "neurons": 5.936
+    },
+    {
+     "ts": "2026-10-19T18:39:27+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "laptop.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 446,
+      "completion_tokens": 94,
+      "total_tokens": 540,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.6181817054748535
+     },
+     "neurons": 6.618
+    },
+    {
+     "ts": "2026-10-19T18:39:29+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "makita_drill_dhp453.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 434,
+      "completion_tokens": 65,
+      "total_tokens": 499,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 5.718181610107422
+     },
+     "neurons": 5.718
+    },
+    {
+     "ts": "2026-10-19T18:39:31+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "osram_lamp_box.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 440,
+      "completion_tokens": 96,
+      "total_tokens": 536,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.618181228637695
+     },
+     "neurons": 6.618
+    },
+    {
+     "ts": "2026-10-19T18:39:34+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "panadol_500_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 440,
+      "completion_tokens": 69,
+      "total_tokens": 509,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 5.881817817687988
+     },
+     "neurons": 5.882
+    },
+    {
+     "ts": "2026-10-19T18:39:37+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "panasonic_vcr_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 450,
+      "completion_tokens": 86,
+      "total_tokens": 536,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.436363220214844
+     },
+     "neurons": 6.436
+    },
+    {
+     "ts": "2026-10-19T18:39:47+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "paperback_book.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 440,
+      "completion_tokens": 65,
+      "total_tokens": 505,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 5.772727012634277
+     },
+     "neurons": 5.773
+    },
+    {
+     "ts": "2026-10-19T18:39:51+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "raspberry_pi4.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 434,
+      "completion_tokens": 77,
+      "total_tokens": 511,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.045454025268555
+     },
+     "neurons": 6.045
+    },
+    {
+     "ts": "2026-10-19T18:39:55+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "sneakers.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 440,
+      "completion_tokens": 96,
+      "total_tokens": 536,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.618181228637695
+     },
+     "neurons": 6.618
+    },
+    {
+     "ts": "2026-10-19T18:39:58+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 434,
+      "completion_tokens": 112,
+      "total_tokens": 546,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 7
+     },
+     "neurons": 7
+    },
+    {
+     "ts": "2026-10-19T18:40:00+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "t-shirt.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 430,
+      "completion_tokens": 99,
+      "total_tokens": 529,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.609090805053711
+     },
+     "neurons": 6.609
+    },
+    {
+     "ts": "2026-10-19T18:40:02+00:00",
+     "model": "@cf/google/gemma-4-26b-a4b-it",
+     "photo": "tefal_kettle.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 430,
+      "completion_tokens": 101,
+      "total_tokens": 531,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 6.663636207580566
+     },
+     "neurons": 6.664
+    },
+    {
+     "ts": "2026-10-19T18:40:08+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "casio_fx991ex.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 478,
+      "completion_tokens": 88,
+      "total_tokens": 566,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.679672241210938
+     },
+     "neurons": 19.68
+    },
+    {
+     "ts": "2026-10-19T18:40:12+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "cordless_drill.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 494,
+      "completion_tokens": 86,
+      "total_tokens": 580,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 20.088712692260742
+     },
+     "neurons": 20.089
+    },
+    {
+     "ts": "2026-10-19T18:40:15+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "desk_lamp.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 452,
+      "completion_tokens": 76,
+      "total_tokens": 528,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 18.245040893554688
+     },
+     "neurons": 18.245
+    },
+    {
+     "ts": "2026-10-19T18:40:21+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "fluke45_multimeter.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 473,
+      "completion_tokens": 91,
+      "total_tokens": 564,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.671756744384766
+     },
+     "neurons": 19.672
+    },
+    {
+     "ts": "2026-10-19T18:40:24+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "hammer.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 368,
+      "completion_tokens": 74,
+      "total_tokens": 442,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 15.466480255126953
+     },
+     "neurons": 15.466
+    },
+    {
+     "ts": "2026-10-19T18:40:28+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "headphones.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 473,
+      "completion_tokens": 80,
+      "total_tokens": 553,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.11638832092285
+     },
+     "neurons": 19.116
+    },
+    {
+     "ts": "2026-10-19T18:40:32+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "ibuprofen_al400_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 557,
+      "completion_tokens": 85,
+      "total_tokens": 642,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 22.04641342163086
+     },
+     "neurons": 22.046
+    },
+    {
+     "ts": "2026-10-19T18:40:37+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "kitchen_knife.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 347,
+      "completion_tokens": 82,
+      "total_tokens": 429,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 15.20098876953125
+     },
+     "neurons": 15.201
+    },
+    {
+     "ts": "2026-10-19T18:40:41+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "laptop.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 557,
+      "completion_tokens": 80,
+      "total_tokens": 637,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 21.79397201538086
+     },
+     "neurons": 21.794
+    },
+    {
+     "ts": "2026-10-19T18:40:44+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "makita_drill_dhp453.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 452,
+      "completion_tokens": 89,
+      "total_tokens": 541,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 18.901384353637695
+     },
+     "neurons": 18.901
+    },
+    {
+     "ts": "2026-10-19T18:40:48+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "osram_lamp_box.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 478,
+      "completion_tokens": 79,
+      "total_tokens": 557,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.22528076171875
+     },
+     "neurons": 19.225
+    },
+    {
+     "ts": "2026-10-19T18:40:51+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "panadol_500_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 473,
+      "completion_tokens": 86,
+      "total_tokens": 559,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.4193172454834
+     },
+     "neurons": 19.419
+    },
+    {
+     "ts": "2026-10-19T18:40:57+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "panasonic_vcr_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 389,
+      "completion_tokens": 102,
+      "total_tokens": 491,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 17.549541473388672
+     },
+     "neurons": 17.55
+    },
+    {
+     "ts": "2026-10-19T18:41:02+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "paperback_book.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 473,
+      "completion_tokens": 78,
+      "total_tokens": 551,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.015413284301758
+     },
+     "neurons": 19.015
+    },
+    {
+     "ts": "2026-10-19T18:41:06+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "raspberry_pi4.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 452,
+      "completion_tokens": 106,
+      "total_tokens": 558,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.759679794311523
+     },
+     "neurons": 19.76
+    },
+    {
+     "ts": "2026-10-19T18:41:10+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "sneakers.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 473,
+      "completion_tokens": 88,
+      "total_tokens": 561,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 19.520292282104492
+     },
+     "neurons": 19.52
+    },
+    {
+     "ts": "2026-10-19T18:41:15+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 431,
+      "completion_tokens": 101,
+      "total_tokens": 532,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 18.837844848632812
+     },
+     "neurons": 18.838
+    },
+    {
+     "ts": "2026-10-19T18:41:19+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "t-shirt.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 578,
+      "completion_tokens": 77,
+      "total_tokens": 655,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 22.311904907226562
+     },
+     "neurons": 22.312
+    },
+    {
+     "ts": "2026-10-19T18:41:24+00:00",
+     "model": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+     "photo": "tefal_kettle.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 578,
+      "completion_tokens": 85,
+      "total_tokens": 663,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 22.715808868408203
+     },
+     "neurons": 22.716
+    },
+    {
+     "ts": "2026-10-19T18:41:26+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "casio_fx991ex.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 405,
+      "completion_tokens": 102,
+      "total_tokens": 507,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 46.24090576171875
+     },
+     "neurons": 46.241
+    },
+    {
+     "ts": "2026-10-19T18:41:29+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "cordless_drill.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 423,
+      "completion_tokens": 101,
+      "total_tokens": 524,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 46.686363220214844
+     },
+     "neurons": 46.686
+    },
+    {
+     "ts": "2026-10-19T18:41:31+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "desk_lamp.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 387,
+      "completion_tokens": 86,
+      "total_tokens": 473,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 40.849998474121094
+     },
+     "neurons": 40.85
+    },
+    {
+     "ts": "2026-10-19T18:41:34+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "fluke45_multimeter.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 405,
+      "completion_tokens": 102,
+      "total_tokens": 507,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 46.24090576171875
+     },
+     "neurons": 46.241
+    },
+    {
+     "ts": "2026-10-19T18:41:36+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "hammer.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 315,
+      "completion_tokens": 88,
+      "total_tokens": 403,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 38.48636245727539
+     },
+     "neurons": 38.486
+    },
+    {
+     "ts": "2026-10-19T18:41:56+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "headphones.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 405,
+      "completion_tokens": 88,
+      "total_tokens": 493,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 42.168182373046875
+     },
+     "neurons": 42.168
+    },
+    {
+     "ts": "2026-10-19T18:42:00+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "ibuprofen_al400_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 459,
+      "completion_tokens": 106,
+      "total_tokens": 565,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 49.61363220214844
+     },
+     "neurons": 49.614
+    },
+    {
+     "ts": "2026-10-19T18:42:12+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "kitchen_knife.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 315,
+      "completion_tokens": 87,
+      "total_tokens": 402,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 38.19545364379883
+     },
+     "neurons": 38.195
+    },
+    {
+     "ts": "2026-10-19T18:42:37+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "laptop.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 459,
+      "completion_tokens": 92,
+      "total_tokens": 551,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 45.54090881347656
+     },
+     "neurons": 45.541
+    },
+    {
+     "ts": "2026-10-19T18:42:40+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "makita_drill_dhp453.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 387,
+      "completion_tokens": 103,
+      "total_tokens": 490,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 45.79545211791992
+     },
+     "neurons": 45.795
+    },
+    {
+     "ts": "2026-10-19T18:42:42+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "osram_lamp_box.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 387,
+      "completion_tokens": 101,
+      "total_tokens": 488,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 45.2136344909668
+     },
+     "neurons": 45.214
+    },
+    {
+     "ts": "2026-10-19T18:43:31+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "panadol_500_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 405,
+      "completion_tokens": 93,
+      "total_tokens": 498,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 43.62272644042969
+     },
+     "neurons": 43.623
+    },
+    {
+     "ts": "2026-10-19T18:43:34+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "panasonic_vcr_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 333,
+      "completion_tokens": 134,
+      "total_tokens": 467,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 52.60454177856445
+     },
+     "neurons": 52.605
+    },
+    {
+     "ts": "2026-10-19T18:43:58+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "paperback_book.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 405,
+      "completion_tokens": 85,
+      "total_tokens": 490,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 41.29545593261719
+     },
+     "neurons": 41.295
+    },
+    {
+     "ts": "2026-10-19T18:44:01+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "raspberry_pi4.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 387,
+      "completion_tokens": 98,
+      "total_tokens": 485,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 44.34090805053711
+     },
+     "neurons": 44.341
+    },
+    {
+     "ts": "2026-10-19T18:44:14+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "sneakers.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 405,
+      "completion_tokens": 97,
+      "total_tokens": 502,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 44.78636169433594
+     },
+     "neurons": 44.786
+    },
+    {
+     "ts": "2026-10-19T18:44:17+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 369,
+      "completion_tokens": 107,
+      "total_tokens": 476,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 46.22272491455078
+     },
+     "neurons": 46.223
+    },
+    {
+     "ts": "2026-10-19T18:44:20+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "t-shirt.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 495,
+      "completion_tokens": 96,
+      "total_tokens": 591,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 48.17727279663086
+     },
+     "neurons": 48.177
+    },
+    {
+     "ts": "2026-10-19T18:44:23+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "tefal_kettle.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 495,
+      "completion_tokens": 92,
+      "total_tokens": 587,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 47.013633728027344
+     },
+     "neurons": 47.014
+    },
+    {
+     "ts": "2026-10-19T18:44:49+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "casio_fx991ex.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 433,
+      "completion_tokens": 208,
+      "total_tokens": 641,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 78.22272491455078
+     },
+     "neurons": 78.223
+    },
+    {
+     "ts": "2026-10-19T18:45:45+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "cordless_drill.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 451,
+      "completion_tokens": 315,
+      "total_tokens": 766,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 110.08635711669922
+     },
+     "neurons": 110.086
+    },
+    {
+     "ts": "2026-10-19T18:45:51+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "desk_lamp.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 415,
+      "completion_tokens": 242,
+      "total_tokens": 657,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 87.37727355957031
+     },
+     "neurons": 87.377
+    },
+    {
+     "ts": "2026-10-19T18:45:58+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "fluke45_multimeter.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 433,
+      "completion_tokens": 338,
+      "total_tokens": 771,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 116.04090881347656
+     },
+     "neurons": 116.041
+    },
+    {
+     "ts": "2026-10-19T18:46:03+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "hammer.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 343,
+      "completion_tokens": 193,
+      "total_tokens": 536,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 70.1772689819336
+     },
+     "neurons": 70.177
+    },
+    {
+     "ts": "2026-10-19T18:46:38+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "headphones.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 433,
+      "completion_tokens": 212,
+      "total_tokens": 645,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 79.38636016845703
+     },
+     "neurons": 79.386
+    },
+    {
+     "ts": "2026-10-19T18:46:46+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "ibuprofen_al400_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 487,
+      "completion_tokens": 396,
+      "total_tokens": 883,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 135.1227264404297
+     },
+     "neurons": 135.123
+    },
+    {
+     "ts": "2026-10-19T18:46:53+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "kitchen_knife.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 343,
+      "completion_tokens": 335,
+      "total_tokens": 678,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 111.48635864257812
+     },
+     "neurons": 111.486
+    },
+    {
+     "ts": "2026-10-19T18:47:00+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "laptop.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 487,
+      "completion_tokens": 224,
+      "total_tokens": 711,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 85.08636474609375
+     },
+     "neurons": 85.086
+    },
+    {
+     "ts": "2026-10-19T18:47:16+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "makita_drill_dhp453.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 415,
+      "completion_tokens": 317,
+      "total_tokens": 732,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 109.19544982910156
+     },
+     "neurons": 109.195
+    },
+    {
+     "ts": "2026-10-19T18:48:05+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "osram_lamp_box.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 415,
+      "completion_tokens": 235,
+      "total_tokens": 650,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 85.34090423583984
+     },
+     "neurons": 85.341
+    },
+    {
+     "ts": "2026-10-19T18:48:12+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "panadol_500_pack.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 433,
+      "completion_tokens": 303,
+      "total_tokens": 736,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 105.85909271240234
+     },
+     "neurons": 105.859
+    },
+    {
+     "ts": "2026-10-19T18:48:47+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "panasonic_vcr_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 361,
+      "completion_tokens": 404,
+      "total_tokens": 765,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 132.29544067382812
+     },
+     "neurons": 132.295
+    },
+    {
+     "ts": "2026-10-19T18:50:47+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "paperback_book.jpg",
+     "kind": "run",
+     "status": 408,
+     "usage": null,
+     "neurons": 0.0
+    },
+    {
+     "ts": "2026-10-19T18:51:06+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "raspberry_pi4.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 415,
+      "completion_tokens": 419,
+      "total_tokens": 834,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 138.86817932128906
+     },
+     "neurons": 138.868
+    },
+    {
+     "ts": "2026-10-19T18:51:22+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "sneakers.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 433,
+      "completion_tokens": 325,
+      "total_tokens": 758,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 112.25908660888672
+     },
+     "neurons": 112.259
+    },
+    {
+     "ts": "2026-10-19T18:51:47+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "sony_cd_player_label.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 397,
+      "completion_tokens": 339,
+      "total_tokens": 736,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 114.85908508300781
+     },
+     "neurons": 114.859
+    },
+    {
+     "ts": "2026-10-19T18:51:56+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "t-shirt.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 523,
+      "completion_tokens": 423,
+      "total_tokens": 946,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 144.4499969482422
+     },
+     "neurons": 144.45
+    },
+    {
+     "ts": "2026-10-19T18:52:00+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "tefal_kettle.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 523,
+      "completion_tokens": 189,
+      "total_tokens": 712,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 76.37727355957031
+     },
+     "neurons": 76.377
+    },
+    {
+     "ts": "2026-10-19T18:52:36+00:00",
+     "model": "@cf/qwen/qwen3.8-27b",
+     "photo": "paperback_book.jpg",
+     "kind": "run",
+     "status": 200,
+     "usage": {
+      "prompt_tokens": 433,
+      "completion_tokens": 218,
+      "total_tokens": 651,
+      "prompt_tokens_details": {
+       "cached_tokens": 0
+      },
+      "neurons": 81.1318130493164
+     },
+     "neurons": 81.132
+    }
+   ]
+  }
+ }
+}

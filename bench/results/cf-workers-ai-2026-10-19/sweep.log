@@ -1,0 +1,182 @@
+cf-gemma4-26b-560 sony_cd_player_label.jpg 26.499 json1 True schema1 True rep False final True N 21.373 err None
+CONTENT: {
+  "brand": "SONY",
+  "category": "Electronics",
+  "confidence": 1.0,
+  "description": "Label on a compact disc player showing model and serial numbers.",
+  "model_number": "CDP-CE525",
+  "name": "compact disc player",
+  "serial_number": "5104890",
+  "tags": [
+    "audio",
+    "disc player",
+    "electronics"
+  ]
+} 
+USAGE: {'prompt_tokens': 437, 'completion_tokens': 638, 'total_tokens': 1075, 'prompt_tokens_details': {'cached_tokens': 0}, 'neurons': 21.372726440429688} finish stop reasoning_chars 1567 keys ['choices', 'created', 'id', 'model', 'object', 'usage']
+cf-qwen3.8-27b-560 sony_cd_player_label.jpg 12.354 json1 True schema1 True rep False final True N 114.568 err None
+CONTENT: {
+  "name": "compact disc player",
+  "category": "Electronics",
+  "tags": ["cd player", "audio", "electronics"],
+  "description": "Black compact disc player rear label showing model and serial details.",
+  "confidence": 0.95,
+  "brand": "SONY",
+  "model_number": "CDP-CE525",
+  "serial_number": "5104890"
+} 
+USAGE: {'prompt_tokens': 397, 'completion_tokens': 338, 'total_tokens': 735, 'prompt_tokens_details': {'cached_tokens': 0}, 'neurons': 114.56817626953125} finish stop reasoning_chars 821 keys ['choices', 'created', 'ec_transfer_params', 'id', 'kv_transfer_params', 'metrics', 'model', 'object', 'prompt_logprobs', 'prompt_text', 'prompt_token_ids', 'service_tier', 'usage']
+cf-mistral-small-3.1-560 sony_cd_player_label.jpg 3.327 json1 False schema1 False rep True final False N 41.352 err None
+CONTENT: ```json
+{
+  "name": "Compact Disc Player",
+  "category": "Electronics",
+  "tags": ["audio", "sony", "cd"],
+  "description": "A device for playing compact discs.",
+  "confidence": 0.99,
+  "brand": "SONY",
+  "model_number": "CDP-CE525",
+  "serial_number": "5104890"
+}
+``` 
+USAGE: {'prompt_tokens': 431, 'completion_tokens': 97, 'total_tokens': 528, 'prompt_tokens_details': {'cached_tokens': 0}, 'neurons': 18.635892868041992} finish stop reasoning_chars 0 keys ['choices', 'created', 'id', 'kv_transfer_params', 'model', 'object', 'prompt_logprobs', 'prompt_token_ids', 'response', 'service_tier', 'system_fingerprint', 'tool_calls', 'usage']
+cf-mistral-small-3.1-560 sony_cd_player_label.jpg 4.084 json1 True schema1 True rep False final True N 18.838 err None
+CONTENT: {
+  "brand": "SONY",
+  "category": "Electronics",
+  "confidence": 0.98,
+  "description": "Compact disc player with technical specifications.",
+  "model_number": "CDP-CE525",
+  "name": "Compact Disc Player",
+  "serial_number": "5104890",
+  "tags": [
+    "cd player",
+    "sony",
+    "electronics"
+  ]
+} 
+USAGE: {'prompt_tokens': 431, 'completion_tokens': 101, 'total_tokens': 532, 'prompt_tokens_details': {'cached_tokens': 0}, 'neurons': 18.837844848632812} finish stop reasoning_chars 0 keys ['choices', 'created', 'id', 'kv_transfer_params', 'model', 'object', 'prompt_logprobs', 'prompt_token_ids', 'response', 'service_tier', 'system_fingerprint', 'tool_calls', 'usage']
+cf-gemma4-26b-nothink-560 sony_cd_player_label.jpg 2.459 json1 True schema1 True rep False final True N 7 err None
+CONTENT: {
+  "brand": "SONY",
+  "category": "Electronics",
+  "confidence": 1,
+  "description": "A label on a compact disc player showing technical specifications.",
+  "model_number": "CDP-CE525",
+  "name": "compact disc player",
+  "serial_number": "5104890",
+  "tags": [
+    "label",
+    "electronics",
+    "specification"
+  ]
+} 
+USAGE: {'prompt_tokens': 434, 'completion_tokens': 112, 'total_tokens': 546, 'prompt_tokens_details': {'cached_tokens': 0}, 'neurons': 7} finish stop reasoning_chars 0 keys ['choices', 'created', 'id', 'model', 'object', 'usage']
+cf-qwen3.8-27b-nothink-560 sony_cd_player_label.jpg 8.391 json1 True schema1 True rep False final True N 46.223 err None
+CONTENT: {
+  "name": "compact disc player",
+  "category": "Electronics",
+  "tags": ["cd player", "audio", "electronics"],
+  "description": "A black compact disc player with a specification label on its rear panel.",
+  "confidence": 1.0,
+  "brand": "SONY",
+  "model_number": "CDP-CE525",
+  "serial_number": "5104890"
+} 
+USAGE: {'prompt_tokens': 369, 'completion_tokens': 107, 'total_tokens': 476, 'prompt_tokens_details': {'cached_tokens': 0}, 'neurons': 46.22272491455078} finish stop reasoning_chars 0 keys ['choices', 'created', 'ec_transfer_params', 'id', 'kv_transfer_params', 'metrics', 'model', 'object', 'prompt_logprobs', 'prompt_text', 'prompt_token_ids', 'service_tier', 'usage']
+cf-gemma4-26b-560 casio_fx991ex.jpg 12.229 json1 True schema1 True rep False final True N 18.1 err None
+cf-gemma4-26b-560 cordless_drill.jpg 9.299 json1 True schema1 True rep False final True N 15.627 err None
+cf-gemma4-26b-560 desk_lamp.jpg 11.422 json1 True schema1 True rep False final True N 15.045 err None
+cf-gemma4-26b-560 fluke45_multimeter.jpg 13.276 json1 True schema1 True rep False final True N 20.909 err None
+cf-gemma4-26b-560 hammer.jpg 6.701 json1 True schema1 True rep False final True N 18.9 err None
+cf-gemma4-26b-560 headphones.jpg 7.593 json1 True schema1 True rep False final True N 14.036 err None
+cf-gemma4-26b-560 ibuprofen_al400_pack.jpg 6.473 json1 True schema1 True rep False final True N 27.455 err None
+cf-gemma4-26b-560 kitchen_knife.jpg 7.26 json1 True schema1 True rep False final True N 14.091 err None
+cf-gemma4-26b-560 laptop.jpg 10.413 json1 True schema1 True rep False final True N 25.082 err None
+cf-gemma4-26b-560 makita_drill_dhp453.jpg 7.475 json1 True schema1 True rep False final True N 25.764 err None
+cf-gemma4-26b-560 osram_lamp_box.jpg 11.197 json1 True schema1 True rep False final True N 19.245 err None
+cf-gemma4-26b-560 panadol_500_pack.jpg 17.23 json1 True schema1 True rep False final True N 25.927 err None
+cf-gemma4-26b-560 panasonic_vcr_label.jpg 20.884 json1 False schema1 False rep True final True N 59.59 err None
+cf-gemma4-26b-560 paperback_book.jpg 8.231 json1 True schema1 True rep False final True N 14.036 err None
+cf-gemma4-26b-560 raspberry_pi4.jpg 14.611 json1 True schema1 True rep False final True N 22.655 err None
+cf-gemma4-26b-560 sneakers.jpg 10.357 json1 True schema1 True rep False final True N 17.855 err None
+cf-gemma4-26b-560 sony_cd_player_label.jpg 12.123 json1 True schema1 True rep False final True N 20.445 err None
+cf-gemma4-26b-560 t-shirt.jpg 21.492 json1 True schema1 True rep False final True N 25.755 err None
+cf-gemma4-26b-560 tefal_kettle.jpg 10.186 json1 True schema1 True rep False final True N 13.836 err None
+cf-gemma4-26b-nothink-560 casio_fx991ex.jpg 3.409 json1 True schema1 True rep False final True N 6.727 err None
+cf-gemma4-26b-nothink-560 cordless_drill.jpg 2.475 json1 True schema1 True rep False final True N 6.464 err None
+cf-gemma4-26b-nothink-560 desk_lamp.jpg 1.767 json1 True schema1 True rep False final True N 5.664 err None
+cf-gemma4-26b-nothink-560 fluke45_multimeter.jpg 1.024 json1 True schema1 True rep False final True N 6.727 err None
+cf-gemma4-26b-nothink-560 hammer.jpg 1.081 json1 True schema1 True rep False final True N 5.782 err None
+cf-gemma4-26b-nothink-560 headphones.jpg 1.31 json1 True schema1 True rep False final True N 6.536 err None
+cf-gemma4-26b-nothink-560 ibuprofen_al400_pack.jpg 1.367 json1 True schema1 True rep False final True N 6.836 err None
+cf-gemma4-26b-nothink-560 kitchen_knife.jpg 2.11 json1 True schema1 True rep False final True N 5.936 err None
+cf-gemma4-26b-nothink-560 laptop.jpg 3.474 json1 True schema1 True rep False final True N 6.618 err None
+cf-gemma4-26b-nothink-560 makita_drill_dhp453.jpg 1.967 json1 True schema1 True rep False final True N 5.718 err None
+cf-gemma4-26b-nothink-560 osram_lamp_box.jpg 2.256 json1 True schema1 True rep False final True N 6.618 err None
+cf-gemma4-26b-nothink-560 panadol_500_pack.jpg 2.805 json1 True schema1 True rep False final True N 5.882 err None
+cf-gemma4-26b-nothink-560 panasonic_vcr_label.jpg 2.546 json1 True schema1 True rep False final True N 6.436 err None
+cf-gemma4-26b-nothink-560 paperback_book.jpg 10.249 json1 True schema1 True rep False final True N 5.773 err None
+cf-gemma4-26b-nothink-560 raspberry_pi4.jpg 4.123 json1 True schema1 True rep False final True N 6.045 err None
+cf-gemma4-26b-nothink-560 sneakers.jpg 3.455 json1 True schema1 True rep False final True N 6.618 err None
+cf-gemma4-26b-nothink-560 sony_cd_player_label.jpg 3.413 json1 True schema1 True rep False final True N 7 err None
+cf-gemma4-26b-nothink-560 t-shirt.jpg 1.363 json1 True schema1 True rep False final True N 6.609 err None
+cf-gemma4-26b-nothink-560 tefal_kettle.jpg 2.846 json1 True schema1 True rep False final True N 6.664 err None
+cf-mistral-small-3.1-560 casio_fx991ex.jpg 5.663 json1 True schema1 True rep False final True N 19.68 err None
+cf-mistral-small-3.1-560 cordless_drill.jpg 3.717 json1 True schema1 True rep False final True N 20.089 err None
+cf-mistral-small-3.1-560 desk_lamp.jpg 2.51 json1 True schema1 True rep False final True N 18.245 err None
+cf-mistral-small-3.1-560 fluke45_multimeter.jpg 6.385 json1 True schema1 True rep False final True N 19.672 err None
+cf-mistral-small-3.1-560 hammer.jpg 3.086 json1 True schema1 True rep False final True N 15.466 err None
+cf-mistral-small-3.1-560 headphones.jpg 4.007 json1 True schema1 True rep False final True N 19.116 err None
+cf-mistral-small-3.1-560 ibuprofen_al400_pack.jpg 4.33 json1 True schema1 True rep False final True N 22.046 err None
+cf-mistral-small-3.1-560 kitchen_knife.jpg 4.509 json1 True schema1 True rep False final True N 15.201 err None
+cf-mistral-small-3.1-560 laptop.jpg 3.97 json1 True schema1 True rep False final True N 21.794 err None
+cf-mistral-small-3.1-560 makita_drill_dhp453.jpg 3.091 json1 True schema1 True rep False final True N 18.901 err None
+cf-mistral-small-3.1-560 osram_lamp_box.jpg 4.168 json1 True schema1 True rep False final True N 19.225 err None
+cf-mistral-small-3.1-560 panadol_500_pack.jpg 3.107 json1 True schema1 True rep False final True N 19.419 err None
+cf-mistral-small-3.1-560 panasonic_vcr_label.jpg 5.128 json1 True schema1 True rep False final True N 17.55 err None
+cf-mistral-small-3.1-560 paperback_book.jpg 5.448 json1 True schema1 True rep False final True N 19.015 err None
+cf-mistral-small-3.1-560 raspberry_pi4.jpg 4.213 json1 True schema1 True rep False final True N 19.76 err None
+cf-mistral-small-3.1-560 sneakers.jpg 3.985 json1 True schema1 True rep False final True N 19.52 err None
+cf-mistral-small-3.1-560 sony_cd_player_label.jpg 4.62 json1 True schema1 True rep False final True N 18.838 err None
+cf-mistral-small-3.1-560 t-shirt.jpg 3.85 json1 True schema1 True rep False final True N 22.312 err None
+cf-mistral-small-3.1-560 tefal_kettle.jpg 4.699 json1 True schema1 True rep False final True N 22.716 err None
+cf-qwen3.8-27b-nothink-560 casio_fx991ex.jpg 2.459 json1 True schema1 True rep False final True N 46.241 err None
+cf-qwen3.8-27b-nothink-560 cordless_drill.jpg 2.453 json1 True schema1 True rep False final True N 46.686 err None
+cf-qwen3.8-27b-nothink-560 desk_lamp.jpg 2.076 json1 True schema1 True rep False final True N 40.85 err None
+cf-qwen3.8-27b-nothink-560 fluke45_multimeter.jpg 2.734 json1 True schema1 True rep False final True N 46.241 err None
+cf-qwen3.8-27b-nothink-560 hammer.jpg 2.174 json1 True schema1 True rep False final True N 38.486 err None
+cf-qwen3.8-27b-nothink-560 headphones.jpg 20.416 json1 True schema1 True rep False final True N 42.168 err None
+cf-qwen3.8-27b-nothink-560 ibuprofen_al400_pack.jpg 3.642 json1 True schema1 True rep False final True N 49.614 err None
+cf-qwen3.8-27b-nothink-560 kitchen_knife.jpg 11.673 json1 True schema1 True rep False final True N 38.195 err None
+cf-qwen3.8-27b-nothink-560 laptop.jpg 25.317 json1 True schema1 True rep False final True N 45.541 err None
+cf-qwen3.8-27b-nothink-560 makita_drill_dhp453.jpg 2.82 json1 True schema1 True rep False final True N 45.795 err None
+cf-qwen3.8-27b-nothink-560 osram_lamp_box.jpg 2.745 json1 True schema1 True rep False final True N 45.214 err None
+cf-qwen3.8-27b-nothink-560 panadol_500_pack.jpg 48.756 json1 True schema1 True rep False final True N 43.623 err None
+cf-qwen3.8-27b-nothink-560 panasonic_vcr_label.jpg 3.13 json1 True schema1 True rep False final True N 52.605 err None
+cf-qwen3.8-27b-nothink-560 paperback_book.jpg 23.939 json1 True schema1 True rep False final True N 41.295 err None
+cf-qwen3.8-27b-nothink-560 raspberry_pi4.jpg 3.074 json1 True schema1 True rep False final True N 44.341 err None
+cf-qwen3.8-27b-nothink-560 sneakers.jpg 12.877 json1 True schema1 True rep False final True N 44.786 err None
+cf-qwen3.8-27b-nothink-560 sony_cd_player_label.jpg 2.681 json1 True schema1 True rep False final True N 46.223 err None
+cf-qwen3.8-27b-nothink-560 t-shirt.jpg 2.695 json1 True schema1 True rep False final True N 48.177 err None
+cf-qwen3.8-27b-nothink-560 tefal_kettle.jpg 2.731 json1 True schema1 True rep False final True N 47.014 err None
+cf-qwen3.8-27b-560 casio_fx991ex.jpg 26.465 json1 True schema1 True rep False final True N 78.223 err None
+cf-qwen3.8-27b-560 cordless_drill.jpg 55.246 json1 True schema1 True rep False final True N 110.086 err None
+cf-qwen3.8-27b-560 desk_lamp.jpg 6.126 json1 True schema1 True rep False final True N 87.377 err None
+cf-qwen3.8-27b-560 fluke45_multimeter.jpg 7.748 json1 True schema1 True rep False final True N 116.041 err None
+cf-qwen3.8-27b-560 hammer.jpg 4.716 json1 True schema1 True rep False final True N 70.177 err None
+cf-qwen3.8-27b-560 headphones.jpg 35.053 json1 True schema1 True rep False final True N 79.386 err None
+cf-qwen3.8-27b-560 ibuprofen_al400_pack.jpg 8.044 json1 True schema1 True rep False final True N 135.123 err None
+cf-qwen3.8-27b-560 kitchen_knife.jpg 6.762 json1 True schema1 True rep False final True N 111.486 err None
+cf-qwen3.8-27b-560 laptop.jpg 6.55 json1 True schema1 True rep False final True N 85.086 err None
+cf-qwen3.8-27b-560 makita_drill_dhp453.jpg 16.292 json1 True schema1 True rep False final True N 109.195 err None
+cf-qwen3.8-27b-560 osram_lamp_box.jpg 48.921 json1 True schema1 True rep False final True N 85.341 err None
+cf-qwen3.8-27b-560 panadol_500_pack.jpg 6.963 json1 True schema1 True rep False final True N 105.859 err None
+cf-qwen3.8-27b-560 panasonic_vcr_label.jpg 34.874 json1 True schema1 True rep False final True N 132.295 err None
+cf-qwen3.8-27b-560 paperback_book.jpg 120.304 json1 False schema1 False rep False final False N 0 err {"status": 408, "errors": [{"message": "AiError: AiError: Request timeout (59be25cc-1e0a-4e44-9603-d1c9d5461ba1)", "code": 3046}], "exc": null, "body": null}
+cf-qwen3.8-27b-560 raspberry_pi4.jpg 18.604 json1 True schema1 True rep False final True N 138.868 err None
+cf-qwen3.8-27b-560 sneakers.jpg 16.07 json1 True schema1 True rep False final True N 112.259 err None
+cf-qwen3.8-27b-560 sony_cd_player_label.jpg 24.837 json1 True schema1 True rep False final True N 114.859 err None
+cf-qwen3.8-27b-560 t-shirt.jpg 9.095 json1 True schema1 True rep False final True N 144.45 err None
+cf-qwen3.8-27b-560 tefal_kettle.jpg 3.974 json1 True schema1 True rep False final True N 76.377 err None
+cf-qwen3.8-27b-560 paperback_book.jpg 18.988 json1 True schema1 True rep False final True N 81.132 err None
