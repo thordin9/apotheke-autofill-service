@@ -10,10 +10,14 @@ RS=$JET/run-service.sh
 FAKE=$HERE/fake-bin
 PASS=0; FAIL=0
 # Every case's scratch dir lives under one parent, removed on exit (also on Ctrl-C / SIGTERM).
-TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/run-tests.XXXXXX")
+TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/run-tests.XXXXXX") || { echo "cannot create a temp dir under ${TMPDIR:-/tmp}" >&2; exit 1; }
 trap 'rm -rf "$TMPROOT"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+CASE_PID=""   # a case runs in its own process group (set -m): stop it before cleaning up, or it recreates its dir
+# shellcheck disable=SC2317  # called from the traps
+stop_case() { [ -n "$CASE_PID" ] && kill -TERM -- "-$CASE_PID" 2>/dev/null; [ -n "$CASE_PID" ] && wait "$CASE_PID" 2>/dev/null; exit "$1"; }
+trap 'stop_case 130' INT
+trap 'stop_case 143' TERM
+trap 'stop_case 129' HUP   # terminal closed
 OLD="autofill=old:img:running"; NEW="autofill=new:img:running"
 
 state() { local o="" f; for f in "$DS"/c/*; do [ -e "$f" ] && o="$o $(basename "$f")=$(cut -d' ' -f1,2 "$f" | tr ' ' :)"; done; echo "${o# }"; }
@@ -29,10 +33,13 @@ rs() {
   newds
   [ "$first" = 1 ] || echo "old:img running healthy 1" > "$DS/c/autofill"
   env PATH="$FAKE:$PATH" ENV_FILE="$DS/env" "$@" bash "$RS" new:img > "$DS/out" 2>&1 &
-  pid=$!
+  pid=$!; CASE_PID=$pid
   for s in $sigs; do sig=${s%@*}; d=${s#*@}
-    sleep "$(awk -v a="$d" -v b="$t" 'BEGIN{print a-b}')"; t=$d; kill -"$sig" "$pid" 2>/dev/null; done
-  wait "$pid"; rc=$?; st=$(state)
+    # sleep as a background job + wait: with set -m a foreground sleep would get its own process group and the
+    # terminal, so Ctrl-C would only kill the sleep; this way the harness stays in the foreground and gets it.
+    sleep "$(awk -v a="$d" -v b="$t" 'BEGIN{print a-b}')" & wait $!
+    t=$d; kill -"$sig" "$pid" 2>/dev/null; done
+  wait "$pid"; rc=$?; CASE_PID=""; st=$(state)
   [ "$rc" = "$ee" ] && [ "$st" = "$es" ] && ok=1 || ok=0
   result "run-service: $name" "$ok" "exit=$rc state=[$st]"
 }
@@ -92,7 +99,7 @@ result "  ...logs and the ss hint are shown" "$ok" ""
 rs "unhealthy, other error -> no hint"         1 "$OLD" 0 "" NEW_HEALTH=unhealthy LOGS_TEXT="boom"
 ! grep -q "ss -ltnp" "$DS/out" && ok=1 || ok=0; result "  ...no hint" "$ok" ""
 echo "== run-service.sh: WAIT_S validation"
-for w in abc 1.5 0 -5 010 " 5" "5s"; do
+for w in abc 1.5 0 -5 010 " 5" "5s" 9223372036854775808; do
   rs "WAIT_S='$w' -> refused, nothing touched" 1 "$OLD" 0 "" WAIT_S="$w"
   grep -q "WAIT_S must be a positive whole number" "$DS/out" && [ ! -e "$DS/log" ] && ok=1 || ok=0
   result "  ...clear message, docker never called" "$ok" ""

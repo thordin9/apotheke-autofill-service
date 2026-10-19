@@ -192,8 +192,8 @@ Docker's health status and took 36 s from start to finish. With `/healthz` polle
 8–10 s, which includes stopping the old container. The fast poll uses `curl` on the host (L4T has it). Without
 `curl`, or with `HEALTH_URL` set to empty, the script falls back to Docker's health status. `WAIT_S` counts
 wall-clock time, so a hanging `/healthz` (each poll times out after 3 s) can't stretch the wait. It must be a
-positive whole number of seconds (no leading zero); anything else (`abc`, `1.5`, `0`) stops the script with a clear
-message before it touches any container.
+positive whole number of seconds with no leading zero and at most 6 digits (up to 999999); anything else (`abc`,
+`1.5`, `0`, a 7-digit or larger number) stops the script with a clear message before it touches any container.
 
 **Port check.** Once the old container is stopped, nothing should answer `HEALTH_URL`. If something still does,
 another process or container is holding port 8080, and its answer would be mistaken for the new container's. The
@@ -223,7 +223,7 @@ which CI's `deploy-scripts` job runs. It uses fake `docker`, `curl` and `tc` com
 needed) and checks: switches, rollbacks, signals before and during a rollback, the `/healthz` poll, the port check,
 the wall-clock `WAIT_S` and its validation, the bind-error hint, `build-image.sh` refs and `dl-cap.sh`. Run it
 locally the same way. It takes about 1 min 30 s, because the signal cases use real timing, and removes its
-temporary files when it exits.
+temporary files when it exits, also when interrupted with Ctrl-C.
 
 The new container is started with:
 

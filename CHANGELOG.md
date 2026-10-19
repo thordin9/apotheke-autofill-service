@@ -38,13 +38,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   scripts' fake-docker test harness is now in `deploy/jetson/tests/` and runs in CI (`deploy-scripts` job).
 
 - **`deploy/jetson/run-service.sh`: validate `WAIT_S`; bind-error hint; test harness cleans up (QA of #14).**
-  `WAIT_S` must be a positive whole number of seconds; anything else (`abc`, `1.5`, `0`) now exits 1 with a clear
-  message before any container is touched, instead of a cryptic shell error mid-switch. When a new container fails
-  and its logs show `address already in use` (a foreign process on port 8080 that doesn't answer `HEALTH_URL` with
-  2xx, so the port check can't see it), the script prints a hint to check `ss -ltnp 'sport = :8080'`.
-  `deploy/jetson/tests/run-tests.sh` keeps all scratch dirs under one temporary parent removed on exit (it left
-  about 45 dirs in `/tmp` per run) and gains 20 cases (63 in total). `docs/deploy-jetson.md`: port-check limits
-  and the hint, `WAIT_S` rule, wording, and the harness run time (about 1 min 30 s, not two minutes).
+  `WAIT_S` must be a positive whole number of seconds, at most 6 digits; anything else (`abc`, `1.5`, `0`, a number
+  too large for shell arithmetic) now exits 1 with a clear message before any container is touched, instead of a
+  cryptic shell error mid-switch. When a new container fails and its logs show `address already in use` (a foreign
+  process on port 8080 that doesn't answer `HEALTH_URL` with 2xx, so the port check can't see it), the script prints
+  a hint to check `ss -ltnp 'sport = :8080'`. `deploy/jetson/tests/run-tests.sh` keeps all scratch dirs under one
+  temporary parent removed on exit, also on Ctrl-C, after stopping the running case (it left about 45 dirs in `/tmp`
+  per run), and gains 22 cases (65 in total). `docs/deploy-jetson.md`: port-check limits and the hint, `WAIT_S`
+  rule, wording, and the harness run time (about 1 min 30 s, not two minutes).
 
 - **Cold-start `Retry-After` per model (Ollama).** A 503 "model '…' is
   loading" now sends that model's remaining load time: max(15 s, its last
