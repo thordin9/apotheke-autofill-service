@@ -133,10 +133,14 @@ field, on a suggestion that has other fields. They are absent on a `{}` "no
 suggestions" body. Old clients ignore them. The service never writes these
 values to its logs, including when `OLLAMA_LOG_RAW=1`. The Ollama prompt and
 `format` schema are the Feature 9 **v3_lean** text (fixed category list, tags
-at most 3, these three fields required with schema `maxLength` 30). The HTTP
-fields stay additive: name, category, tags and description keep their shape,
-and a category is still snapped to `context.categories` when the client sent
-them.
+at most 3, these three fields required with schema `maxLength` 30). v3_lean is
+the chosen prompt and schema for brand, model number and serial; accuracy is
+unchanged versus the Feature 9 sweep. GPU-confirmed warm medians for the
+production model `qwen2.5vl-jetson:3b`, 19 photos each: base-560 8.58 s,
+v3_lean-560 9.27 s (+0.69 s); base-1024 13.89 s, v3_lean-1024 14.62 s
+(+0.73 s). The HTTP fields stay additive: name, category, tags and description
+keep their shape, and a category is still snapped to `context.categories` when
+the client sent them.
 
 ### Choosing a model (v1.2)
 
@@ -239,8 +243,12 @@ being absent.
   requests without `context.model` behave as before.
 - **v1.3:** optional `brand`, `model_number` and `serial_number` strings on
   `POST /v1/suggest` (empty string when unreadable; ignored by older clients,
-  including Apotheke 2.4.1). Optional per-model `state` (`cold` | `loading` |
-  `warm`) and `size_vram` (bytes from Ollama `/api/ps`) on `models` entries.
+  including Apotheke 2.4.1). The Ollama prompt and schema are Feature 9
+  v3_lean (accuracy unchanged versus that sweep). GPU-confirmed warm medians
+  for `qwen2.5vl-jetson:3b`, 19 photos each: base-560 8.58 s, v3_lean-560
+  9.27 s (+0.69 s); base-1024 13.89 s, v3_lean-1024 14.62 s (+0.73 s).
+  Optional per-model `state` (`cold` | `loading` | `warm`) and `size_vram`
+  (bytes from Ollama `/api/ps`) on `models` entries.
   Use `state`, not `loaded`, to tell when a model is ready for fast inference.
   `GET /healthz` lists those model entries when `ALLOWED_MODELS` is set, and
   answers `503` `{"status":"degraded"}` when a warm model or the loaded

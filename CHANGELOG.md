@@ -8,10 +8,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 ### Added
 
 - **Suggest `brand`, `model_number`, `serial_number` (API v1.3).** The Ollama
-  prompt and `format` schema are the Feature 9 v3_lean text. Successful
-  suggestions include the three strings (trimmed, hard-cut to 128 characters,
-  `""` when missing or unreadable). Name, category, tags and description are
-  unchanged. The values are never logged, including with `OLLAMA_LOG_RAW=1`.
+  prompt and `format` schema are the Feature 9 v3_lean text: the chosen
+  prompt and schema for these fields, with accuracy unchanged versus the
+  Feature 9 sweep. Successful suggestions include the three strings (trimmed,
+  hard-cut to 128 characters, `""` when missing or unreadable). Name, category,
+  tags and description are unchanged. The values are never logged, including
+  with `OLLAMA_LOG_RAW=1`. GPU-confirmed warm medians for the production model
+  `qwen2.5vl-jetson:3b`, 19 photos each: base-560 8.58 s, v3_lean-560 9.27 s
+  (+0.69 s); base-1024 13.89 s, v3_lean-1024 14.62 s (+0.73 s).
   Echo exposes them through `ECHO_BRAND`, `ECHO_MODEL_NUMBER` and
   `ECHO_SERIAL_NUMBER` (`json:` prefix for null or a nested value).
 
