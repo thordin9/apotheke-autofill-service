@@ -93,6 +93,9 @@ def test_sanitize_drops_bad_fields():
     assert out == {
         "name": {"value": "Drill", "confidence": 1.0},
         "tags": [{"value": "a", "confidence": 0.0}],
+        "brand": "",
+        "model_number": "",
+        "serial_number": "",
     }
     assert sanitize(["not", "a", "dict"]) == {}
 
@@ -100,3 +103,57 @@ def test_sanitize_drops_bad_fields():
 def test_bad_settings_env(make_client):
     with pytest.raises(RuntimeError, match="MAX_IMAGE_BYTES"):
         make_client(MAX_IMAGE_BYTES="ten")
+
+
+def test_identity_missing_null_empty_long_and_unusual(make_client, monkeypatch):
+    weird = "\x01\x07" + "עברית" + "\u200f" + "🔧" + '"quoted"'
+    c = make_client(
+        ECHO_BRAND="",
+        ECHO_MODEL_NUMBER="json:null",
+        ECHO_SERIAL_NUMBER=" " + ("m" * 200) + " ",
+    )
+    body = post_image(c).json()
+    assert body["brand"] == ""
+    assert body["model_number"] == ""
+    assert body["serial_number"] == "m" * 128
+    for key in ("ECHO_BRAND", "ECHO_MODEL_NUMBER", "ECHO_SERIAL_NUMBER"):
+        monkeypatch.delenv(key, raising=False)
+    bare = post_image(make_client()).json()
+    assert bare["brand"] == bare["model_number"] == bare["serial_number"] == ""
+    nested = post_image(
+        make_client(
+            ECHO_BRAND='json:{"value":"  Bosch  "}',
+            ECHO_MODEL_NUMBER=weird,
+            ECHO_SERIAL_NUMBER="json:null",
+        )
+    ).json()
+    assert nested["brand"] == "Bosch"
+    assert nested["model_number"] == weird
+    assert nested["serial_number"] == ""
+
+
+def test_echo_state_cold_loading_warm_on_info_and_healthz(make_client):
+    c = make_client(ALLOWED_MODELS="moondream")
+    info = c.get("/v1/info").json()
+    health = c.get("/healthz")
+    assert health.status_code == 200 and health.json()["status"] == "ok"
+
+    def states(body):
+        return {m["id"]: m["state"] for m in body["models"]}
+
+    assert states(info) == states(health.json()) == {"echo": "loading", "moondream": "cold"}
+    assert info["models"][0]["loaded"] is True
+    post_image(c)
+    assert states(c.get("/v1/info").json())["echo"] == "warm"
+    assert states(c.get("/healthz").json())["echo"] == "warm"
+    # Never warm before the answer: a switch still loading is "loading".
+    slow = make_client(ALLOWED_MODELS="moondream", ECHO_LOAD_MS="5000", BACKEND_TIMEOUT_S="2")
+    assert post_image(slow, context=json.dumps({"model": "moondream"})).status_code == 503
+    during = {m["id"]: m for m in slow.get("/v1/info").json()["models"]}
+    assert during["moondream"]["state"] == "loading" and during["moondream"]["loaded"] is False
+    assert during["echo"]["state"] == "cold"
+    assert states(slow.get("/healthz").json())["moondream"] == "loading"
+    slow.app.state.backend._ready_at = 0.0
+    assert post_image(slow, context=json.dumps({"model": "moondream"})).status_code == 200
+    assert states(slow.get("/v1/info").json())["moondream"] == "warm"
+    assert states(slow.get("/healthz").json())["moondream"] == "warm"
