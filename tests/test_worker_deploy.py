@@ -74,3 +74,12 @@ def test_deploy_workflow_is_main_only_and_pinned():
     assert f"https://{DOMAIN}/healthz" in smoke["run"]
     assert "/v1/suggest" in smoke["run"]
     assert "401" in smoke["run"]
+
+
+def test_deploy_checkout_drops_credentials_and_no_legacy_peer_deps():
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    steps = workflow["jobs"]["deploy"]["steps"]
+    checkout = next(s for s in steps if s.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["persist-credentials"] is False
+    npmrc = ROOT / "worker" / ".npmrc"
+    assert not npmrc.exists() or "legacy-peer-deps" not in npmrc.read_text()

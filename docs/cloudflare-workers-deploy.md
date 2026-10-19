@@ -125,6 +125,16 @@ The smoke check then calls `https://apotheke-autofill-service.webapp.gr/healthz`
 (200) and `POST /v1/suggest` with no token (401). It retries while the
 certificate is issued. It does not send a photo.
 
+The smoke check catches a bad deploy but does not undo it. To go back to the
+previous version, run this from `worker/` with the same scoped token:
+
+```bash
+npx wrangler rollback
+```
+
+`wrangler rollback` keeps the secrets. List versions with
+`npx wrangler deployments list` first if you need a specific one.
+
 The CI workflow stays a dry run (`npx wrangler deploy --dry-run`, no token).
 It does not deploy.
 

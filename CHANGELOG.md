@@ -18,6 +18,11 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   00:00 UTC. `/v1/info` adds `budget` (limit, used, remaining, `resets_at`)
   and `max_image_bytes`.
 - Workers AI 3036 and 3040 map to that same `503`. 3006 maps to `413`.
+- Deploy workflow checkout uses `persist-credentials: false`, so the
+  `GITHUB_TOKEN` is not left in `.git/config` while `npm ci` runs.
+- Docs: roll back a bad deploy with `npx wrangler rollback` from `worker/`.
+- Removed `worker/.npmrc` (`legacy-peer-deps=true`); the pinned packages
+  resolve without it, so a real peer conflict now fails `npm ci`.
   Upstream text is not returned. A Durable Object error fails closed.
 - Upload cap is the whole body, `MAX_UPLOAD_BYTES` default **3145728 (3 MiB)**,
   checked from `Content-Length` and then from bytes actually read (chunked
