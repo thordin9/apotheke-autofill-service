@@ -5,7 +5,8 @@
 # police action on a following line (see tests/fixtures/tc-filter-show-eth0-ffff.txt).
 # Knobs (env): FAIL_IP=1 (IPv4 filter add fails), DROP_FILTERS=1 (filter add succeeds but nothing is kept, as when
 #   NetworkManager resets the device right after), DROP_IPV6=1 (IPv6 filter not kept), NO_POLICE=1 (filters shown
-#   without a police action), SHOW_FAIL=1 (`filter show` fails), USE_FIXTURE=1 (cat the board fixture verbatim).
+#   without a police action), SHOW_FAIL=1 (`filter show` fails), USE_FIXTURE=1 (cat the board fixture verbatim),
+#   SHOW_HANG=<s> (`filter show` hangs that long first; fds closed, so a `timeout` kill ends the caller at once).
 DS=${DS:?}; echo "tc $*" >> "$DS/tc.log"
 case "$*" in
   "qdisc del"*) [ -e "$DS/tc.qdisc" ] || exit 2; rm -f "$DS/tc.qdisc" "$DS/tc.filters" ;;
@@ -19,6 +20,7 @@ case "$*" in
     esac
     [ -n "${DROP_FILTERS:-}" ] || echo "$p" >> "$DS/tc.filters" ;;
   "filter show"*)
+    [ -n "${SHOW_HANG:-}" ] && sleep "$SHOW_HANG" >/dev/null 2>&1
     [ -n "${SHOW_FAIL:-}" ] && { echo "RTNETLINK answers: Invalid argument" >&2; exit 2; }
     if [ -n "${USE_FIXTURE:-}" ]; then
       # Verbatim board capture (iproute2-ss200127). Path relative to this fake's deploy/jetson/tests/.
