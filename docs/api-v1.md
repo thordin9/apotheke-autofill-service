@@ -334,9 +334,10 @@ stays `"1"`. Clients keep ignoring unknown fields.
   `daily capacity is exhausted`. 3036 also marks the day exhausted. 3040 is
   the same status with `Retry-After: 30` and the message `the model is out
   of capacity`. It does not mark the day exhausted. 3006 is `413`. The code
-  is read from `code`, `internalCode`, or `error_code`, and from an
-  `InferenceUpstreamError` message that starts with `3036: `, `3040: `, or
-  `3006: ` (an optional `InferenceUpstreamError: ` prefix is allowed). A
+  is read from `code`, `internalCode`, or `error_code`, and from the error
+  message when it starts with `3036: `, `3040: `, or `3006: ` (optionally
+  prefixed by `InferenceUpstreamError: `). The error name itself is not
+  checked. A
   message that merely contains those digits is not mapped.
   `lastRequestInternalStatusCode` is not read. The body does not include
   the upstream error.

@@ -204,8 +204,9 @@ is `503` with `Retry-After` until 00:00 UTC, and it marks the Durable Object
 exhausted. Code 3040 (out of capacity) is `503` with `Retry-After: 30` and
 the message `the model is out of capacity`. It does not mark the day
 exhausted. The code is read from `code`, `internalCode`, or `error_code`,
-and from the binding's `InferenceUpstreamError` message when it starts with
-`3036: `, `3040: `, or `3006: ` (optional `InferenceUpstreamError: ` prefix).
+and from the error message when it starts with `3036: `, `3040: `, or
+`3006: ` (optionally prefixed by `InferenceUpstreamError: `). The error
+name itself is not checked.
 A message that merely contains those digits is not mapped.
 `lastRequestInternalStatusCode` is not read, because it is shared across
 requests. Neither response includes upstream text. 3006 (request too large)

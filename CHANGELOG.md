@@ -15,9 +15,10 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   2.0.0 notes below.
 - **Workers AI 3040** is `503` with `Retry-After: 30` and does not mark the
   day exhausted. Only 3036 and the Durable Object budget wait until 00:00
-  UTC. Codes come from `code`, `internalCode`, or `error_code`, and from an
-  `InferenceUpstreamError` message that starts with `3036: `, `3040: `, or
-  `3006: `. A message that merely contains those digits is not mapped.
+  UTC. Codes come from `code`, `internalCode`, or `error_code`, and from the
+  error message when it starts with `3036: `, `3040: `, or `3006: `
+  (optionally prefixed by `InferenceUpstreamError: `). The error name itself
+  is not checked. A message that merely contains those digits is not mapped.
   `lastRequestInternalStatusCode` is not read.
 - **`POST /v1/suggest` includes `backend_used` `cloudflare-workers` and
   `model_used`.** `ready` is false when fewer than 30 Neurons remain.
@@ -35,6 +36,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 - `docs/qa/feature11-worker-live-qa.md`, the live QA report, byte for byte.
 - `docs/qa/pr26-worker-followup-stub-qa.md`, the follow-up stub QA report, byte for byte.
+- `docs/qa/pr26-worker-followup-recheck-qa.md`, the follow-up recheck, byte for byte.
 
 ### Fixed
 
