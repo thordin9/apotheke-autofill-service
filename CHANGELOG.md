@@ -12,16 +12,27 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   the `connectivity-change` check could then see the cap removed by that restart's stop, and the second restart killed
   the first while it was starting (`status=15/TERM`, `Failed with result 'signal'`), leaving the board without the
   inbound cap for about 0.4 s on every boot. `deploy/jetson/nm-dispatcher-90-dl-cap` now serialises invocations
-  with `flock` (`/run/lock/dl-cap-hook.lock`), leaves `dl-cap.service` alone while it has a job queued, waits for a
+  with `flock` (`/run/dl-cap-hook.lock`), leaves `dl-cap.service` alone while it has a job queued, waits for a
   start or stop in progress to settle, and then restarts (still `--no-block`) only if `dl-cap.sh check` fails, on
   `up` as well. The lock wait and the settle wait share one deadline, `DL_CAP_HOOK_BUDGET_S` (default 8 s), and
-  every `systemctl`/`check` call is bounded by `timeout`, so the hook finishes in about 9 s at worst, well under
+  every `systemctl`/`check` call is bounded by `timeout`, so the hook finishes in about budget + 3 s (~11 s) at worst, well under
   NetworkManager's dispatcher script timeout (600 s in NM 1.22), and never holds up later events for long. When
   the time runs out it falls through: unlocked, a busy or queued unit is left alone, otherwise check and restart; a
   `systemctl` call that times out leaves dl-cap alone. Each decision is logged with the tag `dl-cap-hook`. Ignored
   events and interfaces, the disabled-unit rule, `dl-cap.sh` and `dl-cap.service` (including the post-apply check) are unchanged. The test
   harness gains a systemd-like fake `dl-cap.service` job, concurrent-event tests and worst-case runtime tests
   (at most 10 s). Board check over a reboot pending.
+
+- **dl-cap hook and timer follow-ups (QA of #23, L1–L6).** L1: the documented worst case of the hook is about
+  budget + 3 s (~11 s at the default 8 s; 10.9 s measured), not ~9 s. L2: a `dl-cap.sh check` that times out (exit
+  124) now counts as unknown in the hook and in `dl-cap-check.sh`, so nothing is restarted (and the cap not
+  dropped) on a guess; both log `dl-cap.sh check timed out`. L3: the lock moved from world-writable `/run/lock` to
+  root-only `/run/dl-cap-hook.lock` in both scripts. L4: `DL_CAP_HOOK_BUDGET_S` must be 1–60 without a leading
+  zero; `08`, `010` or long values used to abort the hook under dash or be read as octal, now they fall back to
+  8 s (61–99 is capped at 60, 100 and up fall back to 8 s) with a log line. The lock file is now created 0600. L5: a `dl-cap.service` stuck in `failed` is still restarted on every
+  timer run but logged once per boot (marker `/run/dl-cap-check.failed-logged`, configurable with
+  `DL_CAP_CHECK_FAILED_MARKER`, removed once the cap is back). L6: the docs no longer say a reboot shows a hook
+  restart of dl-cap; a normal boot has none. Harness tests for each.
 
 ### Added
 

@@ -24,16 +24,22 @@
 # L4T R35 / Ubuntu 20.04: 600 s per script, SCRIPT_TIMEOUT in dispatcher/nm-dispatcher.c), and every later event
 # waits behind a running script. So the whole hook has one deadline, DL_CAP_HOOK_BUDGET_S (default 8 s) after it
 # starts: the lock wait and the settle wait share it and stop 2 s before it (kept for the check and the restart),
-# and every systemctl/tc call is bounded by `timeout` to the time left (at least 1 s). Worst case is about 9 s.
+# and every systemctl/tc call is bounded by `timeout` to the time left (at least 1 s). Worst case is about
+# BUDGET + 3 s (about 11 s at the default 8 s): after a slow is-enabled, show, check and restart each still get the
+# 1 s minimum. DL_CAP_HOOK_BUDGET_S must be 1-60 without a leading zero (61-99 -> 60; anything else, incl. 3+ digits -> 8).
 # When the time runs out the fall-through is the same as above: the lock wait gives up and goes on unlocked; a
 # unit still busy or with a job is left alone; otherwise check, then restart. A systemctl call that times out
-# (PID 1 busy) counts as "don't know", and the hook leaves dl-cap alone rather than risk killing a start.
+# (PID 1 busy) counts as "don't know", and the hook leaves dl-cap alone rather than risk killing a start; so does a
+# `dl-cap.sh check` that times out (tc hanging). dl-cap-check.timer looks again within 5 min.
 DEV=eth0   # must match DEV in dl-cap.sh
 DL_CAP=/usr/local/sbin/dl-cap.sh   # the harness rewrites this line to point at the repo copy
 UNIT=dl-cap.service
-LOCK=${DL_CAP_HOOK_LOCK:-/run/lock/dl-cap-hook.lock}
+LOCK=${DL_CAP_HOOK_LOCK:-/run/dl-cap-hook.lock}
 BUDGET_S=${DL_CAP_HOOK_BUDGET_S:-8}
-case "$BUDGET_S" in ''|*[!0-9]*|0) BUDGET_S=8 ;; esac
+budget_note=""
+# 1-60 s, no leading zero (dash reads 08 as a bad octal number and aborts); NetworkManager allows 600 s.
+case "$BUDGET_S" in ''|*[!0-9]*|0*|???*) budget_note="DL_CAP_HOOK_BUDGET_S='$BUDGET_S' invalid, using 8 s"; BUDGET_S=8 ;; esac
+[ "$BUDGET_S" -le 60 ] || { budget_note="DL_CAP_HOOK_BUDGET_S=$BUDGET_S above 60, using 60 s"; BUDGET_S=60; }
 RESERVE_S=2   # kept back from the lock and settle waits for the check and the restart
 
 case "${1:-}:${2:-}" in
@@ -42,6 +48,7 @@ case "${1:-}:${2:-}" in
 esac
 event="${1:-(none)} ${2:-}"
 log() { logger -t dl-cap-hook -- "$event: $*" 2>/dev/null || :; }
+[ -n "$budget_note" ] && log "$budget_note"
 DEADLINE=$(( $(date +%s) + BUDGET_S ))
 # left [RESERVE]: whole seconds until the deadline minus RESERVE (may be 0 or less).
 left() { echo $(( DEADLINE - $(date +%s) - ${1:-0} )); }
@@ -55,11 +62,14 @@ t 0 systemctl is-enabled --quiet "$UNIT" 2>/dev/null; rc=$?
 
 # Serialise. The lock is released when the hook exits (fd 9 closes). If the lock can't be opened, flock is missing
 # or the lock isn't free in time, carry on unlocked; steps 2-3 still catch most duplicates.
+# 0600 (umask 077 for both opens): flock(2) works on a read-only fd, so a 0644 lock could be held by any local user.
+um=$(umask); umask 077
 if (exec 9>>"$LOCK") 2>/dev/null && command -v flock >/dev/null 2>&1; then
-  exec 9>>"$LOCK"
+  exec 9>>"$LOCK"; umask "$um"
   l=$(left "$RESERVE_S")
   if [ "$l" -lt 1 ] || ! flock -w "$l" 9; then log "lock busy until the time limit, going on unlocked"; fi
 fi
+umask "$um"
 
 # Sets $state (ActiveState) and $job (job id, empty if none) of dl-cap.service; returns 1 if systemctl timed out
 # or failed (unknown state).
@@ -86,9 +96,12 @@ if busy || [ -n "$job" ]; then
   exit 0
 fi
 
-if [ -x "$DL_CAP" ] && t 1 env DEV="$DEV" "$DL_CAP" check >/dev/null 2>&1; then
-  log "cap in place on $DEV, no restart"
-  exit 0
+if [ -x "$DL_CAP" ]; then
+  t 1 env DEV="$DEV" "$DL_CAP" check >/dev/null 2>&1; rc=$?
+  [ "$rc" = 0 ] && { log "cap in place on $DEV, no restart"; exit 0; }
+  # A check that timed out doesn't say the cap is missing: don't restart (and drop the cap) on a guess;
+  # dl-cap-check.timer looks again within 5 min.
+  [ "$rc" = 124 ] && { log "dl-cap.sh check timed out; leaving dl-cap alone"; exit 0; }
 fi
 # --no-block: queue the restart and return, so the dispatcher isn't held up; dl-cap.service is ordered after
 # network-online.target, which may still be pending while NetworkManager is activating eth0. The job is queued
