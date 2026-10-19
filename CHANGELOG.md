@@ -3,6 +3,36 @@
 All notable changes to this service. The HTTP contract is versioned
 separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
+## [Unreleased]
+
+### Changed
+
+- **Worker upload cap is 1 MiB.** Live Workers Logs `cpuTime` at about 2.9 MiB
+  was 126 ms, past the 10 ms Free CPU limit, so `MAX_UPLOAD_BYTES` is
+  **1048576**. `/v1/info` `max_image_bytes` is that cap minus 64 KiB
+  (**983040**). Apotheke should skip larger images. The Python service stays
+  at 10 MiB. The 2.0.0 release shipped 3145728; that figure stays in the
+  2.0.0 notes below.
+- **Workers AI 3040** is `503` with `Retry-After: 30` and does not mark the
+  day exhausted. Only 3036 and the Durable Object budget wait until 00:00
+  UTC. Codes come from the structured `code` field, not from a substring of
+  the message.
+- **`POST /v1/suggest` includes `backend_used` `cloudflare-workers` and
+  `model_used`.** `ready` is false when fewer than 30 Neurons remain.
+  `remaining` is still the raw balance. Log `*_ms` fields are `Date.now()`
+  deltas; Workers Logs `cpuTime` is the CPU figure. An unknown path is 404
+  even when `AUTOFILL_TOKEN` is missing. Workers Logs store
+  `cf-connecting-ip`.
+- The deploy smoke URL is `vars.WORKER_URL`, defaulting to
+  `https://apotheke-autofill-service.webapp.gr`. A failed smoke prints the
+  last HTTP status code. The gitleaks allowlist for
+  `docs/qa/v1.4-stub-qa.md` is limited to commit
+  `ba1f8ff4397c568c5b9b5ffdc9f2e680664ca231`.
+
+### Added
+
+- `docs/qa/feature11-worker-live-qa.md`, the live QA report, byte for byte.
+
 ## [2.0.0]
 
 ### Added
@@ -127,7 +157,6 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   overrides, are stripped from client category names before the prompt, the
   schema enum, and the category returned to the client. The same classes as
   the brand fields. A NUL never comes back in the response.
-- **v3_lean latency.** The changelog's v3_lean cost is   the measured +0.7 s.
 
 ## [Unreleased]
 
@@ -229,6 +258,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   `bench/photos/brand_readability.json`. Raw: `bench/results/brandserial-2026-10-19/`,
   `bench/results/modelbench-2026-10-19/`.
   GPU retime after that boot window confirms Feature 9 medians (v3_lean +0.7 s).
+  The changelog's v3_lean cost is the measured +0.7 s.
 
 - **Jetson deployment guide (PR #9).** `docs/deploy-jetson.md` documents the production setup on the Jetson
   Xavier NX: platform, Ollama drop-in, the `qwen2.5vl-jetson:3b` model, `service.env`, building

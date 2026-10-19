@@ -95,6 +95,16 @@ describe("auth and health", () => {
     expect(limited).toBe(0);
   });
 
+  it("returns 404 for an unknown path even when the secret is missing", async () => {
+    for (const token of [undefined, ""]) {
+      const response = await call(new Request("https://autofill.example/nope"), { AUTOFILL_TOKEN: token });
+      expect(response.status).toBe(404);
+      expect(await bodyOf(response)).toEqual({ error: { code: "bad_request", message: "Not Found" } });
+    }
+    const known = await call(new Request("https://autofill.example/v1/info"), { AUTOFILL_TOKEN: "" });
+    expect(known.status).toBe(503);
+  });
+
   it("returns 404 and 405 with the error envelope", async () => {
     const missing = await call(
       new Request("https://autofill.example/nope", { headers: { authorization: `Bearer ${TOKEN}` } }),

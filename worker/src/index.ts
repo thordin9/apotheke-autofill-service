@@ -1,11 +1,11 @@
-import { aiInput, AI_MODEL, isAiStub, promptsFor, readTurn, workersAiCode, workersAiHttpStatus } from "./ai";
+import { AI_MODEL, isAiStub, prepareAi, promptsFor, readTurn, workersAiCode, workersAiHttpStatus } from "./ai";
 import { bearerToken, tokensMatch } from "./auth";
 import { bytesToBase64 } from "./base64";
 import { Budget } from "./budget";
 import { parseContext } from "./context";
 import { errorResponse, HttpError, httpErrorResponse, json, readLimitedBody } from "./http";
-import { sniffMime } from "./images";
 import { logRequest, type RequestTiming } from "./log";
+import { maxImageBytes, readSuggestParts } from "./multipart";
 import {
   NEURON_ESTIMATE,
   neuronsFromUsage,
@@ -20,6 +20,8 @@ export { Budget };
 
 /** Keep equal to the `period` of RATE_LIMITER in wrangler.toml. */
 const RATE_LIMIT_PERIOD_S = 60;
+/** 3040 is a short capacity blip, not the UTC-midnight budget. Bounded 10–60 s. */
+const CAPACITY_RETRY_AFTER_S = 30;
 
 const CAPABILITIES = ["name", "category", "tags", "description"];
 
@@ -39,9 +41,15 @@ function nowMs(request: Request, env: Env): number {
   return Date.now();
 }
 
-function capacityError(now: number): HttpError {
+function budgetError(now: number): HttpError {
   return new HttpError(503, "backend_unavailable", "daily capacity is exhausted", {
     "retry-after": String(secondsUntilUtcMidnight(now)),
+  });
+}
+
+function capacityBlip(): HttpError {
+  return new HttpError(503, "backend_unavailable", "the model is out of capacity", {
+    "retry-after": String(CAPACITY_RETRY_AFTER_S),
   });
 }
 
@@ -77,14 +85,18 @@ async function info(request: Request, env: Env): Promise<Response> {
   }
   const neuronRemaining = snap.exhausted ? 0 : Math.max(0, neuronBudget - snap.used - snap.reserved);
   const requestsRemaining = requestCap > 0 ? Math.max(0, requestCap - snap.requests) : null;
-  const ready = !snap.exhausted && neuronRemaining > 0 && (requestsRemaining === null || requestsRemaining > 0);
+  const imageCap = maxImageBytes(maxBytes);
+  const ready =
+    !snap.exhausted &&
+    neuronRemaining >= NEURON_ESTIMATE &&
+    (requestsRemaining === null || requestsRemaining > 0);
   return json({
     name: "cloudflare-workers",
     version: "1",
     capabilities: CAPABILITIES,
     backend: "cloudflare-workers",
     backend_used: "cloudflare-workers",
-    max_image_bytes: maxBytes,
+    max_image_bytes: imageCap,
     ready,
     budget: {
       neurons: {
@@ -117,24 +129,19 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
     });
   }
   const { neuronBudget, requestCap, maxBytes } = limits(env);
+  const imageCap = maxImageBytes(maxBytes);
   const body = await readLimitedBody(request, maxBytes);
-  const form = await readForm(body, request.headers.get("content-type"));
-  const image = await imageBytes(form);
-  const mime = sniffMime(image);
-  if (!mime) throw new HttpError(415, "unsupported_media_type", "image must be JPEG, PNG or WebP");
-  const contextPart = form.get("context");
-  if (contextPart !== null && typeof contextPart !== "string") {
-    throw new HttpError(400, "bad_request", "'context' must be a JSON string field");
-  }
-  const context = parseContext(contextPart ?? undefined);
-  const encodedAt = performance.now();
-  const dataUrl = `data:${mime};base64,${bytesToBase64(image)}`;
-  timing.base64Ms += performance.now() - encodedAt;
+  const parts = readSuggestParts(body, request.headers.get("content-type"), imageCap);
+  const context = parseContext(parts.context);
+  const encodedAt = Date.now();
+  const dataUrl = `data:${parts.mime};base64,${bytesToBase64(parts.image)}`;
+  timing.base64Ms += Date.now() - encodedAt;
   timing.model = AI_MODEL;
 
   const now = nowMs(request, env);
   const budget = env.BUDGET.getByName("global");
   const prompts = promptsFor(context);
+  const prepared = prepareAi(dataUrl, context);
 
   const attempt = async (prompt: string, countRequest: boolean) => {
     let reserved = false;
@@ -150,9 +157,9 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
         requestCap,
         countRequest,
       });
-      if (!gate.ok) throw capacityError(now);
+      if (!gate.ok) throw budgetError(now);
       reserved = true;
-      const raw = await (env.AI as unknown as AiRun).run(AI_MODEL, aiInput(prompt, dataUrl, context));
+      const raw = await (env.AI as unknown as AiRun).run(AI_MODEL, prepared.inputFor(prompt));
       called = true;
       timing.aiCalls += 1;
       const embedded = workersAiCode(raw);
@@ -186,10 +193,10 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
         } catch {
           // Still refuse below.
         }
-        throw capacityError(now);
+        throw budgetError(now);
       }
-      if (code === 3040) throw capacityError(now);
-      if (code === 3006) throw new HttpError(413, "payload_too_large", `image exceeds ${maxBytes} bytes`);
+      if (code === 3040) throw capacityBlip();
+      if (code === 3006) throw new HttpError(413, "payload_too_large", `image exceeds ${imageCap} bytes`);
       const httpStatus = workersAiHttpStatus(err);
       if (httpStatus !== null) {
         throw new HttpError(503, "backend_unavailable", "the model is unavailable");
@@ -204,7 +211,7 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
   };
 
   const judge = (content: string) => {
-    const parsedAt = performance.now();
+    const parsedAt = Date.now();
     let obj: Record<string, unknown> | null = null;
     let parseMessage = NOT_JSON;
     try {
@@ -212,18 +219,18 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
     } catch (err) {
       parseMessage = err instanceof SuggestionError ? err.message : NOT_JSON;
     }
-    timing.parseMs += performance.now() - parsedAt;
-    const validatedAt = performance.now();
+    timing.parseMs += Date.now() - parsedAt;
+    const validatedAt = Date.now();
     if (!obj) {
-      timing.validateMs += performance.now() - validatedAt;
+      timing.validateMs += Date.now() - validatedAt;
       return { ok: false as const, message: parseMessage };
     }
     try {
       const suggestion = clamp(obj, context);
-      timing.validateMs += performance.now() - validatedAt;
+      timing.validateMs += Date.now() - validatedAt;
       return { ok: true as const, suggestion };
     } catch (err) {
-      timing.validateMs += performance.now() - validatedAt;
+      timing.validateMs += Date.now() - validatedAt;
       const message = err instanceof SuggestionError ? err.message : NO_FIELDS;
       return { ok: false as const, message };
     }
@@ -239,34 +246,14 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
   return json(publicSuggestion(judged.suggestion, AI_MODEL));
 }
 
-async function readForm(bytes: Uint8Array, contentType: string | null): Promise<FormData> {
-  if (!contentType || !contentType.toLowerCase().includes("multipart/form-data")) {
-    throw new HttpError(400, "bad_request", "expected multipart/form-data");
-  }
-  try {
-    return await new Request("https://autofill.invalid/v1/suggest", {
-      method: "POST",
-      headers: { "content-type": contentType },
-      body: bytes,
-    }).formData();
-  } catch {
-    throw new HttpError(400, "bad_request", "expected multipart/form-data");
-  }
-}
-
-async function imageBytes(form: FormData): Promise<Uint8Array> {
-  const image = form.get("image");
-  if (!(image instanceof File)) throw new HttpError(400, "bad_request", "missing 'image' file part");
-  const bytes = new Uint8Array(await image.arrayBuffer());
-  if (bytes.byteLength === 0) throw new HttpError(400, "bad_request", "'image' is empty");
-  return bytes;
-}
-
 async function route(request: Request, env: Env, timing: RequestTiming): Promise<Response> {
   const path = new URL(request.url).pathname;
   if (request.method === "GET" && path === "/healthz") {
     if (!env.AUTOFILL_TOKEN) return json({ status: "degraded" }, 503);
     return json({ status: "ok" });
+  }
+  if (path !== "/healthz" && path !== "/v1/info" && path !== "/v1/suggest") {
+    throw new HttpError(404, "bad_request", "Not Found");
   }
   await authorize(request, env);
   if (request.method === "GET" && path === "/v1/info") return info(request, env);
@@ -278,7 +265,7 @@ async function route(request: Request, env: Env, timing: RequestTiming): Promise
 }
 
 async function handle(request: Request, env: Env): Promise<Response> {
-  const started = performance.now();
+  const started = Date.now();
   const timing: RequestTiming = {
     base64Ms: 0,
     parseMs: 0,

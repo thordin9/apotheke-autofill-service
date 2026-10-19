@@ -66,7 +66,7 @@ to test exhaustion without spending the free allocation:
 |---|---|---|
 | `AUTOFILL_DAILY_NEURON_BUDGET` | `6000` | Hard daily cap. Over it, `POST /v1/suggest` is `503` with `Retry-After` until 00:00 UTC |
 | `AUTOFILL_DAILY_REQUEST_CAP` | empty | Optional count of admitted suggest calls per UTC day. Empty or `0` means no request cap |
-| `MAX_UPLOAD_BYTES` | `3145728` | Whole request body, 3 MiB. Reported as `max_image_bytes` |
+| `MAX_UPLOAD_BYTES` | `1048576` | Whole request body, 1 MiB. `max_image_bytes` is this minus 64 KiB (983040) |
 
 There is no KV namespace to create. Deploy creates the SQLite Durable Object
 class `Budget` from the `migrations` block (`new_sqlite_classes`). One
@@ -122,8 +122,12 @@ pinned Wrangler from `worker/package.json`. Secrets are step environment
 variables on the deploy step only.
 
 The smoke check then calls `https://apotheke-autofill-service.webapp.gr/healthz`
-(200) and `POST /v1/suggest` with no token (401). It retries while the
-certificate is issued. It does not send a photo.
+(200) and `POST /v1/suggest` with no token (401 only; 200 is not success).
+The URL is `vars.WORKER_URL` when that GitHub variable is set, and this
+hostname otherwise. A failed check prints the last HTTP status code and not
+the body. It retries while the certificate is issued. It does not send a
+photo. Before deploy, the workflow checks that `npx wrangler --version`
+matches `wrangler` in `worker/package.json`.
 
 The smoke check catches a bad deploy but does not undo it. To go back to the
 previous version, run this from `worker/` with the same scoped token:
@@ -149,7 +153,9 @@ own `production` environment, and sets `routes` in `wrangler.toml` to
    uses `https://<your-domain>`.
 2. Token: the `AUTOFILL_TOKEN` secret.
 3. Apotheke reads `max_image_bytes` from `GET /v1/info` and skips larger
-   photos. On this Worker that value is 3145728.
+   photos. On this Worker that value is 983040 (the 1048576 body cap minus
+   64 KiB). Resize to about 1600 px JPEG quality 80 before upload. An image
+   under 983040 still needs the multipart body to stay under 1048576.
 
 `POST /v1/suggest` is multipart, the same fields as the Python service
 (`image`, optional `context`). Type is decided from magic bytes.
@@ -174,7 +180,7 @@ getting `401`. Update Apotheke in the same step.
   "capabilities": ["name", "category", "tags", "description"],
   "backend": "cloudflare-workers",
   "backend_used": "cloudflare-workers",
-  "max_image_bytes": 3145728,
+  "max_image_bytes": 983040,
   "ready": true,
   "budget": {
     "neurons": {"limit": 6000, "used": 0, "reserved": 0, "remaining": 6000},
@@ -185,18 +191,22 @@ getting `401`. Update Apotheke in the same step.
 ```
 
 `used` is settled usage. `reserved` is the in-flight hold (30 Neurons per
-model call, including a repair). `remaining` subtracts both. `ready` is
-false when the cap is exhausted or the account's Workers AI quota has been
-marked used up for this UTC day.
+model call, including a repair). `remaining` subtracts both and is not
+reduced by another 30. `ready` is false when `remaining` is below 30, when
+the day is exhausted, or when a request cap has nothing left. A remaining of
+exactly 30 is still ready, and one suggest can succeed.
 
 The Cloudflare dashboard (Workers AI, Neurons) shows the account pool. The
 free allocation is 10,000 Neurons per UTC day for the whole account, shared
-with every other Worker. This service stops itself at 6,000. If Workers AI
-returns internal code 3036 (daily free allocation already used, often as
-HTTP 429) or 3040 (out of capacity), the client sees `503` with
-`Retry-After` until 00:00 UTC and no upstream text. 3036 also marks the
-Durable Object exhausted so later calls do not keep spending. 3006 (request
-too large) is `413`.
+with every other Worker. This service stops itself at 6,000. Workers AI
+internal code 3036 (daily free allocation already used, often as HTTP 429)
+is `503` with `Retry-After` until 00:00 UTC, and it marks the Durable Object
+exhausted. Code 3040 (out of capacity) is `503` with `Retry-After: 30` and
+the message `the model is out of capacity`. It does not mark the day
+exhausted. Only a structured `code`, `internalCode`, or `error_code` is
+mapped. A message that merely contains those digits is not. Neither
+response includes upstream text. 3006 (request too large) is `413` and names
+`max_image_bytes`.
 
 Each call reserves 30 Neurons, then settles `usage.neurons` when the binding
 returns it. Otherwise it charges Gemma 4 rates, 9091 Neurons per million
@@ -209,7 +219,7 @@ reservation on one Durable Object.
 
 | Limit | What we do |
 |---|---|
-| Workers Free CPU, about 10 ms per request | No image re-encode. Base64 uses `Uint8Array.toBase64`, then `node:buffer` if that method is missing. See the measurement below |
+| Workers Free CPU, about 10 ms per request | Body cap 1 MiB. No image re-encode. Base64 once, no extra JSON copy of the data URI. See the measurement below |
 | Workers AI, 10,000 Neurons/day for the account | Cap at 6,000. Fail closed if the Durable Object errors |
 | Workers KV free, 1,000 writes/day, eventually consistent | Not used |
 | Rate limiting binding | 10 requests / 60 s per `CF-Connecting-IP`, after auth, on `POST /v1/suggest` only. `429` with `Retry-After: 60`. Per location and loosely enforced. The Durable Object is the real cap |
@@ -227,20 +237,28 @@ Measured in workerd by `worker/test/base64-bench.test.ts` (`performance.now`,
 | 2 MiB | 1 ms | 5 ms | 5 ms |
 
 These are wall-clock times around those calls, not the Workers CPU meter.
-A full 3 MiB body is about one and a half times the 2 MiB JSON figure before
-multipart parsing and the AI binding's copy of the string, so a maximum-size
-upload can approach the 10 ms Free CPU limit. Apotheke's photos are usually
-around 100 KB, which is well under. The repair call reuses the encoded data
-URI, but the binding still copies the payload a second time.
+The live check measured `cpuTime` in Workers Logs: a 2.9 MiB photo was
+126 ms, photos of 30 to 95 KB were 9 to 17 ms, and a rejected 3 MiB body was
+41 ms. That is why the body cap is 1 MiB rather than 2 or 3 MiB.
+
+The Worker builds the AI input once. The data URI is not passed through
+`JSON.stringify` in this code. The repair call keeps the same image object,
+JSON schema, and thinking flag, and changes only the text. The AI binding
+still serializes that object once per call, including the repair. Magic
+bytes are checked on the first 12 bytes of the image part before the rest of
+that part is accepted. `Content-Length`, and a chunked body with no length,
+are rejected against the body cap before the multipart parse.
 
 Each request logs one JSON line: status, `base64_ms`, `parse_ms`,
 `validate_ms`, `total_ms`, neurons, model, and how many model calls ran. It
 does not log the token, the image, or brand, model number, or serial values.
-`base64_ms` is wall clock around the encode.
+The `*_ms` fields are `Date.now()` deltas. On the production isolate that
+clock does not move during CPU, so a CPU-only slice can be 0. `total_ms`
+includes the model await. Workers Logs `cpuTime` and `wallTime` are the
+platform measurement. Trust `cpuTime` over `base64_ms`.
 
-To see platform CPU time: `npx wrangler tail` prints the request log, and
-the Workers dashboard invocation detail shows CPU time. Trust that number
-over `base64_ms`.
+`npx wrangler tail` prints the request log. The Workers dashboard invocation
+detail shows CPU time.
 
 ## Privacy
 
@@ -248,16 +266,23 @@ The photo, and any brand, model number, or serial the model reads, are sent
 to Cloudflare Workers AI (`@cf/google/gemma-4-26b-a4b-it`). They are not
 written to the Worker logs. The Durable Object stores only counters.
 
+Workers Logs store the request metadata Cloudflare attaches, including
+`cf-connecting-ip` and `x-real-ip`. This Worker's `console.log` line does
+not add those headers, and it does not log a client address. The platform
+log still keeps the connecting IP. Do not copy a real address into the repo.
+
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | `GET /healthz` is `503` `{"status":"degraded"}` | `AUTOFILL_TOKEN` is missing or empty. `npx wrangler secret put AUTOFILL_TOKEN` |
 | `401` | Wrong or missing `Authorization: Bearer` token |
-| `413` | Body larger than `MAX_UPLOAD_BYTES`, including a chunked body with no `Content-Length`. Also Workers AI code 3006 |
-| `415` | Bytes are not JPEG, PNG, or WebP |
+| `404` | Unknown path. This is 404 even when `AUTOFILL_TOKEN` is missing. `/healthz`, `/v1/info`, and `/v1/suggest` are the only routes |
+| `413` | Body larger than `MAX_UPLOAD_BYTES` (the message names that cap), including a chunked body with no `Content-Length`. An image part over `max_image_bytes`, or Workers AI code 3006, names the image cap |
+| `415` | Bytes are not JPEG, PNG, or WebP. Checked from the first bytes of the image part |
 | `429` `Retry-After: 60` | Per-location rate limit. Wait. The daily cap is separate |
-| `503` `daily capacity is exhausted` plus `Retry-After` | Neuron budget, request cap, Workers AI 3036, or Workers AI 3040. Resets at 00:00 UTC. `GET /v1/info` shows `remaining` |
+| `503` `daily capacity is exhausted` plus `Retry-After` until 00:00 UTC | Neuron budget, request cap, or Workers AI 3036. 3036 marks the day exhausted. `GET /v1/info` shows `remaining` |
+| `503` `the model is out of capacity` plus `Retry-After: 30` | Workers AI 3040. The day is not marked exhausted |
 | `503` `the model is unavailable` | Workers AI returned some other HTTP 4xx. The client does not see the upstream body |
 | `503` `model output was not a JSON object` | The reply was still prose after the one repair. It is not used as a name |
 | `503` and the model was not called | Durable Object error. The Worker fails closed and does not serve uncapped |

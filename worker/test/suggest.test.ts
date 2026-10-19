@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { workersAiCode } from "../src/ai";
 import { buildPrompt, V3_CATEGORIES } from "../src/prompt";
 import { clamp } from "../src/validate";
 import {
@@ -29,6 +30,7 @@ describe("suggest", () => {
     expect(response.status).toBe(200);
     const body = await bodyOf(response);
     expect(body.model_used).toBe("@cf/google/gemma-4-26b-a4b-it");
+    expect(body.backend_used).toBe("cloudflare-workers");
     expect(body.brand).toBe("Bosch");
     expect(body.category).toEqual({ value: "Tools", confidence: 0.82 });
     expect(calls).toHaveLength(1);
@@ -47,6 +49,16 @@ describe("suggest", () => {
     expect(logged).not.toContain("Bosch");
     expect(logged).not.toContain("test-token");
     expect(logged).toContain("\"neurons\":21.37");
+    const line = JSON.parse(logs.lines.find((entry) => entry.includes("\"neurons\":21.37")) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(line).toMatchObject({
+      base64_ms: expect.any(Number),
+      parse_ms: expect.any(Number),
+      validate_ms: expect.any(Number),
+      total_ms: expect.any(Number),
+    });
   });
 
   it("repairs an invalid reply once", async () => {
@@ -60,6 +72,13 @@ describe("suggest", () => {
     const firstUrl = imageUrl(calls[0].input);
     const secondUrl = imageUrl(calls[1].input);
     expect(secondUrl).toBe(firstUrl);
+    expect(imagePart(calls[1].input)).toBe(imagePart(calls[0].input));
+    expect(calls[1].input.response_format).toBe(calls[0].input.response_format);
+    expect(calls[1].input.chat_template_kwargs).toBe(calls[0].input.chat_template_kwargs);
+    const firstText = textPart(calls[0].input);
+    const secondText = textPart(calls[1].input);
+    expect(secondText.startsWith(firstText)).toBe(true);
+    expect(secondText).not.toBe(firstText);
   });
 
   it("returns backend_error when the repair also fails", async () => {
@@ -92,16 +111,17 @@ describe("suggest", () => {
   });
 
   it("maps Workers AI 3036 and 3040 to 503 and 3006 to 413 without upstream text", async () => {
+    const evening = Date.parse("2026-10-19T23:00:00.000Z");
     const secret = `${UPSTREAM} allocation of neurons`;
     const quota = scriptedAi([Object.assign(new Error(secret), { errors: [{ code: 3036, message: secret }] })]);
-    const quotaResponse = await call(suggestRequest(), { AI: quota.ai });
+    const quotaResponse = await call(suggestRequest(jpeg(), { now: evening }), { AI: quota.ai });
     expect(quotaResponse.status).toBe(503);
-    expect(quotaResponse.headers.get("retry-after")).toMatch(/^\d+$/);
+    expect(quotaResponse.headers.get("retry-after")).toBe("3600");
     const quotaBody = JSON.stringify(await quotaResponse.json());
     expect(quotaBody).not.toContain(UPSTREAM);
     expect(quotaBody).toContain("daily capacity is exhausted");
 
-    const again = await call(suggestRequest(), { AI: quota.ai });
+    const again = await call(suggestRequest(jpeg(), { now: evening }), { AI: quota.ai });
     expect(again.status).toBe(503);
     expect(quota.calls).toHaveLength(1);
 
@@ -110,11 +130,13 @@ describe("suggest", () => {
       Object.assign(new Error(secret), { errors: [{ code: 3040, message: secret }] }),
       reply(VALID),
     ]);
-    const capacityResponse = await call(suggestRequest(), { AI: capacity.ai });
+    const capacityResponse = await call(suggestRequest(jpeg(), { now: evening }), { AI: capacity.ai });
     expect(capacityResponse.status).toBe(503);
-    expect(capacityResponse.headers.get("retry-after")).toMatch(/^\d+$/);
-    expect(JSON.stringify(await capacityResponse.json())).not.toContain(UPSTREAM);
-    const recovered = await call(suggestRequest(), { AI: capacity.ai });
+    expect(capacityResponse.headers.get("retry-after")).toBe("30");
+    expect(await bodyOf(capacityResponse)).toEqual({
+      error: { code: "backend_unavailable", message: "the model is out of capacity" },
+    });
+    const recovered = await call(suggestRequest(jpeg(), { now: evening }), { AI: capacity.ai });
     expect(recovered.status).toBe(200);
     expect(capacity.calls).toHaveLength(2);
 
@@ -127,7 +149,7 @@ describe("suggest", () => {
     expect(tooBigResponse.status).toBe(413);
     const tooBigBody = await bodyOf(tooBigResponse);
     expect(tooBigBody).toEqual({
-      error: { code: "payload_too_large", message: "image exceeds 3145728 bytes" },
+      error: { code: "payload_too_large", message: "image exceeds 3080192 bytes" },
     });
     expect(JSON.stringify(tooBigBody)).not.toContain(UPSTREAM);
     const after = await call(suggestRequest(), { AI: tooBig.ai });
@@ -147,6 +169,24 @@ describe("suggest", () => {
       });
       expect(JSON.stringify(body)).not.toContain(UPSTREAM);
     }
+  });
+
+  it("does not treat a message that merely contains 3036 as quota exhaustion", async () => {
+    expect(workersAiCode(new Error("network reset after 3036 ms"))).toBeNull();
+    expect(workersAiCode(new Error("failed after 3006 ms"))).toBeNull();
+    expect(workersAiCode({ message: "3036" })).toBeNull();
+    expect(workersAiCode({ errors: [{ code: "3040", message: "Capacity temporarily exceeded" }] })).toBe(3040);
+    const { ai, calls } = scriptedAi([new Error("network reset after 3036 ms"), reply(VALID, { neurons: 10 })]);
+    const response = await call(suggestRequest(), { AI: ai });
+    expect(response.status).toBe(503);
+    const body = await bodyOf(response);
+    expect(body).toEqual({
+      error: { code: "backend_unavailable", message: "the model is unavailable" },
+    });
+    expect(JSON.stringify(body)).not.toContain("3036");
+    const again = await call(suggestRequest(), { AI: ai });
+    expect(again.status).toBe(200);
+    expect(calls).toHaveLength(2);
   });
 
   it("rejects prose that is still not JSON after the repair", async () => {
@@ -231,7 +271,19 @@ describe("suggest", () => {
   });
 });
 
+function messageContent(input: Record<string, unknown>): Array<Record<string, unknown>> {
+  const messages = input.messages as Array<{ content: Array<Record<string, unknown>> }>;
+  return messages[0].content;
+}
+
 function imageUrl(input: Record<string, unknown>): string {
-  const messages = input.messages as Array<{ content: Array<{ image_url?: { url: string } }> }>;
-  return messages[0].content[1].image_url?.url ?? "";
+  return (messageContent(input)[1].image_url as { url: string } | undefined)?.url ?? "";
+}
+
+function imagePart(input: Record<string, unknown>): unknown {
+  return messageContent(input)[1];
+}
+
+function textPart(input: Record<string, unknown>): string {
+  return String(messageContent(input)[0].text ?? "");
 }
