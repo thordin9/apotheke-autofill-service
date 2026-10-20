@@ -711,8 +711,10 @@ tuning*), [`ollama-wait-cuda.conf`](../deploy/jetson/ollama-wait-cuda.conf) with
 [`wait-cuda.sh`](../deploy/jetson/wait-cuda.sh), and
 [`ollama-gpu-check.service`](../deploy/jetson/ollama-gpu-check.service), plus the self-hosted runner.
 
-**Runner:** it stays registered to this repo and online, but no enabled workflow targets it. Fork PRs
-still need approval before any workflow runs. Deregister it if the board leaves the project.
+**Runner:** it stays registered to this repo and online for the board's Ollama work, but no enabled
+workflow targets it. The repo requires approval before workflows run for all outside contributors' fork
+PRs. No workflow may ever target this runner from `pull_request_target` or from any fork-triggered event.
+Deregistering it is the owner's call.
 
 **Workflows:** `jetson-hardware.yml` and `jetson.yml` are disabled in the Actions settings and carry a legacy
 header. The code in `deploy/jetson/`, `Dockerfile.jetson` and the tests stay in the repo.
