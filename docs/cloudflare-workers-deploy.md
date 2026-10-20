@@ -157,8 +157,10 @@ own `production` environment, and sets `routes` in `wrangler.toml` to
    advertised value is 524288 (`min(524288, MAX_UPLOAD_BYTES − 64 KiB)`). A
    lower `MAX_UPLOAD_BYTES` below 589824 lowers the advertisement to the
    enforced image cap. The Worker still accepts a larger body, up to 1048576,
-   when the image part is at most 983040. Change the 524288 constant in one
-   place: `ADVERTISED_MAX_IMAGE_BYTES` in `worker/src/multipart.ts`.
+   when the image part is at most 983040. To change the 524288 constant, edit
+   `ADVERTISED_MAX_IMAGE_BYTES` in `worker/src/multipart.ts` and the deliberate
+   pin in `worker/test/budget.test.ts`. The local runtime check reads the
+   constant, and Deploy Worker runs that check before `wrangler deploy`.
 
 `POST /v1/suggest` is multipart, the same fields as the Python service
 (`image`, optional `context`). Type is decided from magic bytes.

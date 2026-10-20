@@ -18,6 +18,31 @@ inspector_port=9239
 token=ci-local-check
 pid=""
 
+# The expected /v1/info value is computed the way the Worker computes it:
+# min(ADVERTISED_MAX_IMAGE_BYTES, max(0, MAX_UPLOAD_BYTES - MULTIPART_HEADROOM)),
+# with the constants from src/multipart.ts and MAX_UPLOAD_BYTES from the
+# wrangler.toml [vars] that this check runs with. Moving the advertised limit
+# (for example to 786432) or the body cap needs no edit here.
+read_const() {
+  sed -nE "s/^export const $1 = ([0-9]+);.*/\\1/p" src/multipart.ts
+}
+advertised=$(read_const ADVERTISED_MAX_IMAGE_BYTES)
+headroom=$(read_const MULTIPART_HEADROOM)
+for value in "$advertised" "$headroom"; do
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "could not read ADVERTISED_MAX_IMAGE_BYTES and MULTIPART_HEADROOM from src/multipart.ts" >&2
+    exit 1
+  fi
+done
+# Same fallback as parseMaxUpload: missing, empty, non-numeric or 0 means 1048576.
+cap=$(sed -nE 's/^MAX_UPLOAD_BYTES = "([^"]*)".*/\1/p' wrangler.toml | head -n1)
+if [[ ! "$cap" =~ ^[0-9]+$ ]] || (( 10#$cap == 0 )); then
+  cap=1048576
+fi
+image_cap=$(( 10#$cap - headroom ))
+(( image_cap < 0 )) && image_cap=0
+expected=$(( advertised < image_cap ? advertised : image_cap ))
+
 cleanup() {
   if [[ -n "$pid" ]]; then
     kill -- "-${pid}" 2>/dev/null || kill "$pid" 2>/dev/null || true
@@ -91,11 +116,12 @@ printf '%s' "$health" | grep -q '"status":"ok"'
 info=$(curl -sf --max-time 5 \
   -H "Authorization: Bearer ${token}" \
   "http://127.0.0.1:${port}/v1/info")
-INFO_BODY="$info" node --input-type=module <<'JS'
+INFO_BODY="$info" EXPECTED="$expected" node --input-type=module <<'JS'
 const body = JSON.parse(process.env.INFO_BODY);
-if (body.max_image_bytes !== 524288) {
-  process.stderr.write(`max_image_bytes ${body.max_image_bytes}\n`);
+const expected = Number(process.env.EXPECTED);
+if (body.max_image_bytes !== expected) {
+  process.stderr.write(`max_image_bytes ${body.max_image_bytes}, expected ${expected}\n`);
   process.exit(1);
 }
-process.stdout.write("local /healthz 200; /v1/info max_image_bytes 524288\n");
+process.stdout.write(`local /healthz 200; /v1/info max_image_bytes ${expected}\n`);
 JS

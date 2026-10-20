@@ -314,7 +314,8 @@ stays `"1"`. Clients keep ignoring unknown fields.
   enforced image cap, and Workers AI code 3006, are `413` and the message
   names that image cap. `/v1/info` `max_image_bytes` is
   `min(ADVERTISED_MAX_IMAGE_BYTES, MAX_UPLOAD_BYTES − 64 KiB)`. The constant
-  is 524288 in `worker/src/multipart.ts`, the one place to change it. At the
+  is 524288 in `worker/src/multipart.ts`. To change it, edit that constant and
+  the deliberate pin in `worker/test/budget.test.ts`. At the
   default body cap the advertised value is 524288. A `MAX_UPLOAD_BYTES` below
   589824 lowers it to the enforced image cap. The Worker does not reject a
   body for exceeding 524288. A body between 524288 and 1048576 is accepted

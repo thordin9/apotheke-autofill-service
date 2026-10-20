@@ -5,6 +5,16 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ## [Unreleased]
 
+### CI
+
+- **Deploy Worker runs the local runtime check before `wrangler deploy`.** The
+  same `worker/scripts/local-info-check.sh` that CI runs now gates the deploy
+  job, so a bundle the Workers runtime refuses can't be uploaded even if it
+  reaches main without CI. The script reads the expected `max_image_bytes` from
+  `ADVERTISED_MAX_IMAGE_BYTES` instead of hard-coding 524288.
+- `jetson.yml` drops its unreachable non-manual step, and the README no longer
+  says it starts on file changes.
+
 ### Deprecated
 
 - **The Jetson deployment is decommissioned (2026-10-20).** The board no longer
