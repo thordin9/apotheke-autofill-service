@@ -101,6 +101,10 @@ jobs:
       - name: Package dry run
         run: npx wrangler deploy --dry-run
 
+      - name: Local runtime info check
+        timeout-minutes: 3
+        run: bash scripts/local-info-check.sh
+
   deploy-scripts:
     # Jetson deploy scripts: shellcheck and the fake-docker harness (bash only; no Docker, network or root).
     runs-on: ubuntu-latest
