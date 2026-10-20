@@ -97,7 +97,12 @@ Prefer `npm test` over `wrangler dev` unless you mean to spend Neurons.
 
 If `AUTOFILL_TOKEN` is missing or empty, `GET /healthz` is `503`
 `{"status":"degraded"}` and `/v1/info` and `/v1/suggest` are `503`
-`backend_unavailable`. The Worker does not run open.
+`backend_unavailable`. The Worker does not run open. The check hashes both
+tokens and compares the digests with `crypto.subtle.timingSafeEqual`. The
+server token's digest is cached for the life of the isolate and replaced
+when the secret value changes, so a rotation applies on the next request.
+The presented token is hashed every time. The token and the digest are not
+logged.
 
 ## Deploy
 
@@ -256,8 +261,14 @@ The Worker builds the AI input once. The data URI is not passed through
 JSON schema, and thinking flag, and changes only the text. The AI binding
 still serializes that object once per call, including the repair. Magic
 bytes are checked on the first 12 bytes of the image part before the rest of
-that part is accepted. `Content-Length`, and a chunked body with no length,
-are rejected against the body cap before the multipart parse.
+that part is accepted. A single numeric `Content-Length` over the body cap
+is rejected before the body is read. A single numeric `Content-Length`
+within the cap is buffered once and checked again: a byte count over the
+cap is still `413`, and a body that is shorter or longer than the declared
+length is `400` `invalid Content-Length`. A non-numeric, negative, or
+combined `Content-Length` is that same `400` and is not buffered. A chunked
+body with no length is still counted as it is read and aborted over the cap.
+Both checks happen before the multipart parse.
 
 Each request logs one JSON line: status, `base64_ms`, `parse_ms`,
 `validate_ms`, `total_ms`, neurons, model, and how many model calls ran. It
@@ -288,7 +299,7 @@ log still keeps the connecting IP. Do not copy a real address into the repo.
 | `GET /healthz` is `503` `{"status":"degraded"}` | `AUTOFILL_TOKEN` is missing or empty. `npx wrangler secret put AUTOFILL_TOKEN` |
 | `401` | Wrong or missing `Authorization: Bearer` token |
 | `404` | Unknown path. This is 404 even when `AUTOFILL_TOKEN` is missing. `/healthz`, `/v1/info`, and `/v1/suggest` are the only routes |
-| `413` | Body larger than `MAX_UPLOAD_BYTES` (the message names that cap), including a chunked body with no `Content-Length`. An image part over the enforced image cap (body cap minus 64 KiB, 983040 at the default), or Workers AI code 3006, names that image cap. Advertised `max_image_bytes` (524288) is not this cap |
+| `413` | Body larger than `MAX_UPLOAD_BYTES` (the message names that cap). A numeric `Content-Length` over the cap is rejected before the body is read. A numeric `Content-Length` within the cap is still checked after the body is buffered. A chunked body with no `Content-Length` is aborted as it is read. A length that does not match the bytes, or a non-numeric, negative, or combined `Content-Length`, is `400` `invalid Content-Length`. An image part over the enforced image cap (body cap minus 64 KiB, 983040 at the default), or Workers AI code 3006, names that image cap. Advertised `max_image_bytes` (524288) is not this cap |
 | `415` | Bytes are not JPEG, PNG, or WebP. Checked from the first bytes of the image part |
 | `429` `Retry-After: 60` | Per-location rate limit. Wait. The daily cap is separate |
 | `503` `daily capacity is exhausted` plus `Retry-After` until 00:00 UTC | Neuron budget, request cap, or Workers AI 3036. 3036 marks the day exhausted. `GET /v1/info` shows `remaining` |

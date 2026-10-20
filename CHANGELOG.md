@@ -25,6 +25,18 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Changed
 
+- **Worker suggest reads a known body in one buffer.** When `Content-Length`
+  is a single integer within `MAX_UPLOAD_BYTES`, `POST /v1/suggest` buffers
+  that body and still checks the bytes read. A declared length over the cap
+  is `413` before the read. A body shorter or longer than the declared
+  length is `400` `invalid Content-Length`. A non-numeric, negative, or
+  combined length is that same `400` and is not buffered. A missing length
+  is still streamed and aborted at the cap.
+- **Worker auth caches the server token digest.** The SHA-256 digest of
+  `AUTOFILL_TOKEN` is kept for the isolate and recomputed when the secret
+  value changes. The presented token is hashed on every request and compared
+  with `crypto.subtle.timingSafeEqual`. A missing or empty secret is still
+  `503`. The token and the digest are not logged.
 - **Worker upload cap is 1 MiB.** Live Workers Logs `cpuTime` at about 2.9 MiB
   was 126 ms, past the 10 ms Free CPU limit, so `MAX_UPLOAD_BYTES` is
   **1048576**. The enforced image-part cap is that minus 64 KiB

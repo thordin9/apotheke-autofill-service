@@ -14,8 +14,10 @@ Apotheke only changes the base URL and the bearer token. The Worker reports
 `backend: "cloudflare-workers"` and, at the default body cap,
 `max_image_bytes: 524288`. That figure is
 `min(ADVERTISED_MAX_IMAGE_BYTES, MAX_UPLOAD_BYTES − 64 KiB)` from
-`worker/src/multipart.ts`. The request body cap stays 1 MiB (`1048576`). An
-image part is still rejected above 983040 (the body cap minus 64 KiB). The
+`worker/src/multipart.ts`. The request body cap stays 1 MiB (`1048576`).
+A single numeric `Content-Length` within that cap is buffered and checked
+against the bytes read. A missing length is still streamed and aborted at
+the cap. An image part is still rejected above 983040 (the body cap minus 64 KiB). The
 Python service stays at 10 MiB.
 
 Docker and the Jetson stack below are **legacy self-hosting**. They keep the
