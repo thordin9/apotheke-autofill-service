@@ -28,9 +28,16 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 - **Worker suggest reads a known body in one buffer.** When `Content-Length`
   is a single integer within `MAX_UPLOAD_BYTES`, `POST /v1/suggest` buffers
   that body and still checks the bytes read. A declared length over the cap
-  is `413` before the read. A body shorter or longer than the declared
-  length is `400` `invalid Content-Length`. A non-numeric, negative, or
-  combined length is that same `400` and is not buffered. A missing length
+  is `413` before the read. On a Request built in code, a body shorter or
+  longer than the declared length is `400` `invalid Content-Length`. Over
+  the network, bytes past the declared length are not part of the body, and
+  a short body waits for the client and then gets `400`
+  `expected multipart/form-data`. workerd rejects a malformed length
+  (`abc`, `-1`, `+N`, comma-joined values, differing duplicates, anything
+  over 2^53) with a plain-text 400 before the Worker runs. Leading zeros,
+  whitespace, and identical duplicates are accepted, and chunked framing
+  wins over a length. If a malformed length reaches the Worker, it returns
+  JSON `400` `invalid Content-Length` and does not buffer. A missing length
   is still streamed and aborted at the cap.
 - **Worker auth caches the server token digest.** The SHA-256 digest of
   `AUTOFILL_TOKEN` is kept for the isolate and recomputed when the secret

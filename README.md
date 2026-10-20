@@ -17,7 +17,14 @@ Apotheke only changes the base URL and the bearer token. The Worker reports
 `worker/src/multipart.ts`. The request body cap stays 1 MiB (`1048576`).
 A single numeric `Content-Length` within that cap is buffered and checked
 against the bytes read. A missing length is still streamed and aborted at
-the cap. An image part is still rejected above 983040 (the body cap minus 64 KiB). The
+the cap. Over HTTP, workerd rejects a malformed `Content-Length` with a
+plain-text 400 before the Worker runs. That covers `abc`, `-1`, `+N`,
+comma-joined values, differing duplicates, and anything over 2^53. Leading
+zeros, whitespace, and identical duplicates are accepted, and chunked
+framing wins over a length. The Worker's JSON 400 `invalid Content-Length`
+for a shorter or longer body applies to Requests built in code. Over the
+network a short body waits for the client and then gets 400
+`expected multipart/form-data`. An image part is still rejected above 983040 (the body cap minus 64 KiB). The
 Python service stays at 10 MiB.
 
 Docker and the Jetson stack below are **legacy self-hosting**. They keep the
