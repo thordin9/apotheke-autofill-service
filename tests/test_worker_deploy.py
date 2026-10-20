@@ -124,8 +124,9 @@ def test_deploy_runs_local_runtime_check_before_deploy():
     job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["deploy"]
     names = [step.get("name") for step in job["steps"]]
     check = job["steps"][names.index("Local runtime info check")]
+    # No if:, continue-on-error or env, so the guard can't be skipped or softened.
+    assert set(check) == {"name", "timeout-minutes", "run"}
     assert check["run"].strip() == "bash scripts/local-info-check.sh"
-    assert "env" not in check
     assert names.index("Local runtime info check") < names.index("Deploy")
 
 
@@ -133,6 +134,8 @@ def test_local_info_check_reads_the_constant():
     script = (ROOT / "worker" / "scripts" / "local-info-check.sh").read_text()
     assert "ADVERTISED_MAX_IMAGE_BYTES" in script
     assert "524288" not in script
+    assert "MULTIPART_HEADROOM" in script
+    assert "wrangler.toml" in script
 
 
 def test_deploy_checkout_drops_credentials_and_no_legacy_peer_deps():

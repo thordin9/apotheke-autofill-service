@@ -18,14 +18,30 @@ inspector_port=9239
 token=ci-local-check
 pid=""
 
-# The expected /v1/info value comes from the one constant in src/multipart.ts,
-# so moving the advertised limit (for example to 786432) needs no edit here.
-# At the default MAX_UPLOAD_BYTES (1048576) the advertised value is the constant.
-expected=$(sed -nE 's/^export const ADVERTISED_MAX_IMAGE_BYTES = ([0-9]+);.*/\1/p' src/multipart.ts)
-if [[ ! "$expected" =~ ^[0-9]+$ ]]; then
-  echo "could not read ADVERTISED_MAX_IMAGE_BYTES from src/multipart.ts" >&2
-  exit 1
+# The expected /v1/info value is computed the way the Worker computes it:
+# min(ADVERTISED_MAX_IMAGE_BYTES, max(0, MAX_UPLOAD_BYTES - MULTIPART_HEADROOM)),
+# with the constants from src/multipart.ts and MAX_UPLOAD_BYTES from the
+# wrangler.toml [vars] that this check runs with. Moving the advertised limit
+# (for example to 786432) or the body cap needs no edit here.
+read_const() {
+  sed -nE "s/^export const $1 = ([0-9]+);.*/\\1/p" src/multipart.ts
+}
+advertised=$(read_const ADVERTISED_MAX_IMAGE_BYTES)
+headroom=$(read_const MULTIPART_HEADROOM)
+for value in "$advertised" "$headroom"; do
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "could not read ADVERTISED_MAX_IMAGE_BYTES and MULTIPART_HEADROOM from src/multipart.ts" >&2
+    exit 1
+  fi
+done
+# Same fallback as parseMaxUpload: missing, empty, non-numeric or 0 means 1048576.
+cap=$(sed -nE 's/^MAX_UPLOAD_BYTES = "([^"]*)".*/\1/p' wrangler.toml | head -n1)
+if [[ ! "$cap" =~ ^[0-9]+$ ]] || (( 10#$cap == 0 )); then
+  cap=1048576
 fi
+image_cap=$(( 10#$cap - headroom ))
+(( image_cap < 0 )) && image_cap=0
+expected=$(( advertised < image_cap ? advertised : image_cap ))
 
 cleanup() {
   if [[ -n "$pid" ]]; then

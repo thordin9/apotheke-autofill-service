@@ -7,7 +7,8 @@ export const MULTIPART_HEADROOM = 65536;
 /**
  * Client target for max_image_bytes. Not enforced on suggest.
  * Change this number (786432 if 524288 sends real photos back too_large) and the
- * deliberate pin in test/budget.test.ts. scripts/local-info-check.sh reads it from here.
+ * deliberate pin in test/budget.test.ts. scripts/local-info-check.sh reads it from here,
+ * so keep it a plain integer literal, at most 983040 (the enforced image cap at 1 MiB).
  * GET /v1/info reports min(this, maxImageBytes(MAX_UPLOAD_BYTES)).
  */
 export const ADVERTISED_MAX_IMAGE_BYTES = 524288;
