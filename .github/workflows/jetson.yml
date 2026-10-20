@@ -8,8 +8,7 @@
 # dustynv/ollama:r35.4.1 is about 5.8 GB compressed and about 16 GB unpacked.
 # Building it with QEMU on a GitHub-hosted runner usually runs out of disk or
 # hits the job timeout, so this workflow is not a merge blocker
-# (continue-on-error). Run it on purpose with workflow_dispatch, or let it
-# start when Dockerfile.jetson / requirements-jetson.txt change. Build on the
+# (continue-on-error). Run it on purpose with workflow_dispatch. Build on the
 # Xavier (or another native arm64 machine) when the hosted run does not finish.
 
 name: Jetson image
@@ -18,19 +17,9 @@ name: Jetson image
 permissions:
   contents: read
 
+# Legacy: manual runs only (the pull_request and push triggers were removed on 2026-10-20).
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - Dockerfile.jetson
-      - requirements-jetson.txt
-      - .github/workflows/jetson.yml
-  push:
-    branches: [main]
-    paths:
-      - Dockerfile.jetson
-      - requirements-jetson.txt
-      - .github/workflows/jetson.yml
 
 jobs:
   jetson-image:

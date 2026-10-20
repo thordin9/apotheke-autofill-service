@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+import pytest
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 ANCHOR = "deploy-jetson.md#decommissioned-2026-10-20"
 
@@ -12,12 +15,14 @@ def test_jetson_workflows_have_legacy_header():
         assert head.startswith("# LEGACY (2026-10-20)"), name
 
 
-def test_jetson_hardware_stays_dispatch_only():
-    text = (ROOT / ".github" / "workflows" / "jetson-hardware.yml").read_text()
-    on = text.split("\non:", 1)[1].split("\n\n", 1)[0]
-    assert "workflow_dispatch" in on
-    for trigger in ("pull_request", "push", "schedule", "workflow_run"):
-        assert trigger not in on
+@pytest.mark.parametrize("name", ["jetson-hardware.yml", "jetson.yml"])
+def test_jetson_workflows_are_dispatch_only(name):
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / name).read_text())
+    # PyYAML reads the bare key `on` as True.
+    triggers = doc.get("on", doc.get(True))
+    if isinstance(triggers, str):
+        triggers = [triggers]
+    assert list(triggers) == ["workflow_dispatch"], name
 
 
 def test_jetson_docs_marked_legacy():
@@ -27,6 +32,7 @@ def test_jetson_docs_marked_legacy():
     assert "> **Legacy:** removed from the board on 2026-10-20" in deploy
     assert ANCHOR in (ROOT / "docs" / "hardware-ci.md").read_text()
     assert ANCHOR in (ROOT / "README.md").read_text()
+    assert ANCHOR.split("/")[-1] in (ROOT / "docs" / "benchmarks.md").read_text()
     assert (
         "Jetson Ollama tuning"
         in (ROOT / "deploy" / "jetson" / "ollama-10-autofill.conf").read_text()

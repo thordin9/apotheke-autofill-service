@@ -700,7 +700,7 @@ as the name.
 The Jetson deployment was taken down after QA's end-to-end pass of Apotheke v2.5.0 against the Worker.
 
 **Removed from the board:** the service container, its images (`apotheke-autofill:jetson-*` and the
-`dustynv/ollama:r35.4.1` base), `/opt/autofill/` (env files shredded first), and the whole inbound bandwidth
+`dustynv/ollama:r35.4.1` base), `/opt/autofill/` (env files and the auth header file shredded first), and the whole inbound bandwidth
 limit: `dl-cap.service`, `dl-cap.sh`, `dl-cap-check.timer`/`.service`, `dl-cap-check.sh`, the NetworkManager hook
 `90-dl-cap`, the `eth0` ingress qdisc with its police filters, and the lock and marker files under `/run`.
 Benchmark data was archived on the board, outside the repo.
@@ -710,6 +710,9 @@ its models, [`ollama-10-autofill.conf`](../deploy/jetson/ollama-10-autofill.conf
 tuning*), [`ollama-wait-cuda.conf`](../deploy/jetson/ollama-wait-cuda.conf) with
 [`wait-cuda.sh`](../deploy/jetson/wait-cuda.sh), and
 [`ollama-gpu-check.service`](../deploy/jetson/ollama-gpu-check.service), plus the self-hosted runner.
+
+**Runner:** it stays registered to this repo and online, but no enabled workflow targets it. Fork PRs
+still need approval before any workflow runs. Deregister it if the board leaves the project.
 
 **Workflows:** `jetson-hardware.yml` and `jetson.yml` are disabled in the Actions settings and carry a legacy
 header. The code in `deploy/jetson/`, `Dockerfile.jetson` and the tests stay in the repo.
