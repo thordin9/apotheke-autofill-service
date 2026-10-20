@@ -56,6 +56,13 @@ jobs:
               ;;
           esac
 
+      # Same check as CI: build the bundle, start it in the local runtime (no
+      # credentials, no remote bindings) and check /healthz and /v1/info. A
+      # bundle the Workers runtime refuses never reaches wrangler deploy.
+      - name: Local runtime info check
+        timeout-minutes: 3
+        run: bash scripts/local-info-check.sh
+
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

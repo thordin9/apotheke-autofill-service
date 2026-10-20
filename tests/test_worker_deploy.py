@@ -120,6 +120,21 @@ def test_deploy_workflow_installs_with_ci_and_checks_wrangler():
     assert names.index("Test") < names.index("Deploy")
 
 
+def test_deploy_runs_local_runtime_check_before_deploy():
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["deploy"]
+    names = [step.get("name") for step in job["steps"]]
+    check = job["steps"][names.index("Local runtime info check")]
+    assert check["run"].strip() == "bash scripts/local-info-check.sh"
+    assert "env" not in check
+    assert names.index("Local runtime info check") < names.index("Deploy")
+
+
+def test_local_info_check_reads_the_constant():
+    script = (ROOT / "worker" / "scripts" / "local-info-check.sh").read_text()
+    assert "ADVERTISED_MAX_IMAGE_BYTES" in script
+    assert "524288" not in script
+
+
 def test_deploy_checkout_drops_credentials_and_no_legacy_peer_deps():
     workflow = yaml.safe_load(WORKFLOW.read_text())
     steps = workflow["jobs"]["deploy"]["steps"]

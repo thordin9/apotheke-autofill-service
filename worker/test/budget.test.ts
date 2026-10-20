@@ -35,6 +35,7 @@ describe("budget", () => {
     expect(body.capabilities).toEqual(["name", "category", "tags", "description"]);
     expect(body.backend).toBe("cloudflare-workers");
     expect(body.backend_used).toBe("cloudflare-workers");
+    // Deliberate pin: moving the advertised limit must also change this line.
     expect(ADVERTISED_MAX_IMAGE_BYTES).toBe(524288);
     expect(body.max_image_bytes).toBe(Math.min(ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes(1048576)));
     expect(body.ready).toBe(true);

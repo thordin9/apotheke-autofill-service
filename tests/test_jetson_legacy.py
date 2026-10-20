@@ -31,7 +31,10 @@ def test_jetson_docs_marked_legacy():
     assert "**Legacy, decommissioned on 2026-10-20.**" in deploy.split("## Contents", 1)[0]
     assert "> **Legacy:** removed from the board on 2026-10-20" in deploy
     assert ANCHOR in (ROOT / "docs" / "hardware-ci.md").read_text()
-    assert ANCHOR in (ROOT / "README.md").read_text()
+    readme = (ROOT / "README.md").read_text()
+    assert ANCHOR in readme
+    assert "Path-triggered runs" not in readme
+    assert "github.event_name" not in (ROOT / ".github" / "workflows" / "jetson.yml").read_text()
     assert ANCHOR.split("/")[-1] in (ROOT / "docs" / "benchmarks.md").read_text()
     assert (
         "Jetson Ollama tuning"

@@ -18,6 +18,15 @@ inspector_port=9239
 token=ci-local-check
 pid=""
 
+# The expected /v1/info value comes from the one constant in src/multipart.ts,
+# so moving the advertised limit (for example to 786432) needs no edit here.
+# At the default MAX_UPLOAD_BYTES (1048576) the advertised value is the constant.
+expected=$(sed -nE 's/^export const ADVERTISED_MAX_IMAGE_BYTES = ([0-9]+);.*/\1/p' src/multipart.ts)
+if [[ ! "$expected" =~ ^[0-9]+$ ]]; then
+  echo "could not read ADVERTISED_MAX_IMAGE_BYTES from src/multipart.ts" >&2
+  exit 1
+fi
+
 cleanup() {
   if [[ -n "$pid" ]]; then
     kill -- "-${pid}" 2>/dev/null || kill "$pid" 2>/dev/null || true
@@ -91,11 +100,12 @@ printf '%s' "$health" | grep -q '"status":"ok"'
 info=$(curl -sf --max-time 5 \
   -H "Authorization: Bearer ${token}" \
   "http://127.0.0.1:${port}/v1/info")
-INFO_BODY="$info" node --input-type=module <<'JS'
+INFO_BODY="$info" EXPECTED="$expected" node --input-type=module <<'JS'
 const body = JSON.parse(process.env.INFO_BODY);
-if (body.max_image_bytes !== 524288) {
-  process.stderr.write(`max_image_bytes ${body.max_image_bytes}\n`);
+const expected = Number(process.env.EXPECTED);
+if (body.max_image_bytes !== expected) {
+  process.stderr.write(`max_image_bytes ${body.max_image_bytes}, expected ${expected}\n`);
   process.exit(1);
 }
-process.stdout.write("local /healthz 200; /v1/info max_image_bytes 524288\n");
+process.stdout.write(`local /healthz 200; /v1/info max_image_bytes ${expected}\n`);
 JS
