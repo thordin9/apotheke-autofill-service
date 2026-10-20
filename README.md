@@ -11,9 +11,11 @@ served at `https://apotheke-autofill-service.webapp.gr`. A fork sets its own
 and the main-only deploy Action are in
 [docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
 Apotheke only changes the base URL and the bearer token. The Worker reports
-`backend: "cloudflare-workers"` and `max_image_bytes: 983040`. The request
-body cap is 1 MiB (`1048576`); the advertised image cap leaves 64 KiB for
-multipart headers. The Python service stays at 10 MiB.
+`backend: "cloudflare-workers"` and `max_image_bytes: 524288`. That figure is
+the advertised client target (`ADVERTISED_MAX_IMAGE_BYTES` in
+`worker/src/index.ts`). The request body cap stays 1 MiB (`1048576`). An
+image part is still rejected above 983040 (the body cap minus 64 KiB). The
+Python service stays at 10 MiB.
 
 Docker and the Jetson stack below are **legacy self-hosting**. They keep the
 Python service, including its 10 MiB upload limit. Hardware CI on the Jetson

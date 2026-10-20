@@ -40,7 +40,7 @@ export function neuronsFromUsage(usage: unknown): NeuronCharge {
 }
 
 export const DEFAULT_NEURON_BUDGET = 6000;
-/** Whole request body. max_image_bytes is this minus 64 KiB of multipart headroom. */
+/** Whole request body. The enforced image-part cap is this minus 64 KiB. */
 export const DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024;
 
 export function parseNeuronBudget(raw: string | undefined): number | null {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { ADVERTISED_MAX_IMAGE_BYTES } from "../src/index";
 import { INPUT_NEURONS_PER_MILLION, OUTPUT_NEURONS_PER_MILLION } from "../src/neurons";
 import {
   VALID,
@@ -34,7 +35,8 @@ describe("budget", () => {
     expect(body.capabilities).toEqual(["name", "category", "tags", "description"]);
     expect(body.backend).toBe("cloudflare-workers");
     expect(body.backend_used).toBe("cloudflare-workers");
-    expect(body.max_image_bytes).toBe(983040);
+    expect(ADVERTISED_MAX_IMAGE_BYTES).toBe(524288);
+    expect(body.max_image_bytes).toBe(ADVERTISED_MAX_IMAGE_BYTES);
     expect(body.ready).toBe(true);
     expect(body.budget).toEqual({
       neurons: { limit: 6000, used: 0, reserved: 0, remaining: 6000 },
