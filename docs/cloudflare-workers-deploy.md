@@ -66,7 +66,7 @@ to test exhaustion without spending the free allocation:
 |---|---|---|
 | `AUTOFILL_DAILY_NEURON_BUDGET` | `6000` | Hard daily cap. Over it, `POST /v1/suggest` is `503` with `Retry-After` until 00:00 UTC |
 | `AUTOFILL_DAILY_REQUEST_CAP` | empty | Optional count of admitted suggest calls per UTC day. Empty or `0` means no request cap |
-| `MAX_UPLOAD_BYTES` | `1048576` | Whole request body, 1 MiB. The enforced image-part cap is this minus 64 KiB (983040). `/v1/info` advertises `max_image_bytes` 524288 and does not enforce that number |
+| `MAX_UPLOAD_BYTES` | `1048576` | Whole request body, 1 MiB. The enforced image-part cap is this minus 64 KiB (983040). `/v1/info` advertises `min(524288, this minus 64 KiB)`, so 524288 at this default. That advertised number is not the 413 threshold |
 
 There is no KV namespace to create. Deploy creates the SQLite Durable Object
 class `Budget` from the `migrations` block (`new_sqlite_classes`). One
@@ -153,11 +153,12 @@ own `production` environment, and sets `routes` in `wrangler.toml` to
    uses `https://<your-domain>`.
 2. Token: the `AUTOFILL_TOKEN` secret.
 3. Apotheke reads `max_image_bytes` from `GET /v1/info` and steps the analysis
-   copy down until the multipart body fits. On this Worker that advertised
-   value is 524288. The Worker still accepts a larger body, up to 1048576,
-   when the image part is at most 983040 (the body cap minus 64 KiB). Change
-   the advertised value in one place: `ADVERTISED_MAX_IMAGE_BYTES` in
-   `worker/src/index.ts`.
+   copy down until the multipart body fits. At the default body cap that
+   advertised value is 524288 (`min(524288, MAX_UPLOAD_BYTES − 64 KiB)`). A
+   lower `MAX_UPLOAD_BYTES` below 589824 lowers the advertisement to the
+   enforced image cap. The Worker still accepts a larger body, up to 1048576,
+   when the image part is at most 983040. Change the 524288 constant in one
+   place: `ADVERTISED_MAX_IMAGE_BYTES` in `worker/src/multipart.ts`.
 
 `POST /v1/suggest` is multipart, the same fields as the Python service
 (`image`, optional `context`). Type is decided from magic bytes.

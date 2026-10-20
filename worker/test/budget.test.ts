@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { ADVERTISED_MAX_IMAGE_BYTES } from "../src/index";
+import { ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes } from "../src/multipart";
 import { INPUT_NEURONS_PER_MILLION, OUTPUT_NEURONS_PER_MILLION } from "../src/neurons";
 import {
   VALID,
@@ -36,13 +36,24 @@ describe("budget", () => {
     expect(body.backend).toBe("cloudflare-workers");
     expect(body.backend_used).toBe("cloudflare-workers");
     expect(ADVERTISED_MAX_IMAGE_BYTES).toBe(524288);
-    expect(body.max_image_bytes).toBe(ADVERTISED_MAX_IMAGE_BYTES);
+    expect(body.max_image_bytes).toBe(Math.min(ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes(1048576)));
     expect(body.ready).toBe(true);
     expect(body.budget).toEqual({
       neurons: { limit: 6000, used: 0, reserved: 0, remaining: 6000 },
       requests: { limit: null, used: 0, remaining: null },
       resets_at: "2026-10-20T00:00:00.000Z",
     });
+  });
+
+  it("advertises the enforced image cap when MAX_UPLOAD_BYTES is below 589824", async () => {
+    const cap = 589823;
+    expect(cap).toBeLessThan(589824);
+    const response = await call(infoRequest(evening), { MAX_UPLOAD_BYTES: String(cap) });
+    expect(response.status).toBe(200);
+    const body = await bodyOf(response);
+    const advertised = Math.min(ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes(cap));
+    expect(advertised).toBeLessThan(ADVERTISED_MAX_IMAGE_BYTES);
+    expect(body.max_image_bytes).toBe(advertised);
   });
 
   it("is not ready when fewer than 30 neurons remain and is ready at exactly 30", async () => {

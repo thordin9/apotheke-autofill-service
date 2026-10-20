@@ -40,6 +40,30 @@ describe("upload limits and input errors", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("accepts an image part of 983040 bytes and rejects 983041 with no AI call", async () => {
+    const atCap = jpeg("x".repeat(983040 - 4));
+    const over = jpeg("x".repeat(983041 - 4));
+    expect(atCap.byteLength).toBe(983040);
+    expect(over.byteLength).toBe(983041);
+    const atPart = multipart(atCap);
+    const overPart = multipart(over);
+    expect(atPart.body.byteLength).toBeLessThanOrEqual(1048576);
+    expect(overPart.body.byteLength).toBeLessThanOrEqual(1048576);
+
+    const accepted = scriptedAi([reply(VALID)]);
+    const ok = await call(suggestRequest(atCap), { AI: accepted.ai });
+    expect(ok.status).toBe(200);
+    expect(accepted.calls).toHaveLength(1);
+
+    const rejected = scriptedAi([reply(VALID)]);
+    const response = await call(suggestRequest(over), { AI: rejected.ai });
+    expect(response.status).toBe(413);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "payload_too_large", message: "image exceeds 983040 bytes" },
+    });
+    expect(rejected.calls).toHaveLength(0);
+  });
+
   it("returns 413 for a body of 1048577 bytes", async () => {
     const { ai, calls } = scriptedAi([reply(VALID)]);
     const response = await call(

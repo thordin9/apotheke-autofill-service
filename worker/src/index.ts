@@ -5,7 +5,7 @@ import { Budget } from "./budget";
 import { parseContext } from "./context";
 import { errorResponse, HttpError, httpErrorResponse, json, readLimitedBody } from "./http";
 import { logRequest, type RequestTiming } from "./log";
-import { maxImageBytes, readSuggestParts } from "./multipart";
+import { ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes, readSuggestParts } from "./multipart";
 import {
   NEURON_ESTIMATE,
   neuronsFromUsage,
@@ -24,12 +24,6 @@ const RATE_LIMIT_PERIOD_S = 60;
 const CAPACITY_RETRY_AFTER_S = 30;
 
 const CAPABILITIES = ["name", "category", "tags", "description"];
-
-/**
- * Client target reported as max_image_bytes. Not enforced.
- * Change this one number (786432 if 524288 sends real photos back too_large).
- */
-export const ADVERTISED_MAX_IMAGE_BYTES = 524288;
 
 interface AiRun {
   run(model: string, input: Record<string, unknown>): Promise<unknown>;
@@ -81,7 +75,7 @@ function limits(env: Env): { neuronBudget: number; requestCap: number; maxBytes:
 }
 
 async function info(request: Request, env: Env): Promise<Response> {
-  const { neuronBudget, requestCap } = limits(env);
+  const { neuronBudget, requestCap, maxBytes } = limits(env);
   const now = nowMs(request, env);
   let snap;
   try {
@@ -101,7 +95,7 @@ async function info(request: Request, env: Env): Promise<Response> {
     capabilities: CAPABILITIES,
     backend: "cloudflare-workers",
     backend_used: "cloudflare-workers",
-    max_image_bytes: ADVERTISED_MAX_IMAGE_BYTES,
+    max_image_bytes: Math.min(ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes(maxBytes)),
     ready,
     budget: {
       neurons: {

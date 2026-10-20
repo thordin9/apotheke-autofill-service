@@ -10,13 +10,17 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 - **Worker upload cap is 1 MiB.** Live Workers Logs `cpuTime` at about 2.9 MiB
   was 126 ms, past the 10 ms Free CPU limit, so `MAX_UPLOAD_BYTES` is
   **1048576**. The enforced image-part cap is that minus 64 KiB
-  (**983040**). `/v1/info` `max_image_bytes` advertises **524288**
-  (`ADVERTISED_MAX_IMAGE_BYTES` in `worker/src/index.ts`). Apotheke steps its
-  copy down until the multipart body fits that advertised value. The Worker
-  does not reject a body merely for exceeding 524288. A body up to 1048576
-  is still accepted when the image part is within 983040. 1048577 is still
-  413. The Python service stays at 10 MiB. The 2.0.0 release shipped
-  3145728; that figure stays in the 2.0.0 notes below.
+  (**983040**). `/v1/info` `max_image_bytes` advertises
+  `min(524288, MAX_UPLOAD_BYTES − 65536)` (`ADVERTISED_MAX_IMAGE_BYTES` in
+  `worker/src/multipart.ts`). With the default body cap that is **524288**.
+  A `MAX_UPLOAD_BYTES` below 589824 lowers the advertised value to the
+  enforced image cap. The Worker entry module exports only the fetch handler
+  and the `Budget` class. Apotheke steps its copy down until the multipart
+  body fits the advertised value. The Worker does not reject a body merely
+  for exceeding 524288. A body up to 1048576 is still accepted when the
+  image part is within 983040. An image part of 983040 is accepted; 983041
+  is 413. 1048577 is still 413. The Python service stays at 10 MiB. The
+  2.0.0 release shipped 3145728; that figure stays in the 2.0.0 notes below.
 - **Workers AI 3040** is `503` with `Retry-After: 30` and does not mark the
   day exhausted. Only 3036 and the Durable Object budget wait until 00:00
   UTC. Codes come from `code`, `internalCode`, or `error_code`, and from the

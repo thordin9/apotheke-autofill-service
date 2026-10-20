@@ -4,6 +4,13 @@ import { sniffMime } from "./images";
 /** Room for multipart headers between the body cap and the image. */
 export const MULTIPART_HEADROOM = 65536;
 
+/**
+ * Client target for max_image_bytes. Not enforced on suggest.
+ * Change this one number (786432 if 524288 sends real photos back too_large).
+ * GET /v1/info reports min(this, maxImageBytes(MAX_UPLOAD_BYTES)).
+ */
+export const ADVERTISED_MAX_IMAGE_BYTES = 524288;
+
 export function maxImageBytes(bodyCap: number): number {
   return Math.max(0, bodyCap - MULTIPART_HEADROOM);
 }
