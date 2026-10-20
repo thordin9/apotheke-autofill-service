@@ -143,3 +143,16 @@ export function captureLogs(): { lines: string[]; restore: () => void } {
 export async function bodyOf(response: Response): Promise<Record<string, unknown>> {
   return (await response.json()) as Record<string, unknown>;
 }
+
+/** One-shot body whose pull count stays flat when the handler never reads it. */
+export function unreadStream(bytes: Uint8Array): { stream: ReadableStream<Uint8Array>; reads: () => number } {
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      reads += 1;
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+  return { stream, reads: () => reads };
+}

@@ -13,6 +13,7 @@ import {
   resetBudget,
   scriptedAi,
   suggestRequest,
+  unreadStream,
   webp,
 } from "./helpers";
 
@@ -126,13 +127,18 @@ describe("upload limits and input errors", () => {
     } as RequestInit);
     expect(request.headers.get("content-length")).toBeNull();
     const { ai, calls } = scriptedAi([reply(VALID)]);
-    const response = await call(request, { AI: ai, MAX_UPLOAD_BYTES: "128" });
+    const { result: response, buffered } = await countingArrayBuffer(() =>
+      call(request, { AI: ai, MAX_UPLOAD_BYTES: "128" }),
+    );
     expect(response.status).toBe(413);
     expect((await bodyOf(response)).error).toEqual({
       code: "payload_too_large",
       message: "image exceeds 128 bytes",
     });
     expect(calls).toHaveLength(0);
+    expect(buffered).toBe(0);
+    expect(pulled).toBeGreaterThan(0);
+    expect(pulled).toBeLessThan(part.byteLength);
   });
 
   it("stops reading once the stream passes the cap", async () => {
@@ -252,7 +258,234 @@ describe("upload limits and input errors", () => {
     expect(response.status).toBe(400);
     expect(await bodyOf(response)).toEqual({ error: { code: "bad_request", message: "'context' is not valid JSON" } });
   });
+
+  it("accepts a Content-Length exactly at the cap by buffering the body", async () => {
+    const part = multipart(jpeg());
+    const cap = part.body.byteLength + MULTIPART_HEADROOM;
+    const body = new Uint8Array(cap);
+    body.set(part.body);
+    const request = new Request("https://autofill.example/v1/suggest", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": part.contentType,
+        "content-length": String(cap),
+      },
+      body,
+    });
+    expect(request.headers.get("content-length")).toBe(String(cap));
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const { result: response, buffered } = await countingArrayBuffer(() =>
+      call(request, { AI: ai, MAX_UPLOAD_BYTES: String(cap) }),
+    );
+    expect(response.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(buffered).toBe(1);
+  });
+
+  it("returns 413 for a Content-Length one byte over the cap without reading the body", async () => {
+    const part = multipart(jpeg());
+    const cap = part.body.byteLength + MULTIPART_HEADROOM;
+    const tracked = unreadStream(part.body);
+    const request = new Request("https://autofill.example/v1/suggest", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": part.contentType,
+        "content-length": String(cap + 1),
+      },
+      body: tracked.stream,
+      duplex: "half",
+    } as RequestInit);
+    expect(request.headers.get("content-length")).toBe(String(cap + 1));
+    const before = tracked.reads();
+    const { result: response, buffered } = await countingArrayBuffer(() =>
+      call(request, { MAX_UPLOAD_BYTES: String(cap) }),
+    );
+    expect(response.status).toBe(413);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "payload_too_large", message: `image exceeds ${cap} bytes` },
+    });
+    expect(tracked.reads()).toBe(before);
+    expect(buffered).toBe(0);
+  });
+
+  it("returns 400 for a non-numeric Content-Length without buffering", async () => {
+    await expectInvalidLength("nope");
+  });
+
+  it("returns 400 for a negative Content-Length without buffering", async () => {
+    await expectInvalidLength("-1");
+  });
+
+  it("returns 400 for a duplicate or comma-joined Content-Length without buffering", async () => {
+    await expectInvalidLength("8, 8");
+    const part = multipart(jpeg());
+    const headers = new Headers({
+      authorization: "Bearer test-token",
+      "content-type": part.contentType,
+    });
+    headers.append("content-length", "8");
+    headers.append("content-length", "9");
+    expect(headers.get("content-length")).toBe("8, 9");
+    const tracked = unreadStream(part.body);
+    const request = new Request("https://autofill.example/v1/suggest", {
+      method: "POST",
+      headers,
+      body: tracked.stream,
+      duplex: "half",
+    } as RequestInit);
+    const before = tracked.reads();
+    const { result: response, buffered } = await countingArrayBuffer(() => call(request));
+    expect(response.status).toBe(400);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "bad_request", message: "invalid Content-Length" },
+    });
+    expect(buffered).toBe(0);
+    expect(tracked.reads()).toBe(before);
+  });
+
+  it("returns 400 when Content-Length is 0 and a body is present", async () => {
+    const part = multipart(jpeg());
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const response = await call(
+      new Request("https://autofill.example/v1/suggest", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": part.contentType,
+          "content-length": "0",
+        },
+        body: part.body,
+      }),
+      { AI: ai },
+    );
+    expect(response.status).toBe(400);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "bad_request", message: "invalid Content-Length" },
+    });
+    expect(calls).toHaveLength(0);
+  }, 2000);
+
+  it("rejects a body longer than its declared Content-Length", async () => {
+    const part = multipart(jpeg());
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const response = await call(
+      new Request("https://autofill.example/v1/suggest", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": part.contentType,
+          "content-length": String(part.body.byteLength - 1),
+        },
+        body: part.body,
+      }),
+      { AI: ai },
+    );
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBeLessThan(500);
+    expect(calls).toHaveLength(0);
+
+    const direct = new Request("https://autofill.example/v1/suggest", {
+      method: "POST",
+      headers: { "content-length": "10" },
+      body: new Uint8Array(80),
+    });
+    let returned: Uint8Array | undefined;
+    try {
+      returned = await readLimitedBody(direct, 100);
+    } catch (err) {
+      expect(err).toMatchObject({ status: expect.any(Number) });
+      const status = (err as { status: number }).status;
+      expect(status).toBeGreaterThanOrEqual(400);
+      expect(status).toBeLessThan(500);
+    }
+    if (returned) {
+      expect(returned.byteLength).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it("rejects a body over the cap when Content-Length is under the cap", async () => {
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const response = await call(
+      new Request("https://autofill.example/v1/suggest", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": "multipart/form-data; boundary=----autofilltest",
+          "content-length": "10",
+        },
+        body: new Uint8Array(150),
+      }),
+      { AI: ai, MAX_UPLOAD_BYTES: "100" },
+    );
+    expect(response.status).toBe(413);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "payload_too_large", message: "image exceeds 100 bytes" },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns 400 when the body is shorter than Content-Length", async () => {
+    const part = multipart(jpeg());
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const response = await call(
+      new Request("https://autofill.example/v1/suggest", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": part.contentType,
+          "content-length": String(part.body.byteLength + 25),
+        },
+        body: part.body,
+      }),
+      { AI: ai },
+    );
+    expect(response.status).toBe(400);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "bad_request", message: "invalid Content-Length" },
+    });
+    expect(calls).toHaveLength(0);
+  }, 2000);
 });
+
+async function countingArrayBuffer<T>(run: () => Promise<T>): Promise<{ result: T; buffered: number }> {
+  let buffered = 0;
+  const original = Request.prototype.arrayBuffer;
+  Request.prototype.arrayBuffer = async function (this: Request) {
+    buffered += 1;
+    return original.call(this);
+  };
+  try {
+    return { result: await run(), buffered };
+  } finally {
+    Request.prototype.arrayBuffer = original;
+  }
+}
+
+async function expectInvalidLength(contentLength: string): Promise<void> {
+  const part = multipart(jpeg());
+  const tracked = unreadStream(part.body);
+  const request = new Request("https://autofill.example/v1/suggest", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer test-token",
+      "content-type": part.contentType,
+      "content-length": contentLength,
+    },
+    body: tracked.stream,
+    duplex: "half",
+  } as RequestInit);
+  expect(request.headers.get("content-length")).toBe(contentLength);
+  const before = tracked.reads();
+  const { result: response, buffered } = await countingArrayBuffer(() => call(request));
+  expect(response.status).toBe(400);
+  expect(await bodyOf(response)).toEqual({
+    error: { code: "bad_request", message: "invalid Content-Length" },
+  });
+  expect(buffered).toBe(0);
+  expect(tracked.reads()).toBe(before);
+}
 
 function clientBody(
   boundary: string,
