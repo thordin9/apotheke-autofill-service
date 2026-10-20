@@ -5,7 +5,7 @@ import { Budget } from "./budget";
 import { parseContext } from "./context";
 import { errorResponse, HttpError, httpErrorResponse, json, readLimitedBody } from "./http";
 import { logRequest, type RequestTiming } from "./log";
-import { maxImageBytes, readSuggestParts } from "./multipart";
+import { ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes, readSuggestParts } from "./multipart";
 import {
   NEURON_ESTIMATE,
   neuronsFromUsage,
@@ -85,7 +85,6 @@ async function info(request: Request, env: Env): Promise<Response> {
   }
   const neuronRemaining = snap.exhausted ? 0 : Math.max(0, neuronBudget - snap.used - snap.reserved);
   const requestsRemaining = requestCap > 0 ? Math.max(0, requestCap - snap.requests) : null;
-  const imageCap = maxImageBytes(maxBytes);
   const ready =
     !snap.exhausted &&
     neuronRemaining >= NEURON_ESTIMATE &&
@@ -96,7 +95,7 @@ async function info(request: Request, env: Env): Promise<Response> {
     capabilities: CAPABILITIES,
     backend: "cloudflare-workers",
     backend_used: "cloudflare-workers",
-    max_image_bytes: imageCap,
+    max_image_bytes: Math.min(ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes(maxBytes)),
     ready,
     budget: {
       neurons: {

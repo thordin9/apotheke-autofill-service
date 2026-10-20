@@ -56,9 +56,11 @@ def test_openapi_allows_cloudflare_workers_backend():
     suggestion = spec["components"]["schemas"]["Suggestion"]["properties"]["backend_used"]
     assert suggestion["enum"] == ["ollama", "cloudflare", "cloudflare-workers"]
     info = spec["components"]["schemas"]["Info"]["properties"]["max_image_bytes"]["description"]
+    assert "524288" in info
     assert "983040" in info
     assert "1048576" in info
     too_large = spec["components"]["responses"]["TooLarge"]["description"]
+    assert "524288" in too_large
     assert "983040" in too_large
 
 
@@ -67,6 +69,7 @@ def test_changelog_moves_v3_lean_note_and_records_the_cap():
     assert text.count("## [Unreleased]") == 1
     unreleased = _section(text, "## [Unreleased]")
     assert "1048576" in unreleased
+    assert "524288" in unreleased
     assert "983040" in unreleased
     assert "Retry-After: 30" in unreleased
     assert "dl-cap double restart" in unreleased

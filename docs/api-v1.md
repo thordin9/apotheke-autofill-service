@@ -77,7 +77,7 @@ its typical generation time:
 | `capabilities` | yes | Subset of `name`, `tags`, `category`, `description` |
 | `backend` | no | Adapter id of the primary (`echo`, `ollama`, `cloudflare`, …) |
 | `backends` | no | *Added in v1.4, optional.* `primary` (`id`, `state` of `ok`, `warming`, `degraded`, `unavailable`) and `fallback` (`id` of `none`, `cloudflare`, or `ollama`, `state`, `can_serve`). Cloudflare entries add `model` and `budget` (`limit`, `used`, `remaining`, `resets_at`, optional `reason`). When Cloudflare is primary and Ollama is the fallback, the primary also has `request_deadline_s`, `cf_slice_s`, `ollama_reserve_s`, and `ollama_state`. `can_serve` is false when Cloudflare cannot take a call (budget, missing credentials, or the last call was 401, 403, or Workers Paid). Absent on servers older than v1.4. |
-| `max_image_bytes` | no | Upload limit; clients may skip the call for larger images |
+| `max_image_bytes` | no | Upload limit; clients may skip the call for larger images. On the Worker this is the advertised client target: `min(524288, MAX_UPLOAD_BYTES − 65536)`, so 524288 at the default body cap |
 | `ready` | no | `false` while the backend is still loading its model (e.g. Ollama warm-up); `/v1/suggest` then answers `503` with `Retry-After`. Also `false` when Ollama has since unloaded the model: the service then reloads it in the background, and `/v1/suggest` still works but its first answer is slower. Absent or `true` means ready. |
 | `avg_latency_ms` | no | *Added in v1.1, optional; clients MUST tolerate its absence.* Non-negative integer: the **default model's** typical time in milliseconds for one `/v1/suggest` generation on the loaded model, model load time excluded. Ollama reports a moving average of recent requests (70% previous, 30% latest), so the field is **absent until the first suggestion has finished** after a service start. Echo reports `ECHO_DELAY_MS` when it is above 0. Meant for estimated progress bars: fill by elapsed time against this value, hold below 100% until the answer arrives, and fall back to an indeterminate spinner when absent. It is not a deadline: cold starts (model load), queueing and the plain-text retry can take longer. |
 | `models` | no | *Added in v1.2, optional; absent unless the server sets `ALLOWED_MODELS`.* The models a client may pick with `context.model`: the default model first, then the other allowlisted models the backend has installed (Ollama: `GET /api/tags`, cached 30 s; if that fails before it ever answered, only the default is listed). Each entry: `id` (string, required; the value to send as `context.model`), `default` (boolean, required; exactly one entry is `true`), `loaded` (boolean, optional; whether the model is listed in Ollama `/api/ps` now — resident **or** still loading — absent when unknown), `state` (string, optional, v1.3; `cold`, `loading` or `warm`; see below), `size_vram` (integer, optional, v1.3; bytes from `/api/ps` `size_vram`, the source of truth for GPU residency; `0` means the runner has no GPU memory; absent when the model is not in `/api/ps` or Ollama did not send the field), `avg_latency_ms` (integer, optional; like the top-level field, for this model, absent until measured). |
@@ -252,7 +252,7 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 |---|---|---|
 | 400 | `bad_request` | `image` missing/empty, `context` not valid JSON or wrong shape |
 | 401 | `unauthorized` | token required and missing/wrong (`WWW-Authenticate: Bearer`) |
-| 413 | `payload_too_large` | Python: image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760). Worker: whole request body > `MAX_UPLOAD_BYTES` (default 1 MiB = 1048576), from `Content-Length` or from the bytes read when the length is absent; also an image part over `max_image_bytes`, and Workers AI code 3006. `/v1/info` advertises `max_image_bytes` (default 983040), which is the body cap minus 64 KiB |
+| 413 | `payload_too_large` | Python: image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760). Worker: whole request body > `MAX_UPLOAD_BYTES` (default 1 MiB = 1048576), from `Content-Length` or from the bytes read when the length is absent; also an image part over the enforced image cap (body cap minus 64 KiB, default 983040), and Workers AI code 3006. `/v1/info` advertises `min(524288, body cap − 64 KiB)`, which is 524288 at the default body cap. That advertised number is not the 413 threshold |
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
 | 429 | `rate_limited` | Worker only. Per-location rate limit on `POST /v1/suggest` after auth (`Retry-After: 60`). Loosely enforced; the daily cap is the `503` below |
 | 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or loading the model a client picked with `context.model`, when loading plus answering would not fit in the timeout (otherwise the request waits for the load), or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading, model-loading and busy responses carry `Retry-After: <seconds>` (for a cold start, the model's remaining load time; see [Choosing a model](#choosing-a-model-v12)) |
@@ -308,12 +308,20 @@ stays `"1"`. Clients keep ignoring unknown fields.
 - `backend` and `backend_used` are `cloudflare-workers` on both `GET /v1/info`
   and `POST /v1/suggest`. `model_used` on a suggestion is
   `@cf/google/gemma-4-26b-a4b-it`.
-- The body cap is `MAX_UPLOAD_BYTES` (default 1048576). `max_image_bytes` is
-  that cap minus 64 KiB (default 983040). A body over the cap is `413` and
-  the message names the body cap. An image part over `max_image_bytes`, and
-  Workers AI code 3006, are `413` and the message names the image cap.
-  Apotheke reads `max_image_bytes` and should skip larger images. The Python
-  service still defaults to 10485760.
+- The body cap is `MAX_UPLOAD_BYTES` (default 1048576). The enforced
+  image-part cap is that minus 64 KiB (default 983040). A body over the body
+  cap is `413` and the message names the body cap. An image part over the
+  enforced image cap, and Workers AI code 3006, are `413` and the message
+  names that image cap. `/v1/info` `max_image_bytes` is
+  `min(ADVERTISED_MAX_IMAGE_BYTES, MAX_UPLOAD_BYTES − 64 KiB)`. The constant
+  is 524288 in `worker/src/multipart.ts`, the one place to change it. At the
+  default body cap the advertised value is 524288. A `MAX_UPLOAD_BYTES` below
+  589824 lowers it to the enforced image cap. The Worker does not reject a
+  body for exceeding 524288. A body between 524288 and 1048576 is accepted
+  when the image part is within 983040. An image part of 983040 is accepted
+  and 983041 is `413`. Apotheke reads `max_image_bytes` and steps its copy
+  down until the multipart body fits. The Python service still defaults to
+  10485760.
 - `budget` on `/v1/info` is `{neurons: {limit, used, reserved, remaining},
   requests: {limit, used, remaining}, resets_at}`. `remaining` is
   `limit - used - reserved` (0 when the day is marked exhausted). `ready` is

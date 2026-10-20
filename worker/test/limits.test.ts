@@ -2,16 +2,86 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { readLimitedBody } from "../src/http";
 import { maxImageBytes, MULTIPART_HEADROOM, readSuggestParts } from "../src/multipart";
-import { VALID, bodyOf, call, jpeg, png, reply, resetBudget, scriptedAi, suggestRequest, webp } from "./helpers";
+import {
+  VALID,
+  bodyOf,
+  call,
+  jpeg,
+  multipart,
+  png,
+  reply,
+  resetBudget,
+  scriptedAi,
+  suggestRequest,
+  webp,
+} from "./helpers";
 
 beforeEach(resetBudget);
 
 describe("upload limits and input errors", () => {
-  it("advertises the image cap as the body cap minus 64 KiB", () => {
+  it("caps an image part at the body cap minus 64 KiB", () => {
     expect(MULTIPART_HEADROOM).toBe(65536);
     expect(maxImageBytes(1048576)).toBe(983040);
     expect(maxImageBytes(65536)).toBe(0);
     expect(maxImageBytes(40)).toBe(0);
+  });
+
+  it("accepts a body between 524288 and 1048576", async () => {
+    const image = jpeg("x".repeat(600_000));
+    const part = multipart(image);
+    const request = suggestRequest(image);
+    expect(image.byteLength).toBeGreaterThan(524288);
+    expect(image.byteLength).toBeLessThanOrEqual(983040);
+    expect(part.body.byteLength).toBeGreaterThan(524288);
+    expect(part.body.byteLength).toBeLessThanOrEqual(1048576);
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const response = await call(request, { AI: ai });
+    expect(response.status).toBe(200);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("accepts an image part of 983040 bytes and rejects 983041 with no AI call", async () => {
+    const atCap = jpeg("x".repeat(983040 - 4));
+    const over = jpeg("x".repeat(983041 - 4));
+    expect(atCap.byteLength).toBe(983040);
+    expect(over.byteLength).toBe(983041);
+    const atPart = multipart(atCap);
+    const overPart = multipart(over);
+    expect(atPart.body.byteLength).toBeLessThanOrEqual(1048576);
+    expect(overPart.body.byteLength).toBeLessThanOrEqual(1048576);
+
+    const accepted = scriptedAi([reply(VALID)]);
+    const ok = await call(suggestRequest(atCap), { AI: accepted.ai });
+    expect(ok.status).toBe(200);
+    expect(accepted.calls).toHaveLength(1);
+
+    const rejected = scriptedAi([reply(VALID)]);
+    const response = await call(suggestRequest(over), { AI: rejected.ai });
+    expect(response.status).toBe(413);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "payload_too_large", message: "image exceeds 983040 bytes" },
+    });
+    expect(rejected.calls).toHaveLength(0);
+  });
+
+  it("returns 413 for a body of 1048577 bytes", async () => {
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const response = await call(
+      new Request("https://autofill.example/v1/suggest", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": "multipart/form-data; boundary=----autofilltest",
+        },
+        body: new Uint8Array(1048577),
+      }),
+      { AI: ai },
+    );
+    expect(response.status).toBe(413);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "payload_too_large", message: "image exceeds 1048576 bytes" },
+    });
+    expect(calls).toHaveLength(0);
   });
 
   it("returns 413 from Content-Length before calling the model", async () => {

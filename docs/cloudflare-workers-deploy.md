@@ -66,7 +66,7 @@ to test exhaustion without spending the free allocation:
 |---|---|---|
 | `AUTOFILL_DAILY_NEURON_BUDGET` | `6000` | Hard daily cap. Over it, `POST /v1/suggest` is `503` with `Retry-After` until 00:00 UTC |
 | `AUTOFILL_DAILY_REQUEST_CAP` | empty | Optional count of admitted suggest calls per UTC day. Empty or `0` means no request cap |
-| `MAX_UPLOAD_BYTES` | `1048576` | Whole request body, 1 MiB. `max_image_bytes` is this minus 64 KiB (983040) |
+| `MAX_UPLOAD_BYTES` | `1048576` | Whole request body, 1 MiB. The enforced image-part cap is this minus 64 KiB (983040). `/v1/info` advertises `min(524288, this minus 64 KiB)`, so 524288 at this default. That advertised number is not the 413 threshold |
 
 There is no KV namespace to create. Deploy creates the SQLite Durable Object
 class `Budget` from the `migrations` block (`new_sqlite_classes`). One
@@ -152,10 +152,13 @@ own `production` environment, and sets `routes` in `wrangler.toml` to
 1. Base URL: `https://apotheke-autofill-service.webapp.gr` (no path). A fork
    uses `https://<your-domain>`.
 2. Token: the `AUTOFILL_TOKEN` secret.
-3. Apotheke reads `max_image_bytes` from `GET /v1/info` and skips larger
-   photos. On this Worker that value is 983040 (the 1048576 body cap minus
-   64 KiB). Resize to about 1600 px JPEG quality 80 before upload. An image
-   under 983040 still needs the multipart body to stay under 1048576.
+3. Apotheke reads `max_image_bytes` from `GET /v1/info` and steps the analysis
+   copy down until the multipart body fits. At the default body cap that
+   advertised value is 524288 (`min(524288, MAX_UPLOAD_BYTES − 64 KiB)`). A
+   lower `MAX_UPLOAD_BYTES` below 589824 lowers the advertisement to the
+   enforced image cap. The Worker still accepts a larger body, up to 1048576,
+   when the image part is at most 983040. Change the 524288 constant in one
+   place: `ADVERTISED_MAX_IMAGE_BYTES` in `worker/src/multipart.ts`.
 
 `POST /v1/suggest` is multipart, the same fields as the Python service
 (`image`, optional `context`). Type is decided from magic bytes.
@@ -180,7 +183,7 @@ getting `401`. Update Apotheke in the same step.
   "capabilities": ["name", "category", "tags", "description"],
   "backend": "cloudflare-workers",
   "backend_used": "cloudflare-workers",
-  "max_image_bytes": 983040,
+  "max_image_bytes": 524288,
   "ready": true,
   "budget": {
     "neurons": {"limit": 6000, "used": 0, "reserved": 0, "remaining": 6000},
@@ -210,7 +213,8 @@ name itself is not checked.
 A message that merely contains those digits is not mapped.
 `lastRequestInternalStatusCode` is not read, because it is shared across
 requests. Neither response includes upstream text. 3006 (request too large)
-is `413` and names `max_image_bytes`.
+is `413` and names the enforced image cap (983040 at the default body cap),
+not the advertised `max_image_bytes`.
 
 Each call reserves 30 Neurons, then settles `usage.neurons` when the binding
 returns it. Otherwise it charges Gemma 4 rates, 9091 Neurons per million
@@ -282,7 +286,7 @@ log still keeps the connecting IP. Do not copy a real address into the repo.
 | `GET /healthz` is `503` `{"status":"degraded"}` | `AUTOFILL_TOKEN` is missing or empty. `npx wrangler secret put AUTOFILL_TOKEN` |
 | `401` | Wrong or missing `Authorization: Bearer` token |
 | `404` | Unknown path. This is 404 even when `AUTOFILL_TOKEN` is missing. `/healthz`, `/v1/info`, and `/v1/suggest` are the only routes |
-| `413` | Body larger than `MAX_UPLOAD_BYTES` (the message names that cap), including a chunked body with no `Content-Length`. An image part over `max_image_bytes`, or Workers AI code 3006, names the image cap |
+| `413` | Body larger than `MAX_UPLOAD_BYTES` (the message names that cap), including a chunked body with no `Content-Length`. An image part over the enforced image cap (body cap minus 64 KiB, 983040 at the default), or Workers AI code 3006, names that image cap. Advertised `max_image_bytes` (524288) is not this cap |
 | `415` | Bytes are not JPEG, PNG, or WebP. Checked from the first bytes of the image part |
 | `429` `Retry-After: 60` | Per-location rate limit. Wait. The daily cap is separate |
 | `503` `daily capacity is exhausted` plus `Retry-After` until 00:00 UTC | Neuron budget, request cap, or Workers AI 3036. 3036 marks the day exhausted. `GET /v1/info` shows `remaining` |

@@ -139,10 +139,12 @@ components:
           type: integer
           minimum: 1
           description: |
-            Python default 10485760 (MAX_IMAGE_BYTES). Worker body cap
-            MAX_UPLOAD_BYTES defaults to 1048576. Worker max_image_bytes is
-            that cap minus 64 KiB, so 983040. Apotheke compares the image
-            with this value.
+            Python default 10485760 (MAX_IMAGE_BYTES). On the Worker this is
+            min(524288, MAX_UPLOAD_BYTES - 65536). ADVERTISED_MAX_IMAGE_BYTES
+            is 524288 in worker/src/multipart.ts. At the default body cap the
+            advertised value is 524288. The body cap MAX_UPLOAD_BYTES defaults
+            to 1048576. The enforced image-part cap is that minus 64 KiB, so
+            983040. Apotheke compares the image with the advertised value.
         ready:
           type: boolean
           description: |
@@ -399,8 +401,10 @@ components:
       description: |
         Python: image exceeds MAX_IMAGE_BYTES (default 10 MiB). Worker: the
         request body exceeds MAX_UPLOAD_BYTES (default 1048576), the image
-        part exceeds max_image_bytes (default 983040), or Workers AI returned
-        code 3006.
+        part exceeds the enforced image cap (default 983040), or Workers AI
+        returned code 3006. GET /v1/info max_image_bytes is
+        min(524288, MAX_UPLOAD_BYTES - 65536), so 524288 at the default
+        body cap. That advertised number is not the 413 threshold.
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     RateLimited:
       description: Worker only. Per-location rate limit after auth. Retry-After is 60.
