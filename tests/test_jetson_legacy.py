@@ -1,4 +1,5 @@
 """The Jetson deployment is decommissioned: its workflows and docs must say so."""
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,4 +27,7 @@ def test_jetson_docs_marked_legacy():
     assert "> **Legacy:** removed from the board on 2026-10-20" in deploy
     assert ANCHOR in (ROOT / "docs" / "hardware-ci.md").read_text()
     assert ANCHOR in (ROOT / "README.md").read_text()
-    assert "Jetson Ollama tuning" in (ROOT / "deploy" / "jetson" / "ollama-10-autofill.conf").read_text()
+    assert (
+        "Jetson Ollama tuning"
+        in (ROOT / "deploy" / "jetson" / "ollama-10-autofill.conf").read_text()
+    )
