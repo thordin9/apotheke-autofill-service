@@ -30,8 +30,11 @@ export function httpErrorResponse(err: HttpError): Response {
   return errorResponse(err.status, err.code, err.message, err.headers);
 }
 
-/** Whole-body cap. Content-Length is checked before the stream is read.
- * A body with no length (chunked) is counted as it is read and aborted over the cap.
+/** Whole-body cap.
+ * A single numeric Content-Length within the cap is buffered, then checked
+ * against the bytes actually read. A length over the cap is rejected before
+ * that read. A missing length (chunked) is counted as it is read and aborted
+ * over the cap. A non-numeric, negative, or combined length is rejected first.
  */
 export async function readLimitedBody(request: Request, maxBytes: number): Promise<Uint8Array> {
   const declared = request.headers.get("content-length");
@@ -39,9 +42,24 @@ export async function readLimitedBody(request: Request, maxBytes: number): Promi
     if (!/^\d+$/.test(declared)) {
       throw new HttpError(400, "bad_request", "invalid Content-Length");
     }
-    if (Number(declared) > maxBytes) {
+    const declaredBytes = Number(declared);
+    if (declaredBytes > maxBytes) {
       throw new HttpError(413, "payload_too_large", `image exceeds ${maxBytes} bytes`);
     }
+    let buffered: ArrayBuffer;
+    try {
+      buffered = await request.arrayBuffer();
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(400, "bad_request", "expected multipart/form-data");
+    }
+    if (buffered.byteLength > maxBytes) {
+      throw new HttpError(413, "payload_too_large", `image exceeds ${maxBytes} bytes`);
+    }
+    if (buffered.byteLength !== declaredBytes) {
+      throw new HttpError(400, "bad_request", "invalid Content-Length");
+    }
+    return new Uint8Array(buffered);
   }
   const body = request.body;
   if (!body) return new Uint8Array();

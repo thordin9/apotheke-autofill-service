@@ -143,3 +143,19 @@ export function captureLogs(): { lines: string[]; restore: () => void } {
 export async function bodyOf(response: Response): Promise<Record<string, unknown>> {
   return (await response.json()) as Record<string, unknown>;
 }
+
+/** One-shot body. highWaterMark 0 so pull runs only when something reads it. */
+export function unreadStream(bytes: Uint8Array): { stream: ReadableStream<Uint8Array>; reads: () => number } {
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        reads += 1;
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { stream, reads: () => reads };
+}

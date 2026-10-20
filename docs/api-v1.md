@@ -250,9 +250,9 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `bad_request` | `image` missing/empty, `context` not valid JSON or wrong shape |
+| 400 | `bad_request` | `image` missing/empty, `context` not valid JSON or wrong shape. Over HTTP, workerd rejects a malformed `Content-Length` with a plain-text 400 before the Worker runs (`abc`, `-1`, `+N`, comma-joined values, differing duplicates, anything over 2^53). Leading zeros, whitespace, and identical duplicates are accepted, and chunked framing wins over a length. On a Request built in code, the Worker returns JSON 400 `invalid Content-Length` when the length is not a single integer or the byte count does not match. Over the network a short body waits for the client and then gets 400 `expected multipart/form-data` |
 | 401 | `unauthorized` | token required and missing/wrong (`WWW-Authenticate: Bearer`) |
-| 413 | `payload_too_large` | Python: image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760). Worker: whole request body > `MAX_UPLOAD_BYTES` (default 1 MiB = 1048576), from `Content-Length` or from the bytes read when the length is absent; also an image part over the enforced image cap (body cap minus 64 KiB, default 983040), and Workers AI code 3006. `/v1/info` advertises `min(524288, body cap − 64 KiB)`, which is 524288 at the default body cap. That advertised number is not the 413 threshold |
+| 413 | `payload_too_large` | Python: image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760). Worker: whole request body > `MAX_UPLOAD_BYTES` (default 1 MiB = 1048576). A single numeric `Content-Length` over that cap is `413` before the body is read. A single numeric `Content-Length` within the cap is buffered and is still `413` when the bytes read exceed the cap. On a Request built in code, a body shorter or longer than that declared length is `400` `invalid Content-Length`. Over the network, bytes past the declared length are not part of the body, and a short body waits for the client and then gets `400` `expected multipart/form-data`. A missing `Content-Length` is counted as it is read and aborted over the cap. A non-numeric, negative, or combined `Content-Length` is a plain-text 400 from workerd before the Worker runs; if one reaches the Worker it returns JSON `400` `invalid Content-Length` and does not buffer. An image part over the enforced image cap (body cap minus 64 KiB, default 983040) and Workers AI code 3006 are also `413`. `/v1/info` advertises `min(524288, body cap − 64 KiB)`, which is 524288 at the default body cap. That advertised number is not the 413 threshold |
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
 | 429 | `rate_limited` | Worker only. Per-location rate limit on `POST /v1/suggest` after auth (`Retry-After: 60`). Loosely enforced; the daily cap is the `503` below |
 | 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or loading the model a client picked with `context.model`, when loading plus answering would not fit in the timeout (otherwise the request waits for the load), or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading, model-loading and busy responses carry `Retry-After: <seconds>` (for a cold start, the model's remaining load time; see [Choosing a model](#choosing-a-model-v12)) |
@@ -309,8 +309,22 @@ stays `"1"`. Clients keep ignoring unknown fields.
   and `POST /v1/suggest`. `model_used` on a suggestion is
   `@cf/google/gemma-4-26b-a4b-it`.
 - The body cap is `MAX_UPLOAD_BYTES` (default 1048576). The enforced
-  image-part cap is that minus 64 KiB (default 983040). A body over the body
-  cap is `413` and the message names the body cap. An image part over the
+  image-part cap is that minus 64 KiB (default 983040). A single numeric
+  `Content-Length` over the body cap is `413` before the body is read. A
+  single numeric `Content-Length` within the cap is buffered with one read,
+  then checked: more bytes than the cap is the same `413`. On a Request
+  built in code, a body shorter or longer than the declared length is `400`
+  `invalid Content-Length`. Over the network, bytes past the declared length
+  are not part of the body, and a short body waits for the client and then
+  gets `400` `expected multipart/form-data`. A non-numeric, negative, or
+  combined `Content-Length` (`abc`, `-1`, `+N`, comma-joined values,
+  differing duplicates, anything over 2^53) is a plain-text 400 from workerd
+  before the Worker runs. Leading zeros, whitespace, and identical
+  duplicates are accepted, and chunked framing wins over a length. If a
+  malformed length reaches the Worker, it returns JSON `400`
+  `invalid Content-Length` and does not buffer. A missing `Content-Length`
+  is still streamed and aborted
+  at the cap. A body over the body cap is `413` and the message names the body cap. An image part over the
   enforced image cap, and Workers AI code 3006, are `413` and the message
   names that image cap. `/v1/info` `max_image_bytes` is
   `min(ADVERTISED_MAX_IMAGE_BYTES, MAX_UPLOAD_BYTES − 64 KiB)`. The constant
@@ -330,7 +344,10 @@ stays `"1"`. Clients keep ignoring unknown fields.
   day is exhausted, or when a request cap has no calls left. A remaining of
   exactly 30 is still ready. Absent on the Python service.
 - Auth is required on the known routes whenever the secret is set, compared
-  as SHA-256 digests with `crypto.subtle.timingSafeEqual`. A missing secret
+  as SHA-256 digests with `crypto.subtle.timingSafeEqual`. The server token's
+  digest is cached for the isolate and recomputed when the secret value
+  changes. The presented token is hashed on every request. Neither digest is
+  logged. A missing or empty secret
   on `/healthz`, `/v1/info`, and `/v1/suggest` is `503`, not open access. Any
   other path is `404`, including when the secret is missing.
 - `POST /v1/suggest` stays `multipart/form-data`. Type comes from magic bytes.

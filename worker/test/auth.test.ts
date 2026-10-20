@@ -2,7 +2,19 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { tokensMatch } from "../src/auth";
-import { VALID, bodyOf, call, jpeg, reply, resetBudget, scriptedAi, suggestRequest, TOKEN } from "./helpers";
+import {
+  VALID,
+  bodyOf,
+  call,
+  jpeg,
+  multipart,
+  reply,
+  resetBudget,
+  scriptedAi,
+  suggestRequest,
+  TOKEN,
+  unreadStream,
+} from "./helpers";
 
 beforeEach(resetBudget);
 
@@ -122,5 +134,79 @@ describe("auth and health", () => {
 
   it("uses the configured token from the test binding", () => {
     expect(env.AUTOFILL_TOKEN).toBe(TOKEN);
+  });
+
+  it("does not read the body when the bearer token is rejected", async () => {
+    const part = multipart(jpeg());
+    const tracked = unreadStream(part.body);
+    const request = new Request("https://autofill.example/v1/suggest", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer wrong-token",
+        "content-type": part.contentType,
+        "content-length": String(part.body.byteLength),
+      },
+      body: tracked.stream,
+      duplex: "half",
+    } as RequestInit);
+    const before = tracked.reads();
+    const response = await call(request);
+    expect(response.status).toBe(401);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "unauthorized", message: "missing or invalid bearer token" },
+    });
+    expect(tracked.reads()).toBe(before);
+  });
+
+  it("uses a rotated AUTOFILL_TOKEN on the next request", async () => {
+    const { ai } = scriptedAi([reply(VALID), reply(VALID)]);
+    const first = await call(suggestRequest(jpeg(), { token: "token-a" }), {
+      AI: ai,
+      AUTOFILL_TOKEN: "token-a",
+    });
+    expect(first.status).toBe(200);
+    const stale = await call(suggestRequest(jpeg(), { token: "token-a" }), {
+      AI: ai,
+      AUTOFILL_TOKEN: "token-b",
+    });
+    expect(stale.status).toBe(401);
+    const rotated = await call(suggestRequest(jpeg(), { token: "token-b" }), {
+      AI: ai,
+      AUTOFILL_TOKEN: "token-b",
+    });
+    expect(rotated.status).toBe(200);
+  });
+
+  it("caches the server token digest until that token changes", async () => {
+    let digests = 0;
+    const lengths: number[] = [];
+    const subtle = crypto.subtle as unknown as {
+      digest: typeof crypto.subtle.digest;
+      timingSafeEqual: (left: ArrayBufferView, right: ArrayBufferView) => boolean;
+    };
+    const originalDigest = subtle.digest.bind(crypto.subtle);
+    const originalEqual = subtle.timingSafeEqual.bind(crypto.subtle);
+    subtle.digest = async (...args) => {
+      digests += 1;
+      return originalDigest(...args);
+    };
+    subtle.timingSafeEqual = (left, right) => {
+      lengths.push(left.byteLength, right.byteLength);
+      return originalEqual(left, right);
+    };
+    try {
+      await expect(tokensMatch("alpha", "server-token-one")).resolves.toBe(false);
+      const afterFirst = digests;
+      expect(afterFirst).toBe(2);
+      await expect(tokensMatch("beta", "server-token-one")).resolves.toBe(false);
+      expect(digests - afterFirst).toBe(1);
+      const afterSame = digests;
+      await expect(tokensMatch("server-token-two", "server-token-two")).resolves.toBe(true);
+      expect(digests - afterSame).toBe(2);
+    } finally {
+      subtle.digest = originalDigest;
+      subtle.timingSafeEqual = originalEqual;
+    }
+    expect(lengths).toEqual([32, 32, 32, 32, 32, 32]);
   });
 });
