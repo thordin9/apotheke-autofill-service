@@ -71,9 +71,53 @@ def test_deploy_workflow_is_main_only_and_pinned():
     assert "set -x" not in text
     assert "echo" not in deploy["run"]
     smoke = next(step for step in job["steps"] if step.get("name") == "Smoke")
-    assert f"https://{DOMAIN}/healthz" in smoke["run"]
+    assert smoke["env"]["WORKER_URL"] == "${{ vars.WORKER_URL }}"
+    assert f"${{WORKER_URL:-https://{DOMAIN}}}" in smoke["run"]
+    assert "$base/healthz" in smoke["run"]
     assert "/v1/suggest" in smoke["run"]
-    assert "401" in smoke["run"]
+    suggest = smoke["run"].split("/v1/suggest", 1)[1]
+    assert '[ "$code" = "401" ]' in suggest
+    assert "200" not in suggest
+    assert "503" not in suggest
+    assert "last HTTP code:" in smoke["run"]
+    success = [
+        line.strip()
+        for line in suggest.splitlines()
+        if line.strip().startswith("if ") and "code" in line
+    ]
+    assert success == ['if [ "$code" = "401" ]; then']
+
+
+def test_wrangler_has_observability_and_no_kv():
+    text = WRANGLER.read_text()
+    config = tomllib.loads(text)
+    assert config["observability"]["enabled"] is True
+    assert config["observability"]["logs"]["enabled"] is True
+    assert config["observability"]["traces"]["enabled"] is True
+    assert "kv_namespaces" not in config
+    assert "kv_namespaces" not in text
+    assert config["vars"]["MAX_UPLOAD_BYTES"] == "1048576"
+
+
+def test_deploy_workflow_installs_with_ci_and_checks_wrangler():
+    text = WORKFLOW.read_text()
+    workflow = yaml.safe_load(text)
+    job = workflow["jobs"]["deploy"]
+    assert "secrets" not in job
+    assert "secrets.AUTOFILL_TOKEN" not in text
+    assert "printf" not in text
+    assert "npm install" not in text
+    install = next(step for step in job["steps"] if step.get("name") == "Install")
+    assert install["run"].strip() == "npm ci"
+    test = next(step for step in job["steps"] if step.get("name") == "Test")
+    assert test["run"].strip() == "npm test"
+    version = next(step for step in job["steps"] if step.get("name") == "Check Wrangler version")
+    assert "devDependencies.wrangler" in version["run"]
+    assert "npx wrangler --version" in version["run"]
+    deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
+    assert set(deploy["env"]) == {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"}
+    names = [step.get("name") for step in job["steps"]]
+    assert names.index("Test") < names.index("Deploy")
 
 
 def test_deploy_checkout_drops_credentials_and_no_legacy_peer_deps():

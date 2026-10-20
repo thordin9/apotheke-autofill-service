@@ -34,13 +34,31 @@ describe("budget", () => {
     expect(body.capabilities).toEqual(["name", "category", "tags", "description"]);
     expect(body.backend).toBe("cloudflare-workers");
     expect(body.backend_used).toBe("cloudflare-workers");
-    expect(body.max_image_bytes).toBe(3145728);
+    expect(body.max_image_bytes).toBe(983040);
     expect(body.ready).toBe(true);
     expect(body.budget).toEqual({
       neurons: { limit: 6000, used: 0, reserved: 0, remaining: 6000 },
       requests: { limit: null, used: 0, remaining: null },
       resets_at: "2026-10-20T00:00:00.000Z",
     });
+  });
+
+  it("is not ready when fewer than 30 neurons remain and is ready at exactly 30", async () => {
+    const low = scriptedAi([reply(VALID, { neurons: 5971 })]);
+    expect((await call(suggestRequest(), { AI: low.ai })).status).toBe(200);
+    const short = await bodyOf(await call(infoRequest()));
+    expect((short.budget as { neurons: { remaining: number } }).neurons.remaining).toBe(29);
+    expect(short.ready).toBe(false);
+    const refused = await call(suggestRequest(), { AI: low.ai });
+    expect(refused.status).toBe(503);
+
+    await resetBudget();
+    const edge = scriptedAi([reply(VALID, { neurons: 5970 }), reply(VALID, { neurons: 30 })]);
+    expect((await call(suggestRequest(), { AI: edge.ai })).status).toBe(200);
+    const exact = await bodyOf(await call(infoRequest()));
+    expect((exact.budget as { neurons: { remaining: number } }).neurons.remaining).toBe(30);
+    expect(exact.ready).toBe(true);
+    expect((await call(suggestRequest(), { AI: edge.ai })).status).toBe(200);
   });
 
   it("accounts usage.neurons, the Gemma rate table, and the estimate", async () => {

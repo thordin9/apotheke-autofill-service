@@ -575,6 +575,7 @@ export function publicSuggestion(raw: Record<string, unknown>, model: string): R
     if (tags.length > 0) out.tags = tags;
   }
   if (model.trim()) out.model_used = model;
+  out.backend_used = "cloudflare-workers";
   const idents = identityFields(raw);
   if (Object.keys(out).length > 0 || idents.brand || idents.model_number || idents.serial_number) {
     Object.assign(out, idents);

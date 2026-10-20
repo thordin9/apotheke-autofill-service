@@ -252,7 +252,7 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 |---|---|---|
 | 400 | `bad_request` | `image` missing/empty, `context` not valid JSON or wrong shape |
 | 401 | `unauthorized` | token required and missing/wrong (`WWW-Authenticate: Bearer`) |
-| 413 | `payload_too_large` | Python: image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760). Worker: whole request body > `MAX_UPLOAD_BYTES` (default 3 MiB = 3145728), from `Content-Length` or from the bytes read when the length is absent; also Workers AI code 3006. Advertised as `max_image_bytes` in `/v1/info` |
+| 413 | `payload_too_large` | Python: image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760). Worker: whole request body > `MAX_UPLOAD_BYTES` (default 1 MiB = 1048576), from `Content-Length` or from the bytes read when the length is absent; also an image part over `max_image_bytes`, and Workers AI code 3006. `/v1/info` advertises `max_image_bytes` (default 983040), which is the body cap minus 64 KiB |
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
 | 429 | `rate_limited` | Worker only. Per-location rate limit on `POST /v1/suggest` after auth (`Retry-After: 60`). Loosely enforced; the daily cap is the `503` below |
 | 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or loading the model a client picked with `context.model`, when loading plus answering would not fit in the timeout (otherwise the request waits for the load), or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading, model-loading and busy responses carry `Retry-After: <seconds>` (for a cold start, the model's remaining load time; see [Choosing a model](#choosing-a-model-v12)) |
@@ -305,24 +305,48 @@ being absent.
 The Worker in `worker/` is a drop-in for the same three routes. `version`
 stays `"1"`. Clients keep ignoring unknown fields.
 
-- `backend` and `backend_used` are `cloudflare-workers`. `model_used` is
+- `backend` and `backend_used` are `cloudflare-workers` on both `GET /v1/info`
+  and `POST /v1/suggest`. `model_used` on a suggestion is
   `@cf/google/gemma-4-26b-a4b-it`.
-- `max_image_bytes` is `MAX_UPLOAD_BYTES` (default 3145728). The Python
-  service still defaults to 10485760. Apotheke reads `max_image_bytes`.
+- The body cap is `MAX_UPLOAD_BYTES` (default 1048576). `max_image_bytes` is
+  that cap minus 64 KiB (default 983040). A body over the cap is `413` and
+  the message names the body cap. An image part over `max_image_bytes`, and
+  Workers AI code 3006, are `413` and the message names the image cap.
+  Apotheke reads `max_image_bytes` and should skip larger images. The Python
+  service still defaults to 10485760.
 - `budget` on `/v1/info` is `{neurons: {limit, used, reserved, remaining},
-  requests: {limit, used, remaining}, resets_at}`. `ready` is false when the
-  cap is exhausted. Absent on the Python service.
-- Auth is required whenever the secret is set, compared as SHA-256 digests
-  with `crypto.subtle.timingSafeEqual`. A missing secret is `503`, not open
-  access.
+  requests: {limit, used, remaining}, resets_at}`. `remaining` is
+  `limit - used - reserved` (0 when the day is marked exhausted). `ready` is
+  false when that remaining is below 30, the reserve for one call, when the
+  day is exhausted, or when a request cap has no calls left. A remaining of
+  exactly 30 is still ready. Absent on the Python service.
+- Auth is required on the known routes whenever the secret is set, compared
+  as SHA-256 digests with `crypto.subtle.timingSafeEqual`. A missing secret
+  on `/healthz`, `/v1/info`, and `/v1/suggest` is `503`, not open access. Any
+  other path is `404`, including when the secret is missing.
 - `POST /v1/suggest` stays `multipart/form-data`. Type comes from magic bytes.
   Categories are stripped of NUL, C0/C1 controls, and bidi overrides. A lone
   surrogate in a category is `400`.
 - Brand, model number, and serial follow v1.3 (trimmed, cut at 128, never
   logged).
-- Over the daily cap, or when Workers AI returns 3036 or 3040, the status is
-  `503` `backend_unavailable` with `Retry-After` until 00:00 UTC. The body
-  does not include the upstream error. 3006 is `413`.
+- Over the daily cap, or when Workers AI returns 3036, the status is `503`
+  `backend_unavailable` with `Retry-After` until 00:00 UTC and the message
+  `daily capacity is exhausted`. 3036 also marks the day exhausted. 3040 is
+  the same status with `Retry-After: 30` and the message `the model is out
+  of capacity`. It does not mark the day exhausted. 3006 is `413`. The code
+  is read from `code`, `internalCode`, or `error_code`, and from the error
+  message when it starts with `3036: `, `3040: `, or `3006: ` (optionally
+  prefixed by `InferenceUpstreamError: `). The error name itself is not
+  checked. A
+  message that merely contains those digits is not mapped.
+  `lastRequestInternalStatusCode` is not read. The body does not include
+  the upstream error.
+- Each suggest logs one JSON line. `base64_ms`, `parse_ms`, `validate_ms`,
+  and `total_ms` are `Date.now()` deltas. On the production isolate that
+  clock does not move during CPU, so a CPU-only slice can be 0. `total_ms`
+  includes the model await. Workers Logs `cpuTime` is the CPU measurement.
+  The line does not include the token, the image, or field values. Workers
+  Logs themselves store `cf-connecting-ip`.
 - The Worker does not return `504`. A model failure is `503`.
 
 Deploy, free-tier limits, and the base64 CPU measurement:

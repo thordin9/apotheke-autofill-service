@@ -27,10 +27,12 @@ regexes = [
 ]
 
 # The v1.4 QA note quotes the historical curl placeholder. The file is not
-# edited here. A value that does not match the regexes above is still a finding.
+# edited here. condition AND with commits means a later edit of that file is
+# not allowlisted. A value that does not match the regexes is still a finding.
 [[allowlists]]
 description = "QA note quotes the historical curl placeholder."
 condition = "AND"
+commits = ["ba1f8ff4397c568c5b9b5ffdc9f2e680664ca231"]
 paths = ['''docs/qa/v1\.4-stub-qa\.md''']
 regexTarget = "match"
 regexes = [

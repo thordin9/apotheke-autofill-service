@@ -1,4 +1,6 @@
 # Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
 # Generate a token with: openssl rand -hex 32
 # wrangler dev calls the real Workers AI binding and spends Neurons.
+# Upload size is not a secret. wrangler.toml MAX_UPLOAD_BYTES defaults to
+# 1048576. GET /v1/info max_image_bytes is 983040 (that cap minus 64 KiB).
 AUTOFILL_TOKEN=replace-me

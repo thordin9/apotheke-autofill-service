@@ -3,6 +3,82 @@
 All notable changes to this service. The HTTP contract is versioned
 separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
+## [Unreleased]
+
+### Changed
+
+- **Worker upload cap is 1 MiB.** Live Workers Logs `cpuTime` at about 2.9 MiB
+  was 126 ms, past the 10 ms Free CPU limit, so `MAX_UPLOAD_BYTES` is
+  **1048576**. `/v1/info` `max_image_bytes` is that cap minus 64 KiB
+  (**983040**). Apotheke should skip larger images. The Python service stays
+  at 10 MiB. The 2.0.0 release shipped 3145728; that figure stays in the
+  2.0.0 notes below.
+- **Workers AI 3040** is `503` with `Retry-After: 30` and does not mark the
+  day exhausted. Only 3036 and the Durable Object budget wait until 00:00
+  UTC. Codes come from `code`, `internalCode`, or `error_code`, and from the
+  error message when it starts with `3036: `, `3040: `, or `3006: `
+  (optionally prefixed by `InferenceUpstreamError: `). The error name itself
+  is not checked. A message that merely contains those digits is not mapped.
+  `lastRequestInternalStatusCode` is not read.
+- **`POST /v1/suggest` includes `backend_used` `cloudflare-workers` and
+  `model_used`.** `ready` is false when fewer than 30 Neurons remain.
+  `remaining` is still the raw balance. Log `*_ms` fields are `Date.now()`
+  deltas; Workers Logs `cpuTime` is the CPU figure. An unknown path is 404
+  even when `AUTOFILL_TOKEN` is missing. Workers Logs store
+  `cf-connecting-ip`.
+- The deploy smoke URL is `vars.WORKER_URL`, defaulting to
+  `https://apotheke-autofill-service.webapp.gr`. A failed smoke prints the
+  last HTTP status code. The gitleaks allowlist for
+  `docs/qa/v1.4-stub-qa.md` is limited to commit
+  `ba1f8ff4397c568c5b9b5ffdc9f2e680664ca231`.
+
+### Added
+
+- `docs/qa/feature11-worker-live-qa.md`, the live QA report, byte for byte.
+- `docs/qa/pr26-worker-followup-stub-qa.md`, the follow-up stub QA report, byte for byte.
+- `docs/qa/pr26-worker-followup-recheck-qa.md`, the follow-up recheck, byte for byte.
+
+### Fixed
+
+- **dl-cap double restart at boot (QA #17 follow-up N1).** At boot NetworkManager sends `up` and
+  `connectivity-change` for `eth0` at the same moment. The dispatcher hook restarted `dl-cap.service` on every `up`,
+  the `connectivity-change` check could then see the cap removed by that restart's stop, and the second restart killed
+  the first while it was starting (`status=15/TERM`, `Failed with result 'signal'`), leaving the board without the
+  inbound cap for about 0.4 s on every boot. `deploy/jetson/nm-dispatcher-90-dl-cap` now serialises invocations
+  with `flock` (`/run/dl-cap-hook.lock`), leaves `dl-cap.service` alone while it has a job queued, waits for a
+  start or stop in progress to settle, and then restarts (still `--no-block`) only if `dl-cap.sh check` fails, on
+  `up` as well. The lock wait and the settle wait share one deadline, `DL_CAP_HOOK_BUDGET_S` (default 8 s), and
+  every `systemctl`/`check` call is bounded by `timeout`, so the hook finishes in about budget + 3 s (~11 s) at worst, well under
+  NetworkManager's dispatcher script timeout (600 s in NM 1.22), and never holds up later events for long. When
+  the time runs out it falls through: unlocked, a busy or queued unit is left alone, otherwise check and restart; a
+  `systemctl` call that times out leaves dl-cap alone. Each decision is logged with the tag `dl-cap-hook`. Ignored
+  events and interfaces, the disabled-unit rule, `dl-cap.sh` and `dl-cap.service` (including the post-apply check) are unchanged. The test
+  harness gains a systemd-like fake `dl-cap.service` job, concurrent-event tests and worst-case runtime tests
+  (at most 10 s). Board check over a reboot pending.
+
+- **dl-cap hook and timer follow-ups (QA of #23, L1–L6).** L1: the documented worst case of the hook is about
+  budget + 3 s (~11 s at the default 8 s; 10.9 s measured), not ~9 s. L2: a `dl-cap.sh check` that times out (exit
+  124) now counts as unknown in the hook and in `dl-cap-check.sh`, so nothing is restarted (and the cap not
+  dropped) on a guess; both log `dl-cap.sh check timed out`. L3: the lock moved from world-writable `/run/lock` to
+  root-only `/run/dl-cap-hook.lock` in both scripts. L4: `DL_CAP_HOOK_BUDGET_S` must be 1–60 without a leading
+  zero; `08`, `010` or long values used to abort the hook under dash or be read as octal, now they fall back to
+  8 s (61–99 is capped at 60, 100 and up fall back to 8 s) with a log line. The lock file is now created 0600. L5: a `dl-cap.service` stuck in `failed` is still restarted on every
+  timer run but logged once per boot (marker `/run/dl-cap-check.failed-logged`, configurable with
+  `DL_CAP_CHECK_FAILED_MARKER`, removed once the cap is back). L6: the docs no longer say a reboot shows a hook
+  restart of dl-cap; a normal boot has none. Harness tests for each.
+
+### Added
+
+- **Periodic inbound-cap check (`dl-cap-check.timer`).** Closes the gap where the hook leaves dl-cap alone after a
+  `systemctl` timeout and nothing else restores the cap. New `deploy/jetson/dl-cap-check.sh`,
+  `dl-cap-check.service` (oneshot, `TimeoutStartSec=30`) and `dl-cap-check.timer` (`OnBootSec=2min`,
+  `OnUnitActiveSec=5min`, `AccuracySec=30s`). The check does nothing if `dl-cap.service` is disabled, has a job
+  queued or is starting or stopping. Otherwise it runs `dl-cap.sh check` and, only if that fails, logs under the tag
+  `dl-cap-check` and runs `systemctl --no-block restart dl-cap.service`. It shares the hook's lock file (waits at
+  most 8 s, else skips the round) and bounds every call (4 s each, about 24 s worst case). Install with
+  `systemctl enable --now dl-cap-check.timer` (see docs/deploy-jetson.md). Side effect: a plain `systemctl stop
+  dl-cap` is undone within 5 minutes; `systemctl disable --now dl-cap` keeps the cap off.
+
 ## [2.0.0]
 
 ### Added
@@ -23,7 +99,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 - Docs: roll back a bad deploy with `npx wrangler rollback` from `worker/`.
 - Removed `worker/.npmrc` (`legacy-peer-deps=true`); the pinned packages
   resolve without it, so a real peer conflict now fails `npm ci`.
-  Upstream text is not returned. A Durable Object error fails closed.
+- Upstream text is not returned. A Durable Object error fails closed.
 - Upload cap is the whole body, `MAX_UPLOAD_BYTES` default **3145728 (3 MiB)**,
   checked from `Content-Length` and then from bytes actually read (chunked
   bodies included). The Python service stays at 10 MiB.
@@ -127,50 +203,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   overrides, are stripped from client category names before the prompt, the
   schema enum, and the category returned to the client. The same classes as
   the brand fields. A NUL never comes back in the response.
-- **v3_lean latency.** The changelog's v3_lean cost is   the measured +0.7 s.
 
-## [Unreleased]
-
-### Fixed
-
-- **dl-cap double restart at boot (QA #17 follow-up N1).** At boot NetworkManager sends `up` and
-  `connectivity-change` for `eth0` at the same moment. The dispatcher hook restarted `dl-cap.service` on every `up`,
-  the `connectivity-change` check could then see the cap removed by that restart's stop, and the second restart killed
-  the first while it was starting (`status=15/TERM`, `Failed with result 'signal'`), leaving the board without the
-  inbound cap for about 0.4 s on every boot. `deploy/jetson/nm-dispatcher-90-dl-cap` now serialises invocations
-  with `flock` (`/run/dl-cap-hook.lock`), leaves `dl-cap.service` alone while it has a job queued, waits for a
-  start or stop in progress to settle, and then restarts (still `--no-block`) only if `dl-cap.sh check` fails, on
-  `up` as well. The lock wait and the settle wait share one deadline, `DL_CAP_HOOK_BUDGET_S` (default 8 s), and
-  every `systemctl`/`check` call is bounded by `timeout`, so the hook finishes in about budget + 3 s (~11 s) at worst, well under
-  NetworkManager's dispatcher script timeout (600 s in NM 1.22), and never holds up later events for long. When
-  the time runs out it falls through: unlocked, a busy or queued unit is left alone, otherwise check and restart; a
-  `systemctl` call that times out leaves dl-cap alone. Each decision is logged with the tag `dl-cap-hook`. Ignored
-  events and interfaces, the disabled-unit rule, `dl-cap.sh` and `dl-cap.service` (including the post-apply check) are unchanged. The test
-  harness gains a systemd-like fake `dl-cap.service` job, concurrent-event tests and worst-case runtime tests
-  (at most 10 s). Board check over a reboot pending.
-
-- **dl-cap hook and timer follow-ups (QA of #23, L1–L6).** L1: the documented worst case of the hook is about
-  budget + 3 s (~11 s at the default 8 s; 10.9 s measured), not ~9 s. L2: a `dl-cap.sh check` that times out (exit
-  124) now counts as unknown in the hook and in `dl-cap-check.sh`, so nothing is restarted (and the cap not
-  dropped) on a guess; both log `dl-cap.sh check timed out`. L3: the lock moved from world-writable `/run/lock` to
-  root-only `/run/dl-cap-hook.lock` in both scripts. L4: `DL_CAP_HOOK_BUDGET_S` must be 1–60 without a leading
-  zero; `08`, `010` or long values used to abort the hook under dash or be read as octal, now they fall back to
-  8 s (61–99 is capped at 60, 100 and up fall back to 8 s) with a log line. The lock file is now created 0600. L5: a `dl-cap.service` stuck in `failed` is still restarted on every
-  timer run but logged once per boot (marker `/run/dl-cap-check.failed-logged`, configurable with
-  `DL_CAP_CHECK_FAILED_MARKER`, removed once the cap is back). L6: the docs no longer say a reboot shows a hook
-  restart of dl-cap; a normal boot has none. Harness tests for each.
-
-### Added
-
-- **Periodic inbound-cap check (`dl-cap-check.timer`).** Closes the gap where the hook leaves dl-cap alone after a
-  `systemctl` timeout and nothing else restores the cap. New `deploy/jetson/dl-cap-check.sh`,
-  `dl-cap-check.service` (oneshot, `TimeoutStartSec=30`) and `dl-cap-check.timer` (`OnBootSec=2min`,
-  `OnUnitActiveSec=5min`, `AccuracySec=30s`). The check does nothing if `dl-cap.service` is disabled, has a job
-  queued or is starting or stopping. Otherwise it runs `dl-cap.sh check` and, only if that fails, logs under the tag
-  `dl-cap-check` and runs `systemctl --no-block restart dl-cap.service`. It shares the hook's lock file (waits at
-  most 8 s, else skips the round) and bounds every call (4 s each, about 24 s worst case). Install with
-  `systemctl enable --now dl-cap-check.timer` (see docs/deploy-jetson.md). Side effect: a plain `systemctl stop
-  dl-cap` is undone within 5 minutes; `systemctl disable --now dl-cap` keeps the cap off.
 
 ## [1.3.0] - 2026-10-19
 
@@ -229,6 +262,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   `bench/photos/brand_readability.json`. Raw: `bench/results/brandserial-2026-10-19/`,
   `bench/results/modelbench-2026-10-19/`.
   GPU retime after that boot window confirms Feature 9 medians (v3_lean +0.7 s).
+  The changelog's v3_lean cost is the measured +0.7 s.
 
 - **Jetson deployment guide (PR #9).** `docs/deploy-jetson.md` documents the production setup on the Jetson
   Xavier NX: platform, Ollama drop-in, the `qwen2.5vl-jetson:3b` model, `service.env`, building

@@ -8,28 +8,40 @@ export interface ModelTurn {
   usage: unknown;
 }
 
-export function aiInput(prompt: string, dataUrl: string, context: ClientContext): Record<string, unknown> {
-  return {
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: dataUrl } },
-        ],
-      },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "suggestion",
-        strict: true,
-        schema: buildSchema(context),
-      },
+export interface PreparedAi {
+  /** Same image object and schema on every call, including the repair. */
+  inputFor(prompt: string): Record<string, unknown>;
+  imagePart: { type: "image_url"; image_url: { url: string } };
+}
+
+/** One data URI, one schema. Repair changes only the text part. */
+export function prepareAi(dataUrl: string, context: ClientContext): PreparedAi {
+  const imagePart = { type: "image_url" as const, image_url: { url: dataUrl } };
+  const responseFormat = {
+    type: "json_schema",
+    json_schema: {
+      name: "suggestion",
+      strict: true,
+      schema: buildSchema(context),
     },
-    chat_template_kwargs: { enable_thinking: false },
-    temperature: 0,
-    max_completion_tokens: 512,
+  };
+  const thinking = { enable_thinking: false };
+  return {
+    imagePart,
+    inputFor(prompt: string) {
+      return {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: prompt }, imagePart],
+          },
+        ],
+        response_format: responseFormat,
+        chat_template_kwargs: thinking,
+        temperature: 0,
+        max_completion_tokens: 512,
+      };
+    },
   };
 }
 
@@ -67,6 +79,20 @@ function contentToString(content: unknown): string {
 
 const AI_CODES = new Set([3036, 3040, 3006]);
 
+/**
+ * The real Workers AI binding throws InferenceUpstreamError with the code
+ * only in the message: "3036: ...", optionally prefixed with the error name.
+ * Digits elsewhere in the text are not a code. lastRequestInternalStatusCode
+ * is not read; that field is shared across concurrent requests.
+ */
+const BINDING_MESSAGE = /^(?:InferenceUpstreamError:\s*)?(3036|3040|3006):\s/;
+
+function bindingMessageCode(message: unknown): number | null {
+  if (typeof message !== "string") return null;
+  const match = BINDING_MESSAGE.exec(message);
+  return match ? Number(match[1]) : null;
+}
+
 /** Internal Workers AI codes we map. 3036 daily free neurons, 3040 capacity, 3006 too large. */
 export function workersAiCode(err: unknown): number | null {
   const seen = new Set<unknown>();
@@ -78,16 +104,15 @@ export function workersAiCode(err: unknown): number | null {
     const record = current as Record<string, unknown>;
     for (const key of ["code", "internalCode", "error_code"]) {
       const value = record[key];
-      const code = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : null;
+      const code =
+        typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : null;
       if (code !== null && AI_CODES.has(code)) return code;
     }
+    const fromMessage = bindingMessageCode(record.message);
+    if (fromMessage !== null) return fromMessage;
     if (Array.isArray(record.errors)) stack.push(...record.errors);
     if (record.error && typeof record.error === "object") stack.push(record.error);
     if (record.cause && typeof record.cause === "object") stack.push(record.cause);
-  }
-  if (err instanceof Error) {
-    const match = err.message.match(/\b(3036|3040|3006)\b/);
-    if (match) return Number(match[1]);
   }
   return null;
 }

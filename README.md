@@ -11,7 +11,9 @@ served at `https://apotheke-autofill-service.webapp.gr`. A fork sets its own
 and the main-only deploy Action are in
 [docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
 Apotheke only changes the base URL and the bearer token. The Worker reports
-`backend: "cloudflare-workers"` and `max_image_bytes: 3145728` (3 MiB).
+`backend: "cloudflare-workers"` and `max_image_bytes: 983040`. The request
+body cap is 1 MiB (`1048576`); the advertised image cap leaves 64 KiB for
+multipart headers. The Python service stays at 10 MiB.
 
 Docker and the Jetson stack below are **legacy self-hosting**. They keep the
 Python service, including its 10 MiB upload limit. Hardware CI on the Jetson
@@ -186,7 +188,7 @@ failure does not block merging. Build on the Xavier for a result you can run.
 
 All variables are plain env vars and work with `uvicorn` directly; Docker is not required.
 
-Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history, with the default rules enabled. The download is checksum-pinned. `.gitleaks.toml` allowlists the two historical placeholders only in the commits that added them, and only when whitespace follows the closing angle bracket.
+Do not commit `service.env`, key files, or a local env file. `.gitignore` ignores `service.env`, `*.env`, `*.pem`, and `*.key`. The tracked `.env` (Compose profile only) and `*.env.example` stay tracked via `!.env` and `!*.env.example`. CI runs [gitleaks](https://github.com/gitleaks/gitleaks) 8.28.0 over the full history, with the default rules enabled. The download is checksum-pinned. `.gitleaks.toml` allowlists the two historical placeholders only in the commits that added them, and only when whitespace follows the closing angle bracket. The same placeholders quoted in `docs/qa/v1.4-stub-qa.md` are allowlisted only in commit `ba1f8ff4397c568c5b9b5ffdc9f2e680664ca231`.
 
 | Variable | Default | Meaning |
 |---|---|---|
