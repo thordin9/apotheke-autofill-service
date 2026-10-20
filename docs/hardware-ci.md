@@ -1,5 +1,9 @@
 # Hardware CI (Jetson)
 
+> **Legacy, decommissioned on 2026-10-20.** `jetson-hardware.yml` is disabled in the Actions settings and kept
+> for reference only. The service no longer runs on the board. See
+> [deploy-jetson.md](deploy-jetson.md#decommissioned-2026-10-20).
+
 `.github/workflows/jetson-hardware.yml` runs the service against the real model
 (Moondream on the host Ollama) on the self-hosted runner `<jetson-host>`, which has the
 `jetson` label (Jetson Xavier NX, L4T R35). It is **informational only**:

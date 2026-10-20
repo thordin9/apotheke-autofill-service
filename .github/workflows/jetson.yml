@@ -1,3 +1,8 @@
+# LEGACY (2026-10-20): the Jetson self-hosting deployment was decommissioned after
+# Apotheke v2.5.0 moved autofill to the Cloudflare Worker. This workflow is disabled in
+# the repository's Actions settings and kept for reference only. Don't re-enable it
+# without a new plan. See docs/deploy-jetson.md#decommissioned-2026-10-20.
+#
 # Arm64 Jetson image. Not part of the required CI workflow.
 #
 # dustynv/ollama:r35.4.1 is about 5.8 GB compressed and about 16 GB unpacked.
