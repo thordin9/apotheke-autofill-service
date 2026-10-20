@@ -105,6 +105,9 @@ Checked against the Ollama library on 2026-10-14:
 
 ## Jetson (JetPack 5 / L4T r35) — legacy self-hosting
 
+> Decommissioned on 2026-10-20: the autofill service no longer runs on the project's board, and both Jetson
+> workflows are disabled. Ollama and the idle self-hosted runner stay on the board. See [docs/deploy-jetson.md](docs/deploy-jetson.md#decommissioned-2026-10-20).
+
 The full legacy deployment (Ollama drop-in, model, `service.env`, container, verify, redeploy, rollback,
 bandwidth cap, runner, reboot) is in [docs/deploy-jetson.md](docs/deploy-jetson.md).
 

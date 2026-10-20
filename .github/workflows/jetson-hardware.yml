@@ -1,3 +1,8 @@
+# LEGACY (2026-10-20): the Jetson self-hosting deployment was decommissioned after
+# Apotheke v2.5.0 moved autofill to the Cloudflare Worker. This workflow is disabled in
+# the repository's Actions settings and kept for reference only. Don't re-enable it
+# without a new plan. See docs/deploy-jetson.md#decommissioned-2026-10-20.
+#
 # Real-hardware smoke test on the self-hosted Jetson runner (label `jetson`).
 #
 # SECURITY: this repository is public and the runner sits on a private LAN,

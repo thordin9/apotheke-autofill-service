@@ -473,6 +473,9 @@ because two Qwen inferences (about 2 × 13.5 s) do not fit in the 25 s backend t
 
 ## Reproduce
 
+> **Legacy:** the board deployment was decommissioned on 2026-10-20 and the Jetson workflows are disabled. See
+> [deploy-jetson.md](deploy-jetson.md#decommissioned-2026-10-20).
+
 Run by hand on the board, or use the **Jetson hardware** workflow from PR #4
 (`.github/workflows/jetson-hardware.yml`), which only runs by hand (`workflow_dispatch`) on the self-hosted `jetson`
 runner. There is no nightly or push trigger. That workflow runs its own smoke test on its fixture photos. The tables on

@@ -5,6 +5,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ## [Unreleased]
 
+### Deprecated
+
+- **The Jetson deployment is decommissioned (2026-10-20).** The board no longer
+  runs the service or the 30 Mbit/s inbound cap. `jetson-hardware.yml` and
+  `jetson.yml` are disabled and carry a legacy header, and
+  `docs/deploy-jetson.md`, `docs/hardware-ci.md` and the README mark the Jetson
+  stack as legacy. Ollama tuning drop-ins stay on the board. No code removed.
+
 ### Changed
 
 - **Worker upload cap is 1 MiB.** Live Workers Logs `cpuTime` at about 2.9 MiB

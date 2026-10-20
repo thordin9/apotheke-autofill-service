@@ -1,5 +1,10 @@
 # Deploying the service on a Jetson Xavier NX
 
+> **Legacy, decommissioned on 2026-10-20.** Autofill now runs on the Cloudflare Worker
+> ([cloudflare-workers-deploy.md](cloudflare-workers-deploy.md)). This page is kept as a record of how the
+> Jetson deployment worked; nothing here runs in production. See
+> [Decommissioned 2026-10-20](deploy-jetson.md#decommissioned-2026-10-20).
+
 This page describes how the autofill service runs on the project's Jetson board, so the setup can be
 rebuilt from this repo alone. Everything below is the production setup as of 2026-10-18 12:54 EEST (main
 `517352f`, image `apotheke-autofill:jetson-517352f`, model `qwen2.5vl-jetson:3b`, `BACKEND_TIMEOUT_S=45`,
@@ -26,6 +31,7 @@ board (written `$REPO` below). All commands run as root unless noted otherwise.
 12. [Reboot behaviour](#reboot-behaviour)
 13. [Model and image size choice: ALLOWED_MODELS and IMAGE_SIZES](#model-and-image-size-choice-allowed_models-and-image_sizes)
 14. [Known issues](#known-issues)
+15. [Decommissioned 2026-10-20](#decommissioned-2026-10-20)
 
 ## Platform
 
@@ -418,6 +424,9 @@ If the previous image has been removed, rebuild it with `build-image.sh <previou
 
 ## Inbound bandwidth limit (30 Mbit/s)
 
+> **Legacy:** removed from the board on 2026-10-20 with the rest of the deployment. The scripts stay in
+> `deploy/jetson/` for reference.
+
 All traffic coming into the board on `eth0` is limited to 30 Mbit/s, **with no exemptions**: internet downloads,
 LAN, SSH and photo uploads to the service alike. The L4T R35 kernel has no IFB module, so the traffic can't be
 shaped. Instead [`dl-cap.sh`](../deploy/jetson/dl-cap.sh) polices it with a `tc` ingress filter for IPv4 and IPv6
@@ -685,3 +694,27 @@ returns non-JSON text after the repair, the Python text fallback can take a
 short non-empty string as `name`. The Worker rejects that prose with 503
 `backend_error` (`model output was not a JSON object`) and does not use it
 as the name.
+
+## Decommissioned 2026-10-20
+
+The Jetson deployment was taken down after QA's end-to-end pass of Apotheke v2.5.0 against the Worker.
+
+**Removed from the board:** the service container, its images (`apotheke-autofill:jetson-*` and the
+`dustynv/ollama:r35.4.1` base), `/opt/autofill/` (env files and the auth header file shredded first), and the whole inbound bandwidth
+limit: `dl-cap.service`, `dl-cap.sh`, `dl-cap-check.timer`/`.service`, `dl-cap-check.sh`, the NetworkManager hook
+`90-dl-cap`, the `eth0` ingress qdisc with its police filters, and the lock and marker files under `/run`.
+Benchmark data was archived on the board, outside the repo.
+
+**Kept on the board, because they are general Ollama fixes rather than part of the service:** Ollama with all
+its models, [`ollama-10-autofill.conf`](../deploy/jetson/ollama-10-autofill.conf) (now titled *Jetson Ollama
+tuning*), [`ollama-wait-cuda.conf`](../deploy/jetson/ollama-wait-cuda.conf) with
+[`wait-cuda.sh`](../deploy/jetson/wait-cuda.sh), and
+[`ollama-gpu-check.service`](../deploy/jetson/ollama-gpu-check.service), plus the self-hosted runner.
+
+**Runner:** it stays registered to this repo and online for the board's Ollama work, but no enabled
+workflow targets it. The repo requires approval before workflows run for all outside contributors' fork
+PRs. No workflow may ever target this runner from `pull_request_target` or from any fork-triggered event.
+Deregistering it is the owner's call.
+
+**Workflows:** `jetson-hardware.yml` and `jetson.yml` are disabled in the Actions settings and carry a legacy
+header. The code in `deploy/jetson/`, `Dockerfile.jetson` and the tests stay in the repo.
