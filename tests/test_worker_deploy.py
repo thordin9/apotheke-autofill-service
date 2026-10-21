@@ -115,6 +115,8 @@ def test_deploy_workflow_installs_with_ci_and_checks_wrangler():
     assert "devDependencies.wrangler" in version["run"]
     assert "npx wrangler --version" in version["run"]
     deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
+    # No if:, continue-on-error or other keys, so a failed deploy always fails the job.
+    assert set(deploy) == {"name", "env", "run"}
     assert set(deploy["env"]) == {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"}
     names = [step.get("name") for step in job["steps"]]
     assert names.index("Test") < names.index("Deploy")
