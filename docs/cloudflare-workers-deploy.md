@@ -124,7 +124,10 @@ and from Actions with `workflow_dispatch` on `main`. The job uses the GitHub
 environment `production` (limit that environment to `main`). It runs `npm ci`,
 the stubbed Vitest suite (no Neurons), then `npx wrangler deploy` with the
 pinned Wrangler from `worker/package.json`. Secrets are step environment
-variables on the deploy step only.
+variables on the deploy step only. That step has only `name`, `env` and
+`run`, with no `if:` or `continue-on-error`, and `run` is exactly
+`npx wrangler deploy`. The job has no `continue-on-error` either.
+`tests/test_worker_deploy.py` fails if any of that changes.
 
 The smoke check then calls `https://apotheke-autofill-service.webapp.gr/healthz`
 (200) and `POST /v1/suggest` with no token (401 only; 200 is not success).
