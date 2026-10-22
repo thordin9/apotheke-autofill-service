@@ -15,7 +15,7 @@ the custom domain `apotheke-autofill-service.webapp.gr`. A fork uses its own
 ## What you need
 
 - Node.js 22 and npm
-- A Cloudflare account on the Workers Free plan for the default `wrangler deploy`. `wrangler deploy --env paid` needs the Workers Paid plan, because `limits.cpu_ms` is enforced only there
+- A Cloudflare account on the Workers Free plan for the default `wrangler deploy`. `wrangler deploy --env paid` needs the Workers Paid plan, because `--env paid` sets `limits.cpu_ms`, which Cloudflare rejects on the Free plan (error 100328)
 - Wrangler 4.36 or newer. This repo pins it in `worker/package.json`. Use that
   copy (`npx wrangler` from `worker/`) so the rate-limit binding matches.
 
@@ -143,17 +143,22 @@ the repo variable `WORKER_DEPLOY_ENV=paid` is set; without it, any
 `worker/**` merge puts a paid Worker back on free. Set that variable under
 Settings → Secrets and variables → Actions → Variables, or from a checkout
 with `gh variable set WORKER_DEPLOY_ENV --body paid`. An empty or unset
-variable runs `npx wrangler deploy`. The step copies that command's output
-with `tee` and then checks it. When `WORKER_DEPLOY_ENV` is `paid`, the step
-fails unless the output matches `TIER` followed by `"paid"` (`grep -E`;
-Wrangler prints `env.TIER ("paid")`). When the variable is empty, the step
-fails if that binding is present. The check does not print a secret. Any
-other value must match
-`^[a-z0-9_-]+$` or the step fails before Wrangler runs, and the value is
-not printed. Wrangler prints a warning when a config has environments and
-the free command omits `--env`. The top-level environment is still what
-that command publishes. `--env=""` selects it explicitly and silences the
-warning. The workflow does not pass `--env=""`.
+variable runs `npx wrangler deploy`. Before the upload, the step runs the
+same command with `--dry-run` (`npx wrangler deploy --dry-run`, plus
+`--env` when the variable is set), copies that output with `tee`, and
+checks it. When `WORKER_DEPLOY_ENV` is `paid`, the step fails unless the
+output matches `TIER` followed by `"paid"` (`grep -E`; Wrangler prints
+`env.TIER ("paid")`). When the variable is empty, the step fails if that
+binding is present. A mismatch stops the job before any upload. The same
+check runs again on the real deploy output. If the post-upload TIER check
+goes red, that version is already live; roll back with
+`npx wrangler rollback` and redeploy with the right env. The check does not
+print a secret. Any other value must match `^[a-z0-9][a-z0-9_-]*$` or the
+step fails before Wrangler runs, and the value is not printed. Wrangler
+prints a warning when a config has environments and the free command omits
+`--env`. The top-level environment is still what that command publishes.
+`--env=""` selects it explicitly and silences the warning. The workflow
+does not pass `--env=""`.
 
 `wrangler deploy` creates the custom hostname. The certificate can take a
 few minutes. `GET /healthz` stays failing until the certificate is ready and
@@ -302,10 +307,11 @@ and `observability` inherit and are not repeated. `limits.cpu_ms` is set only
 under `[env.paid]` (500). The free deploy has no CPU limit in the file, so it
 keeps the Workers Free 10 ms CPU limit.
 
-`limits.cpu_ms` is enforced on the Workers Paid (Standard) plan. A Free plan
-account cannot raise the CPU limit to 500 ms. The paid command is the one to
-run there. Do not put account ids, tokens, or a real hostname into the paid
-block beyond the route already in the top-level file.
+`limits.cpu_ms` is enforced on the Workers Paid (Standard) plan. On the Free
+plan Cloudflare rejects a deploy that sets `limits.cpu_ms` (error 100328).
+The paid command is the one to run on Workers Paid. Do not put account ids,
+tokens, or a real hostname into the paid block beyond the route already in
+the top-level file.
 
 ### Cost
 
