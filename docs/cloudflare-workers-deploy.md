@@ -15,7 +15,7 @@ the custom domain `apotheke-autofill-service.webapp.gr`. A fork uses its own
 ## What you need
 
 - Node.js 22 and npm
-- A Cloudflare account on the Workers Free plan for the default `wrangler deploy`. `wrangler deploy --env paid` needs the Workers Paid plan, because `limits.cpu_ms` is enforced only there
+- A Cloudflare account on the Workers Free plan for the default `wrangler deploy`. `wrangler deploy --env paid` needs the Workers Paid plan, because `--env paid` sets `limits.cpu_ms`, which Cloudflare rejects on the Free plan (error 100328)
 - Wrangler 4.36 or newer. This repo pins it in `worker/package.json`. Use that
   copy (`npx wrangler` from `worker/`) so the rate-limit binding matches.
 
@@ -308,10 +308,11 @@ and `observability` inherit and are not repeated. `limits.cpu_ms` is set only
 under `[env.paid]` (500). The free deploy has no CPU limit in the file, so it
 keeps the Workers Free 10 ms CPU limit.
 
-`limits.cpu_ms` is enforced on the Workers Paid (Standard) plan. A Free plan
-account cannot raise the CPU limit to 500 ms. The paid command is the one to
-run there. Do not put account ids, tokens, or a real hostname into the paid
-block beyond the route already in the top-level file.
+`limits.cpu_ms` is enforced on the Workers Paid (Standard) plan. On the Free
+plan Cloudflare rejects a deploy that sets `limits.cpu_ms` (error 100328).
+The paid command is the one to run on Workers Paid. Do not put account ids,
+tokens, or a real hostname into the paid block beyond the route already in
+the top-level file.
 
 ### Cost
 
