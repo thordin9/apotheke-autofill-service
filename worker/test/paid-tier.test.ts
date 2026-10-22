@@ -133,6 +133,12 @@ function dataUrlBytes(url: string): Uint8Array {
   return new Uint8Array(Buffer.from(url.slice(at + marker.length), "base64"));
 }
 
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return Buffer.from(left.buffer, left.byteOffset, left.byteLength).equals(
+    Buffer.from(right.buffer, right.byteOffset, right.byteLength),
+  );
+}
+
 describe("TIER flag", () => {
   it("keeps free info identical and appends enforced_image_bytes and tier", async () => {
     const body = await infoBody();
@@ -239,7 +245,7 @@ describe("paid upload memory and original bytes", () => {
 
     const parsed = readSuggestParts(part.body, part.contentType, PAID_IMAGE);
     expect(parsed.image.buffer).toBe(part.body.buffer);
-    expect(Array.from(parsed.image)).toEqual(Array.from(image));
+    expect(sameBytes(parsed.image, image)).toBe(true);
 
     const encoded = bytesToBase64(parsed.image);
     expect(encoded.length).toBe(Math.ceil(parsed.image.byteLength / 3) * 4);
@@ -258,7 +264,7 @@ describe("paid upload memory and original bytes", () => {
     expect(calls).toHaveLength(1);
     const content = (calls[0].input.messages as Array<{ content: Array<Record<string, unknown>> }>)[0].content;
     const url = (content[1].image_url as { url: string }).url;
-    expect(dataUrlBytes(url)).toEqual(image);
+    expect(sameBytes(dataUrlBytes(url), image)).toBe(true);
     expect(url.length).toBeLessThan(encoded.length + 64);
   });
 
