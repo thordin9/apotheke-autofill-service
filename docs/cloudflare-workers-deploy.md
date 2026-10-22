@@ -118,12 +118,20 @@ npx wrangler deploy
 openssl rand -hex 32 | npx wrangler secret put AUTOFILL_TOKEN
 ```
 
-Paid, same Worker name, paid vars, 500 ms CPU ceiling:
+Paid, same Worker name, paid vars, 500 ms CPU ceiling. An existing
+deploy switching to paid runs only this:
 
 ```bash
 npx wrangler deploy --env paid
-openssl rand -hex 32 | npx wrangler secret put AUTOFILL_TOKEN
 ```
+
+Skip the `AUTOFILL_TOKEN` secret step. It is the same Worker, so the existing
+secret carries over. Running
+`openssl rand -hex 32 | npx wrangler secret put AUTOFILL_TOKEN` would rotate
+the token and lock out connected clients. That secret step is for first-time
+setup only.
+
+A plain `wrangler deploy` rolls back to free.
 
 `[env.paid]` sets `name` to the top-level Worker name, so `--env paid` updates
 that Worker instead of creating a second one. The two commands are
