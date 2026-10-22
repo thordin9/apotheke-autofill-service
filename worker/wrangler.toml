@@ -52,3 +52,39 @@ new_sqlite_classes = ["Budget"]
 name = "RATE_LIMITER"
 namespace_id = "1001"
 simple = { limit = 10, period = 60 }
+[env.paid]
+# Opt-in paid tier for this same Worker name. `wrangler deploy` stays free.
+# `wrangler deploy --env paid` publishes these vars. Wrangler does not inherit
+# vars or bindings (ai, durable_objects, ratelimits) into an environment, so
+# they are repeated. Routes and migrations do inherit; they are repeated so
+# the custom domain and the Budget migration do not depend on that.
+name = "apotheke-autofill"
+
+[env.paid.vars]
+AUTOFILL_DAILY_NEURON_BUDGET = "30000"
+AUTOFILL_DAILY_REQUEST_CAP = ""
+MAX_UPLOAD_BYTES = "2097152"
+TIER = "paid"
+
+[env.paid.ai]
+binding = "AI"
+
+[[env.paid.durable_objects.bindings]]
+name = "BUDGET"
+class_name = "Budget"
+
+[[env.paid.migrations]]
+tag = "v1"
+new_sqlite_classes = ["Budget"]
+
+[[env.paid.routes]]
+pattern = "apotheke-autofill-service.webapp.gr"
+custom_domain = true
+
+[[env.paid.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
+[env.paid.limits]
+cpu_ms = 500

@@ -101,6 +101,9 @@ jobs:
       - name: Package dry run
         run: npx wrangler deploy --dry-run
 
+      - name: Package paid env dry run
+        run: npx wrangler deploy --dry-run --env paid
+
       - name: Local runtime info check
         timeout-minutes: 3
         run: bash scripts/local-info-check.sh

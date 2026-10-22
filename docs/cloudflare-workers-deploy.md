@@ -4,9 +4,11 @@ The Cloudflare Worker in [`worker/`](../worker) is the deployment to point
 Apotheke at. Docker and the Jetson stack are legacy self-hosting; they stay
 in the repo and keep the same HTTP contract, with a larger upload limit.
 
-The Worker is Workers Free plus the Workers AI free allocation. It does not
-use KV. The daily cap lives in one SQLite-backed Durable Object. Nothing here
-is a paid feature. `workers_dev` and preview URLs are off. The public name is
+The default deploy is Workers Free plus the Workers AI free allocation. It
+does not use KV. The daily cap lives in one SQLite-backed Durable Object.
+`wrangler deploy` stays on that free tier. `wrangler deploy --env paid` is an
+opt-in paid tier for the same Worker name. `workers_dev` and preview URLs are
+off. The public name is
 the custom domain `apotheke-autofill-service.webapp.gr`. A fork uses its own
 `<your-domain>` in `worker/wrangler.toml`.
 
@@ -64,9 +66,10 @@ to test exhaustion without spending the free allocation:
 
 | Var | Default | Meaning |
 |---|---|---|
-| `AUTOFILL_DAILY_NEURON_BUDGET` | `6000` | Hard daily cap. Over it, `POST /v1/suggest` is `503` with `Retry-After` until 00:00 UTC |
-| `AUTOFILL_DAILY_REQUEST_CAP` | empty | Optional count of admitted suggest calls per UTC day. Empty or `0` means no request cap |
-| `MAX_UPLOAD_BYTES` | `1048576` | Whole request body, 1 MiB. The enforced image-part cap is this minus 64 KiB (983040). `/v1/info` advertises `min(524288, this minus 64 KiB)`, so 524288 at this default. That advertised number is not the 413 threshold |
+| `AUTOFILL_DAILY_NEURON_BUDGET` | `6000` free, `30000` paid | Hard daily cap. Over it, `POST /v1/suggest` is `503` with `Retry-After` until 00:00 UTC. The error shape is the same on both tiers |
+| `AUTOFILL_DAILY_REQUEST_CAP` | empty | Optional count of admitted suggest calls per UTC day. Empty or `0` means no request cap. Copied unchanged into `[env.paid]` |
+| `MAX_UPLOAD_BYTES` | `1048576` free, `2097152` paid | Whole request body. The enforced image-part cap is this minus 64 KiB (983040 free, 2031616 paid). `/v1/info` `max_image_bytes` is the client resize target: 524288 free, 1048576 paid. That advertised number is not the 413 threshold |
+| `TIER` | unset free, `paid` on `[env.paid]` | Only the exact string `paid` selects the paid resize target and `tier: "paid"`. Unset, empty, `Paid`, ` paid`, `premium`, and any other value stay free |
 
 There is no KV namespace to create. Deploy creates the SQLite Durable Object
 class `Budget` from the `migrations` block (`new_sqlite_classes`). One
@@ -106,12 +109,41 @@ logged.
 
 ## Deploy
 
-The first deploy is by hand, from `worker/`, after `npm ci`:
+The first deploy is by hand, from `worker/`, after `npm ci`.
+
+Free, today's limits:
 
 ```bash
 npx wrangler deploy
 openssl rand -hex 32 | npx wrangler secret put AUTOFILL_TOKEN
 ```
+
+Paid, same Worker name, paid vars, 500 ms CPU ceiling. An existing
+deploy switching to paid runs only this:
+
+```bash
+npx wrangler deploy --env paid
+```
+
+Skip the `AUTOFILL_TOKEN` secret step. It is the same Worker, so the existing
+secret carries over. Running
+`openssl rand -hex 32 | npx wrangler secret put AUTOFILL_TOKEN` would rotate
+the token and lock out connected clients. That secret step is for first-time
+setup only.
+
+A plain `wrangler deploy` rolls back to free.
+
+`[env.paid]` sets `name` to the top-level Worker name, so `--env paid` updates
+that Worker instead of creating a second one. The two commands are
+alternatives. Deploying one replaces the vars of the other. The bearer secret
+stays, because it is stored on the script name. The Durable Object counter
+stays too. The limit compared on each request is the budget var of the
+version you just deployed. The GitHub Action keeps running plain
+`npx wrangler deploy` (free). It does not pass `--env paid`. Wrangler
+prints a warning when a config has environments and the command omits
+`--env`. The top-level environment is still what that command publishes.
+`--env=""` selects it explicitly and silences the warning. The deploy Action
+stays exactly `npx wrangler deploy`.
 
 `wrangler deploy` creates the custom hostname. The certificate can take a
 few minutes. `GET /healthz` stays failing until the certificate is ready and
@@ -147,8 +179,8 @@ npx wrangler rollback
 `wrangler rollback` keeps the secrets. List versions with
 `npx wrangler deployments list` first if you need a specific one.
 
-The CI workflow stays a dry run (`npx wrangler deploy --dry-run`, no token).
-It does not deploy.
+The CI workflow stays a dry run (`npx wrangler deploy --dry-run` and
+`npx wrangler deploy --dry-run --env paid`, no token). It does not deploy.
 
 A fork sets its own `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in its
 own `production` environment, and sets `routes` in `wrangler.toml` to
@@ -165,7 +197,8 @@ own `production` environment, and sets `routes` in `wrangler.toml` to
    advertised value is 524288 (`min(524288, MAX_UPLOAD_BYTES − 64 KiB)`). A
    lower `MAX_UPLOAD_BYTES` below 589824 lowers the advertisement to the
    enforced image cap. The Worker still accepts a larger body, up to 1048576,
-   when the image part is at most 983040. To change the 524288 constant, edit
+   when the image part is at most 983040. On the paid tier the advertised
+   value is 1048576 and the enforced image cap is 2031616. To change the 524288 constant, edit
    `ADVERTISED_MAX_IMAGE_BYTES` in `worker/src/multipart.ts` and the deliberate
    pin in `worker/test/budget.test.ts`. The local runtime check reads the
    constant, and Deploy Worker runs that check before `wrangler deploy`.
@@ -199,7 +232,9 @@ getting `401`. Update Apotheke in the same step.
     "neurons": {"limit": 6000, "used": 0, "reserved": 0, "remaining": 6000},
     "requests": {"limit": null, "used": 0, "remaining": null},
     "resets_at": "2026-10-20T00:00:00.000Z"
-  }
+  },
+  "enforced_image_bytes": 983040,
+  "tier": "free"
 }
 ```
 
@@ -232,6 +267,71 @@ input tokens and 27273 per million output tokens. With neither, it charges
 30. A repair is a second call and counts. Actual usage can settle a little
 above the reservation; concurrent admissions cannot, because they take the
 reservation on one Durable Object.
+
+Paid `/v1/info` uses the same fields. `max_image_bytes` is 1048576,
+`enforced_image_bytes` is 2031616, `tier` is `paid`, and `budget.neurons.limit`
+is 30000.
+
+## Paid tier
+
+`[env.paid]` in `worker/wrangler.toml` is the whole paid config. Top-level
+config is the free Worker and is not edited for this tier.
+
+Wrangler does not inherit vars or bindings into an environment. That is
+`vars`, `ai`, `durable_objects`, and `ratelimits` in this project (Wrangler
+4.151.2 treats them as non-inheritable). `[env.paid]` repeats each of them.
+`routes` and `migrations` do inherit. They are repeated anyway so the custom
+domain and the `Budget` migration are in the paid block, and so Wrangler does
+not warn that a paid deploy would take the inherited custom domain. `main`,
+`compatibility_date`, `compatibility_flags`, `workers_dev`, `preview_urls`,
+and `observability` inherit and are not repeated. `limits.cpu_ms` is set only
+under `[env.paid]` (500). The free deploy has no CPU limit in the file, so it
+keeps the Workers Free 10 ms CPU limit.
+
+`limits.cpu_ms` is enforced on the Workers Paid (Standard) plan. A Free plan
+account cannot raise the CPU limit to 500 ms. The paid command is the one to
+run there. Do not put account ids, tokens, or a real hostname into the paid
+block beyond the route already in the top-level file.
+
+### Cost
+
+Both tiers call `@cf/google/gemma-4-26b-a4b-it` with thinking off. Published
+rates are $0.10 per million input tokens (9091 Neurons) and $0.30 per million
+output tokens (27273 Neurons), so one Neuron is about $0.000011. The measured
+cost is about 6.4 Neurons per photo, about $0.000070 per request. The free
+daily cap of 6000 Neurons is about 930 requests and about $0.066 if the cap
+is spent at that rate. The paid cap of 30000 is about 4680 requests and about
+$0.33. 30000 is above the account's 10,000 Neuron free allocation, so a paid
+deploy is expected to bill Workers AI past that allocation. The Workers Paid
+plan is a separate $5 per month subscription. Hitting the cap returns `503`
+`{"error":{"code":"backend_unavailable","message":"daily capacity is exhausted"}}`
+with `Retry-After` until 00:00 UTC on both tiers.
+
+### Memory
+
+A Worker isolate has 128 MB of memory on Free and Paid. The paid body cap is
+2097152 bytes and the body is read once. The image part is a view of that
+buffer, not a copy, and the Worker does not decode or re-encode it. Base64 of
+the paid image cap (2031616 bytes) is 2708824 characters. With the data-URL
+wrapper and one serialization inside the AI binding, one request is on the
+order of 10 MB, or about 18 MB if those strings are stored as UTF-16. That is
+under the 128 MB isolate limit. The cap stays at 2 MiB so a short burst of
+near-cap uploads still fits in the isolate. A decoded bitmap is not allocated.
+
+`@cf/google/gemma-4-26b-a4b-it` has a 256,000 token context window and accepts
+vision input at variable resolution. The model page does not publish a smaller
+image-byte cap. `max_completion_tokens` stays 512. The 2 MiB cap is the Worker
+memory and CPU bound. Workers AI code 3006 is still `413` naming the image cap.
+
+### cpuTime
+
+`POST /v1/suggest` does not read `TIER` and does not add image work. Typical
+suggest cpuTime stays where the last live check put small photos, about 10 ms
+(9–17 ms at 30–95 KB). `GET /v1/info` does one exact string compare. The paid
+`limits.cpu_ms` of 500 is a ceiling, not a target. The same base64 path on a
+near-2 MiB upload can exceed 10 ms. A 2.9 MiB photo previously measured 126 ms
+cpuTime, which is why free stays at 1 MiB. 500 ms is headroom under the paid
+plan's default 30 s. This change was not measured again in Workers Logs.
 
 ## Free-tier limits
 
@@ -309,7 +409,7 @@ log still keeps the connecting IP. Do not copy a real address into the repo.
 | `GET /healthz` is `503` `{"status":"degraded"}` | `AUTOFILL_TOKEN` is missing or empty. `npx wrangler secret put AUTOFILL_TOKEN` |
 | `401` | Wrong or missing `Authorization: Bearer` token |
 | `404` | Unknown path. This is 404 even when `AUTOFILL_TOKEN` is missing. `/healthz`, `/v1/info`, and `/v1/suggest` are the only routes |
-| `413` | Body larger than `MAX_UPLOAD_BYTES` (the message names that cap). A numeric `Content-Length` over the cap is rejected before the body is read. A numeric `Content-Length` within the cap is still checked after the body is buffered. A chunked body with no `Content-Length` is aborted as it is read. On a Request built in code, a length that does not match the bytes is `400` `invalid Content-Length`. Over the network a short body waits for the client and then gets `400` `expected multipart/form-data`, and bytes past the declared length are not part of the body. A malformed `Content-Length` is a plain-text 400 from workerd before the Worker runs; if it reaches the Worker, the JSON 400 is `invalid Content-Length`. An image part over the enforced image cap (body cap minus 64 KiB, 983040 at the default), or Workers AI code 3006, names that image cap. Advertised `max_image_bytes` (524288) is not this cap |
+| `413` | Body larger than `MAX_UPLOAD_BYTES` (the message names that cap; 1048576 free, 2097152 paid). A numeric `Content-Length` over the cap is rejected before the body is read. A numeric `Content-Length` within the cap is still checked after the body is buffered. A chunked body with no `Content-Length` is aborted as it is read. On a Request built in code, a length that does not match the bytes is `400` `invalid Content-Length`. Over the network a short body waits for the client and then gets `400` `expected multipart/form-data`, and bytes past the declared length are not part of the body. A malformed `Content-Length` is a plain-text 400 from workerd before the Worker runs; if it reaches the Worker, the JSON 400 is `invalid Content-Length`. An image part over the enforced image cap (body cap minus 64 KiB: 983040 free, 2031616 paid), or Workers AI code 3006, names that image cap. Advertised `max_image_bytes` (524288 free, 1048576 paid) is not this cap |
 | `415` | Bytes are not JPEG, PNG, or WebP. Checked from the first bytes of the image part |
 | `429` `Retry-After: 60` | Per-location rate limit. Wait. The daily cap is separate |
 | `503` `daily capacity is exhausted` plus `Retry-After` until 00:00 UTC | Neuron budget, request cap, or Workers AI 3036. 3036 marks the day exhausted. `GET /v1/info` shows `remaining` |

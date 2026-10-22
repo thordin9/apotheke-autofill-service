@@ -79,6 +79,16 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Added
 
+- **Opt-in Worker paid tier.** `wrangler deploy` stays free: body cap 1048576,
+  enforced image cap 983040, `max_image_bytes` 524288, daily Neuron budget
+  6000. `wrangler deploy --env paid` sets `TIER=paid`, body cap 2097152,
+  enforced image cap 2031616, `max_image_bytes` 1048576, daily Neuron budget
+  30000, and `limits.cpu_ms` 500. Any other `TIER` value stays free. `GET
+  /v1/info` appends `enforced_image_bytes` and `tier`. The model stays
+  `@cf/google/gemma-4-26b-a4b-it` with thinking off. Suggest does not branch
+  on the tier and does not re-encode the upload. About 6.4 Neurons
+  ($0.000070) per request. 6000 Neurons is about 930 requests a day; 30000 is
+  about 4680.
 - `docs/qa/feature11-worker-live-qa.md`, the live QA report, byte for byte.
 - `docs/qa/pr26-worker-followup-stub-qa.md`, the follow-up stub QA report, byte for byte.
 - `docs/qa/pr26-worker-followup-recheck-qa.md`, the follow-up recheck, byte for byte.

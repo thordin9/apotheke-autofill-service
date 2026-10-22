@@ -1,5 +1,6 @@
 import { HttpError } from "./http";
 import { sniffMime } from "./images";
+import type { ServiceTier } from "./tier";
 
 /** Room for multipart headers between the body cap and the image. */
 export const MULTIPART_HEADROOM = 65536;
@@ -9,9 +10,30 @@ export const MULTIPART_HEADROOM = 65536;
  * Change this number (786432 if 524288 sends real photos back too_large) and the
  * deliberate pin in test/budget.test.ts. scripts/local-info-check.sh reads it from here,
  * so keep it a plain integer literal, at most 983040 (the enforced image cap at 1 MiB).
- * GET /v1/info reports min(this, maxImageBytes(MAX_UPLOAD_BYTES)).
+ * GET /v1/info reports min(advertisedImageBytes(tier), maxImageBytes(MAX_UPLOAD_BYTES)).
+ * Free uses this constant. Paid uses PAID_ADVERTISED_MAX_IMAGE_BYTES.
  */
 export const ADVERTISED_MAX_IMAGE_BYTES = 524288;
+
+/**
+ * Client resize target when TIER is exactly "paid". Below the paid image cap
+ * (2 MiB body minus 64 KiB). The free constant above stays the one
+ * local-info-check.sh reads.
+ */
+export const PAID_ADVERTISED_MAX_IMAGE_BYTES = 1048576;
+
+export function advertisedImageBytes(tier: ServiceTier): number {
+  switch (tier) {
+    case "free":
+      return ADVERTISED_MAX_IMAGE_BYTES;
+    case "paid":
+      return PAID_ADVERTISED_MAX_IMAGE_BYTES;
+    default: {
+      const unreachable: never = tier;
+      return unreachable;
+    }
+  }
+}
 
 export function maxImageBytes(bodyCap: number): number {
   return Math.max(0, bodyCap - MULTIPART_HEADROOM);
