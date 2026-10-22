@@ -80,7 +80,7 @@ describe("upload limits and input errors", () => {
     );
     expect(response.status).toBe(413);
     expect(await bodyOf(response)).toEqual({
-      error: { code: "payload_too_large", message: "image exceeds 1048576 bytes" },
+      error: { code: "payload_too_large", message: "request body exceeds 1048576 bytes" },
     });
     expect(calls).toHaveLength(0);
   });
@@ -97,7 +97,7 @@ describe("upload limits and input errors", () => {
     const response = await call(request, { AI: ai, MAX_UPLOAD_BYTES: "40" });
     expect(response.status).toBe(413);
     const body = await bodyOf(response);
-    expect(body).toEqual({ error: { code: "payload_too_large", message: "image exceeds 40 bytes" } });
+    expect(body).toEqual({ error: { code: "payload_too_large", message: "request body exceeds 40 bytes" } });
     expect(calls).toBe(0);
   });
 
@@ -133,7 +133,7 @@ describe("upload limits and input errors", () => {
     expect(response.status).toBe(413);
     expect((await bodyOf(response)).error).toEqual({
       code: "payload_too_large",
-      message: "image exceeds 128 bytes",
+      message: "request body exceeds 128 bytes",
     });
     expect(calls).toHaveLength(0);
     expect(buffered).toBe(0);
@@ -304,7 +304,7 @@ describe("upload limits and input errors", () => {
     );
     expect(response.status).toBe(413);
     expect(await bodyOf(response)).toEqual({
-      error: { code: "payload_too_large", message: `image exceeds ${cap} bytes` },
+      error: { code: "payload_too_large", message: `request body exceeds ${cap} bytes` },
     });
     expect(tracked.reads()).toBe(before);
     expect(buffered).toBe(0);
@@ -421,7 +421,7 @@ describe("upload limits and input errors", () => {
     );
     expect(response.status).toBe(413);
     expect(await bodyOf(response)).toEqual({
-      error: { code: "payload_too_large", message: "image exceeds 100 bytes" },
+      error: { code: "payload_too_large", message: "request body exceeds 100 bytes" },
     });
     expect(calls).toHaveLength(0);
   });
