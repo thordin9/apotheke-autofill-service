@@ -1,8 +1,7 @@
 # Deploys the Worker from main only. CI (.github/workflows/ci.yml) stays a dry run.
-# Secrets live in the GitHub environment "production" (main branch only):
-# CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID on Deploy, and AUTOFILL_TOKEN
-# on Smoke only. Smoke sends that token as a header and never prints it.
-# This file does not write Worker secrets.
+# Secrets in the production environment are CLOUDFLARE_API_TOKEN and
+# CLOUDFLARE_ACCOUNT_ID only. This file never reads AUTOFILL_TOKEN and does
+# not write Worker secrets.
 name: Deploy Worker
 
 on:
@@ -74,6 +73,8 @@ jobs:
         # Empty WORKER_DEPLOY_ENV is the free command. A set value is an env name.
         run: |
           set -euo pipefail
+          log=$(mktemp)
+          trap 'rm -f "$log"' EXIT
           if [ -n "${WORKER_DEPLOY_ENV:-}" ]; then
             if [[ ! "${WORKER_DEPLOY_ENV}" =~ ^[a-z0-9_-]+$ ]]; then
               cat >&2 <<'EOF'
@@ -81,17 +82,30 @@ jobs:
           EOF
               exit 1
             fi
-            npx wrangler deploy --env "$WORKER_DEPLOY_ENV"
+            npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"
           else
-            npx wrangler deploy
+            npx wrangler deploy | tee "$log"
+          fi
+          if [ "${WORKER_DEPLOY_ENV:-}" = "paid" ]; then
+            if ! grep -E 'TIER.*"paid"' "$log"; then
+              cat >&2 <<'EOF'
+          deploy output is missing a TIER binding of "paid"
+          EOF
+              exit 1
+            fi
+          elif [ -z "${WORKER_DEPLOY_ENV:-}" ]; then
+            if grep -E 'TIER.*"paid"' "$log"; then
+              cat >&2 <<'EOF'
+          free deploy output shows a TIER binding of "paid"
+          EOF
+              exit 1
+            fi
           fi
 
       - name: Smoke
         working-directory: ${{ github.workspace }}
         env:
           WORKER_URL: ${{ vars.WORKER_URL }}
-          WORKER_DEPLOY_ENV: ${{ vars.WORKER_DEPLOY_ENV }}
-          AUTOFILL_TOKEN: ${{ secrets.AUTOFILL_TOKEN }}
         run: |
           set -euo pipefail
           base="${WORKER_URL:-https://apotheke-autofill-service.webapp.gr}"
@@ -109,36 +123,6 @@ jobs:
             echo "healthz did not return 200 (last HTTP code: ${code})" >&2
             exit 1
           fi
-          if [ "${WORKER_DEPLOY_ENV:-}" = "paid" ]; then
-            expected_tier=paid
-          elif [ -z "${WORKER_DEPLOY_ENV:-}" ]; then
-            expected_tier=free
-          else
-            expected_tier=
-          fi
-          info_ok=0
-          code=""
-          for _ in 1 2 3 4 5 6; do
-            code=$(curl -sS -o /tmp/autofill-info.json -w '%{http_code}' --max-time 20 \
-              -H "Authorization: Bearer ${AUTOFILL_TOKEN}" \
-              "$base/v1/info" || true)
-            if [ "$code" = "200" ]; then
-              tier=$(python3 -c 'import json; print(json.load(open("/tmp/autofill-info.json")).get("tier", ""))')
-              if [ -n "$expected_tier" ] && [ "$tier" = "$expected_tier" ]; then
-                info_ok=1
-                break
-              fi
-              if [ -z "$expected_tier" ] && [ -n "$tier" ]; then
-                info_ok=1
-                break
-              fi
-            fi
-            sleep 10
-          done
-          if [ "$info_ok" != "1" ]; then
-            echo "v1/info tier check failed (last HTTP code: ${code})" >&2
-            exit 1
-          fi
           suggest_ok=0
           code=""
           for _ in 1 2 3 4 5 6; do
@@ -153,4 +137,4 @@ jobs:
             echo "suggest without a token did not return 401 (last HTTP code: ${code})" >&2
             exit 1
           fi
-          rm -f /tmp/autofill-healthz.json /tmp/autofill-info.json /tmp/autofill-suggest.json
+          rm -f /tmp/autofill-healthz.json /tmp/autofill-suggest.json

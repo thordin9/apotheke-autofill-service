@@ -74,10 +74,9 @@ def test_deploy_workflow_is_main_only_and_pinned():
     assert "echo" not in deploy["run"]
     assert "printf" not in deploy["run"]
     smoke = next(step for step in job["steps"] if step.get("name") == "Smoke")
-    assert smoke["env"]["WORKER_URL"] == "${{ vars.WORKER_URL }}"
-    assert smoke["env"]["WORKER_DEPLOY_ENV"] == "${{ vars.WORKER_DEPLOY_ENV }}"
-    assert smoke["env"]["AUTOFILL_TOKEN"] == "${{ secrets.AUTOFILL_TOKEN }}"
+    assert smoke["env"] == {"WORKER_URL": "${{ vars.WORKER_URL }}"}
     assert "${{" not in smoke["run"]
+    assert "Authorization" not in smoke["run"]
     assert f"${{WORKER_URL:-https://{DOMAIN}}}" in smoke["run"]
     assert "$base/healthz" in smoke["run"]
     assert "/v1/suggest" in smoke["run"]
@@ -110,7 +109,7 @@ def test_deploy_workflow_installs_with_ci_and_checks_wrangler():
     workflow = yaml.safe_load(text)
     job = workflow["jobs"]["deploy"]
     assert "secrets" not in job
-    assert text.count("secrets.AUTOFILL_TOKEN") == 1
+    assert "secrets.AUTOFILL_TOKEN" not in text
     assert "printf" not in text
     assert "npm install" not in text
     install = next(step for step in job["steps"] if step.get("name") == "Install")
@@ -129,6 +128,10 @@ def test_deploy_workflow_installs_with_ci_and_checks_wrangler():
         if line.strip().startswith("npx wrangler deploy")
     ]
     assert commands == [
+        'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"',
+        'npx wrangler deploy | tee "$log"',
+    ]
+    assert [part.split("|", 1)[0].strip() for part in commands] == [
         'npx wrangler deploy --env "$WORKER_DEPLOY_ENV"',
         "npx wrangler deploy",
     ]
@@ -163,7 +166,41 @@ def test_local_info_check_reads_the_constant():
     assert "wrangler.toml" in script
 
 
-def test_worker_deploy_env_is_a_simple_name_and_smoke_checks_tier():
+def test_deploy_checks_the_tier_binding_without_a_token():
+    text = WORKFLOW.read_text()
+    job = yaml.safe_load(text)["jobs"]["deploy"]
+    deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
+    run = deploy["run"]
+    assert "log=$(mktemp)" in run
+    assert 'tee "$log"' in run
+    assert "set -euo pipefail" in run
+    pattern = 'grep -E \'TIER.*"paid"\' "$log"'
+    assert run.count(pattern) == 2
+    paid = run.split('[ "${WORKER_DEPLOY_ENV:-}" = "paid" ]', 1)[1].split("elif", 1)[0]
+    assert f"if ! {pattern}" in paid
+    free = run.split('[ -z "${WORKER_DEPLOY_ENV:-}" ]', 1)[1]
+    assert f"if {pattern}" in free
+    assert f"if ! {pattern}" not in free
+    assert "AUTOFILL_TOKEN" not in run
+    assert "Authorization" not in run
+    assert "echo" not in run
+    assert "||" not in run
+
+
+def test_deploy_workflow_never_reads_autofill_token():
+    text = WORKFLOW.read_text()
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    assert "AUTOFILL_TOKEN" not in code
+    assert "AUTOFILL_TOKEN" in text
+    job = yaml.safe_load(text)["jobs"]["deploy"]
+    smoke = next(step for step in job["steps"] if step.get("name") == "Smoke")
+    assert "Authorization" not in smoke["run"]
+    assert "/v1/info" not in smoke["run"]
+    assert "autofill-info.json" not in smoke["run"]
+    assert "WORKER_DEPLOY_ENV" not in smoke.get("env", {})
+
+
+def test_worker_deploy_env_is_a_simple_name():
     text = WORKFLOW.read_text()
     workflow = yaml.safe_load(text)
     job = workflow["jobs"]["deploy"]
@@ -184,19 +221,8 @@ def test_worker_deploy_env_is_a_simple_name_and_smoke_checks_tier():
     assert deploy["run"].index("if [ -n ") < deploy["run"].index("npx wrangler deploy --env")
     assert deploy["run"].index("npx wrangler deploy --env") < deploy["run"].index("else")
     free = [line.strip() for line in deploy["run"].split("else", 1)[1].splitlines()]
-    assert "npx wrangler deploy" in free
-    assert free[free.index("npx wrangler deploy")] == "npx wrangler deploy"
-    assert '[ "${WORKER_DEPLOY_ENV:-}" = "paid" ]' in smoke["run"]
-    assert "expected_tier=paid" in smoke["run"]
-    assert "expected_tier=free" in smoke["run"]
-    assert "Authorization: Bearer ${AUTOFILL_TOKEN}" in smoke["run"]
-    assert 'echo "$AUTOFILL_TOKEN"' not in smoke["run"]
-    assert "echo ${AUTOFILL_TOKEN}" not in smoke["run"]
-    assert '.get("tier"' in smoke["run"]
-    assert '[ "$tier" = "$expected_tier" ]' in smoke["run"]
-    assert smoke["run"].index("/v1/info") < smoke["run"].index("/v1/suggest")
-    suggest = smoke["run"].split("/v1/suggest", 1)[1]
-    assert "200" not in suggest
+    assert 'npx wrangler deploy | tee "$log"' in free
+    assert "Authorization" not in smoke["run"]
 
 
 def test_deploy_checkout_drops_credentials_and_no_legacy_peer_deps():

@@ -39,8 +39,10 @@ Wrangler does not inherit vars or bindings into an environment. The Deploy
 workflow deploys plain free unless the repo variable `WORKER_DEPLOY_ENV=paid`
 is set; without it, any `worker/**` merge puts a paid Worker back on free.
 Set it under Settings → Secrets and variables → Actions → Variables, or
-`gh variable set WORKER_DEPLOY_ENV --body paid`. Details are in the deploy
-doc.
+`gh variable set WORKER_DEPLOY_ENV --body paid`. After a Worker deploy,
+confirm the tier by calling `GET /v1/info` with the bearer token outside CI
+(the QA live check). `AUTOFILL_TOKEN` is never stored in GitHub. Details are
+in the deploy doc.
 
 Docker and the Jetson stack below are **legacy self-hosting**. They keep the
 Python service, including its 10 MiB upload limit. Hardware CI on the Jetson

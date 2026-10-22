@@ -143,7 +143,12 @@ the repo variable `WORKER_DEPLOY_ENV=paid` is set; without it, any
 `worker/**` merge puts a paid Worker back on free. Set that variable under
 Settings → Secrets and variables → Actions → Variables, or from a checkout
 with `gh variable set WORKER_DEPLOY_ENV --body paid`. An empty or unset
-variable runs exactly `npx wrangler deploy`. Any other value must match
+variable runs `npx wrangler deploy`. The step copies that command's output
+with `tee` and then checks it. When `WORKER_DEPLOY_ENV` is `paid`, the step
+fails unless the output matches `TIER` followed by `"paid"` (`grep -E`;
+Wrangler prints `env.TIER ("paid")`). When the variable is empty, the step
+fails if that binding is present. The check does not print a secret. Any
+other value must match
 `^[a-z0-9_-]+$` or the step fails before Wrangler runs, and the value is
 not printed. Wrangler prints a warning when a config has environments and
 the free command omits `--env`. The top-level environment is still what
@@ -168,11 +173,10 @@ secrets stay on the deploy step only. That step has only `name`, `env` and
 that changes.
 
 The smoke check then calls `https://apotheke-autofill-service.webapp.gr/healthz`
-(200), `GET /v1/info` (tier `paid` when `WORKER_DEPLOY_ENV` is `paid`, and
-`free` when that variable is empty), and `POST /v1/suggest` with no token
-(401 only; 200 is not success). `/v1/info` needs the bearer, so Smoke reads
-the production environment secret `AUTOFILL_TOKEN` into its own environment
-and sends it as a header. It does not print the token or the response body.
+(200) and `POST /v1/suggest` with no token (401 only; 200 is not success).
+It does not call `GET /v1/info`. After a Worker deploy, confirm the tier by
+calling `GET /v1/info` with the bearer token outside CI (the QA live check).
+`AUTOFILL_TOKEN` is never stored in GitHub.
 The URL is `vars.WORKER_URL` when that GitHub variable is set, and this
 hostname otherwise. A failed check prints the last HTTP status code and not
 the body. It retries while the certificate is issued. It does not send a
