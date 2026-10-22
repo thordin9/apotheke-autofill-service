@@ -143,11 +143,17 @@ the repo variable `WORKER_DEPLOY_ENV=paid` is set; without it, any
 `worker/**` merge puts a paid Worker back on free. Set that variable under
 Settings → Secrets and variables → Actions → Variables, or from a checkout
 with `gh variable set WORKER_DEPLOY_ENV --body paid`. An empty or unset
-variable runs `npx wrangler deploy`. The step copies that command's output
-with `tee` and then checks it. When `WORKER_DEPLOY_ENV` is `paid`, the step
-fails unless the output matches `TIER` followed by `"paid"` (`grep -E`;
-Wrangler prints `env.TIER ("paid")`). When the variable is empty, the step
-fails if that binding is present. The check does not print a secret. Any
+variable runs `npx wrangler deploy`. Before the upload, the step runs the
+same command with `--dry-run` (`npx wrangler deploy --dry-run`, plus
+`--env` when the variable is set), copies that output with `tee`, and
+checks it. When `WORKER_DEPLOY_ENV` is `paid`, the step fails unless the
+output matches `TIER` followed by `"paid"` (`grep -E`; Wrangler prints
+`env.TIER ("paid")`). When the variable is empty, the step fails if that
+binding is present. A mismatch stops the job before any upload. The same
+check runs again on the real deploy output. If the post-upload TIER check
+goes red, that version is already live; roll back with
+`npx wrangler rollback` and redeploy with the right env. The check does not
+print a secret. Any
 other value must match
 `^[a-z0-9_-]+$` or the step fails before Wrangler runs, and the value is
 not printed. Wrangler prints a warning when a config has environments and

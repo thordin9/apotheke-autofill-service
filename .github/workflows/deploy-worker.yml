@@ -73,8 +73,9 @@ jobs:
         # Empty WORKER_DEPLOY_ENV is the free command. A set value is an env name.
         run: |
           set -euo pipefail
+          dry=$(mktemp)
           log=$(mktemp)
-          trap 'rm -f "$log"' EXIT
+          trap 'rm -f "$dry" "$log"' EXIT
           if [ -n "${WORKER_DEPLOY_ENV:-}" ]; then
             if [[ ! "${WORKER_DEPLOY_ENV}" =~ ^[a-z0-9_-]+$ ]]; then
               cat >&2 <<'EOF'
@@ -82,6 +83,26 @@ jobs:
           EOF
               exit 1
             fi
+            npx wrangler deploy --dry-run --env "$WORKER_DEPLOY_ENV" | tee "$dry"
+          else
+            npx wrangler deploy --dry-run | tee "$dry"
+          fi
+          if [ "${WORKER_DEPLOY_ENV:-}" = "paid" ]; then
+            if ! grep -E 'TIER.*"paid"' "$dry"; then
+              cat >&2 <<'EOF'
+          deploy output is missing a TIER binding of "paid"
+          EOF
+              exit 1
+            fi
+          elif [ -z "${WORKER_DEPLOY_ENV:-}" ]; then
+            if grep -E 'TIER.*"paid"' "$dry"; then
+              cat >&2 <<'EOF'
+          free deploy output shows a TIER binding of "paid"
+          EOF
+              exit 1
+            fi
+          fi
+          if [ -n "${WORKER_DEPLOY_ENV:-}" ]; then
             npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"
           else
             npx wrangler deploy | tee "$log"

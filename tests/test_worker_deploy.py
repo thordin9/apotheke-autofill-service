@@ -15,6 +15,15 @@ DOMAIN = "apotheke-autofill-service.webapp.gr"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _until_fi(text: str) -> str:
+    kept = []
+    for line in text.splitlines():
+        if line.strip() == "fi":
+            break
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _walk(value: object):
     if isinstance(value, dict):
         for key, item in value.items():
@@ -128,13 +137,19 @@ def test_deploy_workflow_installs_with_ci_and_checks_wrangler():
         if line.strip().startswith("npx wrangler deploy")
     ]
     assert commands == [
+        'npx wrangler deploy --dry-run --env "$WORKER_DEPLOY_ENV" | tee "$dry"',
+        'npx wrangler deploy --dry-run | tee "$dry"',
         'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"',
         'npx wrangler deploy | tee "$log"',
     ]
     assert [part.split("|", 1)[0].strip() for part in commands] == [
+        'npx wrangler deploy --dry-run --env "$WORKER_DEPLOY_ENV"',
+        "npx wrangler deploy --dry-run",
         'npx wrangler deploy --env "$WORKER_DEPLOY_ENV"',
         "npx wrangler deploy",
     ]
+    upload = 'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"'
+    assert deploy["run"].index('tee "$dry"') < deploy["run"].index(upload)
     assert "||" not in deploy["run"]
     assert "continue-on-error" not in job
     assert set(deploy["env"]) == {
@@ -171,16 +186,29 @@ def test_deploy_checks_the_tier_binding_without_a_token():
     job = yaml.safe_load(text)["jobs"]["deploy"]
     deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
     run = deploy["run"]
+    assert "dry=$(mktemp)" in run
     assert "log=$(mktemp)" in run
+    assert 'tee "$dry"' in run
     assert 'tee "$log"' in run
     assert "set -euo pipefail" in run
-    pattern = 'grep -E \'TIER.*"paid"\' "$log"'
-    assert run.count(pattern) == 2
-    paid = run.split('[ "${WORKER_DEPLOY_ENV:-}" = "paid" ]', 1)[1].split("elif", 1)[0]
-    assert f"if ! {pattern}" in paid
-    free = run.split('[ -z "${WORKER_DEPLOY_ENV:-}" ]', 1)[1]
-    assert f"if {pattern}" in free
-    assert f"if ! {pattern}" not in free
+    dry_pattern = 'grep -E \'TIER.*"paid"\' "$dry"'
+    log_pattern = 'grep -E \'TIER.*"paid"\' "$log"'
+    assert run.count(dry_pattern) == 2
+    assert run.count(log_pattern) == 2
+    upload = 'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"'
+    assert run.index(dry_pattern) < run.index(upload)
+    assert run.index(upload) < run.index(log_pattern)
+    paid_parts = run.split('[ "${WORKER_DEPLOY_ENV:-}" = "paid" ]')[1:]
+    assert len(paid_parts) == 2
+    for paid in paid_parts:
+        body = paid.split("elif", 1)[0]
+        assert "if ! grep -E" in body
+    free_parts = run.split('[ -z "${WORKER_DEPLOY_ENV:-}" ]')[1:]
+    assert len(free_parts) == 2
+    for free in free_parts:
+        body = _until_fi(free)
+        assert "if grep -E" in body
+        assert "if ! grep -E" not in body
     assert "AUTOFILL_TOKEN" not in run
     assert "Authorization" not in run
     assert "echo" not in run
@@ -218,10 +246,17 @@ def test_worker_deploy_env_is_a_simple_name():
     assert pattern.fullmatch("paid;rm") is None
     assert "WORKER_DEPLOY_ENV must match ^[a-z0-9_-]+$" in deploy["run"]
     assert "<<'EOF'" in deploy["run"]
-    assert deploy["run"].index("if [ -n ") < deploy["run"].index("npx wrangler deploy --env")
-    assert deploy["run"].index("npx wrangler deploy --env") < deploy["run"].index("else")
-    free = [line.strip() for line in deploy["run"].split("else", 1)[1].splitlines()]
-    assert 'npx wrangler deploy | tee "$log"' in free
+    run = deploy["run"]
+    assert run.index("if [ -n ") < run.index("npx wrangler deploy")
+    assert run.index("=~ ^[a-z0-9_-]+$") < run.index("npx wrangler deploy")
+    dry_paid = 'npx wrangler deploy --dry-run --env "$WORKER_DEPLOY_ENV" | tee "$dry"'
+    upload = 'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"'
+    assert run.index(dry_paid) < run.index(upload)
+    first_else = run.split("else", 1)[1]
+    assert 'npx wrangler deploy --dry-run | tee "$dry"' in first_else
+    assert run.index('npx wrangler deploy --dry-run | tee "$dry"') < run.index(
+        'npx wrangler deploy | tee "$log"'
+    )
     assert "Authorization" not in smoke["run"]
 
 
