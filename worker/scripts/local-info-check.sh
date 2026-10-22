@@ -116,12 +116,27 @@ printf '%s' "$health" | grep -q '"status":"ok"'
 info=$(curl -sf --max-time 5 \
   -H "Authorization: Bearer ${token}" \
   "http://127.0.0.1:${port}/v1/info")
-INFO_BODY="$info" EXPECTED="$expected" node --input-type=module <<'JS'
+INFO_BODY="$info" EXPECTED="$expected" ENFORCED="$image_cap" node --input-type=module <<'JS'
 const body = JSON.parse(process.env.INFO_BODY);
 const expected = Number(process.env.EXPECTED);
+const enforced = Number(process.env.ENFORCED);
 if (body.max_image_bytes !== expected) {
   process.stderr.write(`max_image_bytes ${body.max_image_bytes}, expected ${expected}\n`);
   process.exit(1);
 }
-process.stdout.write(`local /healthz 200; /v1/info max_image_bytes ${expected}\n`);
+if (body.tier !== "free") {
+  process.stderr.write(`tier ${body.tier}, expected free\n`);
+  process.exit(1);
+}
+if (body.enforced_image_bytes !== enforced) {
+  process.stderr.write(`enforced_image_bytes ${body.enforced_image_bytes}, expected ${enforced}\n`);
+  process.exit(1);
+}
+if ("recommended_image_bytes" in body) {
+  process.stderr.write("recommended_image_bytes is set\n");
+  process.exit(1);
+}
+process.stdout.write(
+  `local /healthz 200; /v1/info max_image_bytes ${expected} tier free enforced_image_bytes ${enforced}\n`,
+);
 JS

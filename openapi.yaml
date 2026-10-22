@@ -140,11 +140,27 @@ components:
           minimum: 1
           description: |
             Python default 10485760 (MAX_IMAGE_BYTES). On the Worker this is
-            min(524288, MAX_UPLOAD_BYTES - 65536). ADVERTISED_MAX_IMAGE_BYTES
-            is 524288 in worker/src/multipart.ts. At the default body cap the
-            advertised value is 524288. The body cap MAX_UPLOAD_BYTES defaults
-            to 1048576. The enforced image-part cap is that minus 64 KiB, so
-            983040. Apotheke compares the image with the advertised value.
+            the client resize target, min(advertised, MAX_UPLOAD_BYTES - 65536).
+            ADVERTISED_MAX_IMAGE_BYTES is 524288 in worker/src/multipart.ts.
+            At the default body cap the advertised value is 524288. The body
+            cap MAX_UPLOAD_BYTES defaults to 1048576. The enforced image-part
+            cap is that minus 64 KiB, so 983040. Paid (TIER exactly paid)
+            advertises 1048576 with body cap 2097152. Apotheke compares the
+            image with the advertised value. This is not the 413 threshold.
+        enforced_image_bytes:
+          type: integer
+          minimum: 0
+          description: |
+            Worker only. Appended on GET /v1/info. The image-part cap that
+            returns 413. Free default 983040. Paid 2031616 (2097152 - 65536).
+            Exactly that size is accepted. Absent on the Python service.
+        tier:
+          type: string
+          enum: [free, paid]
+          description: |
+            Worker only. Appended on GET /v1/info after enforced_image_bytes.
+            paid only when TIER is exactly paid. Otherwise free. Absent on
+            the Python service.
         ready:
           type: boolean
           description: |
@@ -400,11 +416,12 @@ components:
     TooLarge:
       description: |
         Python: image exceeds MAX_IMAGE_BYTES (default 10 MiB). Worker: the
-        request body exceeds MAX_UPLOAD_BYTES (default 1048576), the image
-        part exceeds the enforced image cap (default 983040), or Workers AI
-        returned code 3006. GET /v1/info max_image_bytes is
-        min(524288, MAX_UPLOAD_BYTES - 65536), so 524288 at the default
-        body cap. That advertised number is not the 413 threshold.
+        request body exceeds MAX_UPLOAD_BYTES (default 1048576, paid 2097152),
+        the image part exceeds the enforced image cap (default 983040, paid
+        2031616), or Workers AI returned code 3006. GET /v1/info
+        max_image_bytes is min(524288, MAX_UPLOAD_BYTES - 65536), so 524288
+        at the default body cap, and 1048576 on the paid tier. That
+        advertised number is not the 413 threshold.
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     RateLimited:
       description: Worker only. Per-location rate limit after auth. Retry-After is 60.

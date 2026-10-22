@@ -27,6 +27,17 @@ network a short body waits for the client and then gets 400
 `expected multipart/form-data`. An image part is still rejected above 983040 (the body cap minus 64 KiB). The
 Python service stays at 10 MiB.
 
+`wrangler deploy` is the free tier (`TIER` unset). `wrangler deploy --env paid`
+is the opt-in paid tier on the same Worker name: body cap 2097152, enforced
+image cap 2031616, `max_image_bytes` 1048576, daily Neuron budget 30000, CPU
+ceiling 500 ms. Only the exact var `TIER=paid` enables it. `GET /v1/info`
+appends `enforced_image_bytes` and `tier` (`free` or `paid`). A Gemma 4
+request with thinking off is about 6.4 Neurons, about $0.000070 at the
+published rate of $0.10 per million input tokens (9091 Neurons). The free cap
+of 6000 is about 930 requests a day. The paid cap of 30000 is about 4680.
+Wrangler does not inherit vars or bindings into an environment. Details are
+in the deploy doc.
+
 Docker and the Jetson stack below are **legacy self-hosting**. They keep the
 Python service, including its 10 MiB upload limit. Hardware CI on the Jetson
 (run by hand, not a required check): [docs/hardware-ci.md](docs/hardware-ci.md).

@@ -5,7 +5,8 @@ import { Budget } from "./budget";
 import { parseContext } from "./context";
 import { errorResponse, HttpError, httpErrorResponse, json, readLimitedBody } from "./http";
 import { logRequest, type RequestTiming } from "./log";
-import { ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes, readSuggestParts } from "./multipart";
+import { advertisedImageBytes, maxImageBytes, readSuggestParts } from "./multipart";
+import { resolveTier } from "./tier";
 import {
   NEURON_ESTIMATE,
   neuronsFromUsage,
@@ -89,13 +90,15 @@ async function info(request: Request, env: Env): Promise<Response> {
     !snap.exhausted &&
     neuronRemaining >= NEURON_ESTIMATE &&
     (requestsRemaining === null || requestsRemaining > 0);
+  const tier = resolveTier(env.TIER);
+  const enforced = maxImageBytes(maxBytes);
   return json({
     name: "cloudflare-workers",
     version: "1",
     capabilities: CAPABILITIES,
     backend: "cloudflare-workers",
     backend_used: "cloudflare-workers",
-    max_image_bytes: Math.min(ADVERTISED_MAX_IMAGE_BYTES, maxImageBytes(maxBytes)),
+    max_image_bytes: Math.min(advertisedImageBytes(tier), enforced),
     ready,
     budget: {
       neurons: {
@@ -111,6 +114,8 @@ async function info(request: Request, env: Env): Promise<Response> {
       },
       resets_at: snap.resetsAt,
     },
+    enforced_image_bytes: enforced,
+    tier,
   });
 }
 
