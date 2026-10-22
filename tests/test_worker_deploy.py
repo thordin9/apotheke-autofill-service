@@ -234,8 +234,8 @@ def test_worker_deploy_env_is_a_simple_name():
     job = workflow["jobs"]["deploy"]
     deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
     smoke = next(step for step in job["steps"] if step.get("name") == "Smoke")
-    assert '[[ ! "${WORKER_DEPLOY_ENV}" =~ ^[a-z0-9_-]+$ ]]' in deploy["run"]
-    pattern = re.compile(r"^[a-z0-9_-]+$")
+    assert '[[ ! "${WORKER_DEPLOY_ENV}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]' in deploy["run"]
+    pattern = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
     assert pattern.fullmatch("paid")
     assert pattern.fullmatch("env_1-a")
     assert pattern.fullmatch("") is None
@@ -244,11 +244,13 @@ def test_worker_deploy_env_is_a_simple_name():
     assert pattern.fullmatch("paid ") is None
     assert pattern.fullmatch("../paid") is None
     assert pattern.fullmatch("paid;rm") is None
-    assert "WORKER_DEPLOY_ENV must match ^[a-z0-9_-]+$" in deploy["run"]
+    assert pattern.fullmatch("--dry-run") is None
+    assert pattern.fullmatch("-paid") is None
+    assert "WORKER_DEPLOY_ENV must match ^[a-z0-9][a-z0-9_-]*$" in deploy["run"]
     assert "<<'EOF'" in deploy["run"]
     run = deploy["run"]
     assert run.index("if [ -n ") < run.index("npx wrangler deploy")
-    assert run.index("=~ ^[a-z0-9_-]+$") < run.index("npx wrangler deploy")
+    assert run.index("=~ ^[a-z0-9][a-z0-9_-]*$") < run.index("npx wrangler deploy")
     dry_paid = 'npx wrangler deploy --dry-run --env "$WORKER_DEPLOY_ENV" | tee "$dry"'
     upload = 'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"'
     assert run.index(dry_paid) < run.index(upload)

@@ -155,7 +155,7 @@ goes red, that version is already live; roll back with
 `npx wrangler rollback` and redeploy with the right env. The check does not
 print a secret. Any
 other value must match
-`^[a-z0-9_-]+$` or the step fails before Wrangler runs, and the value is
+`^[a-z0-9][a-z0-9_-]*$` or the step fails before Wrangler runs, and the value is
 not printed. Wrangler prints a warning when a config has environments and
 the free command omits `--env`. The top-level environment is still what
 that command publishes. `--env=""` selects it explicitly and silences the

@@ -12,7 +12,7 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   runs `npx wrangler deploy --env paid`. Without that variable, a merge that
   touches `worker/**` puts a paid Worker back on free. Set it under
   Settings → Secrets and variables → Actions → Variables. A value that is
-  not `^[a-z0-9_-]+$` fails the step before Wrangler runs. The deploy step
+  not `^[a-z0-9][a-z0-9_-]*$` fails the step before Wrangler runs. The deploy step
   tees Wrangler output and requires a `TIER` binding of `"paid"` when the
   variable is `paid`, and fails the free command if that binding is present.
   Smoke does not

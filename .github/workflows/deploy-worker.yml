@@ -77,9 +77,9 @@ jobs:
           log=$(mktemp)
           trap 'rm -f "$dry" "$log"' EXIT
           if [ -n "${WORKER_DEPLOY_ENV:-}" ]; then
-            if [[ ! "${WORKER_DEPLOY_ENV}" =~ ^[a-z0-9_-]+$ ]]; then
+            if [[ ! "${WORKER_DEPLOY_ENV}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
               cat >&2 <<'EOF'
-          WORKER_DEPLOY_ENV must match ^[a-z0-9_-]+$
+          WORKER_DEPLOY_ENV must match ^[a-z0-9][a-z0-9_-]*$
           EOF
               exit 1
             fi
