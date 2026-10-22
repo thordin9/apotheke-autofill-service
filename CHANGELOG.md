@@ -7,17 +7,24 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### CI
 
+- **Deploy Worker dry-runs the tier check before upload.** Before the real
+  upload, the step runs `npx wrangler deploy --dry-run` (plus `--env` when
+  `WORKER_DEPLOY_ENV` is set) and applies the same `TIER` `"paid"` grep. A
+  mismatch fails the job before any upload. The post-upload check stays. If
+  that check goes red, the version is already live; roll back with
+  `npx wrangler rollback` and redeploy with the right env. An env name must
+  match `^[a-z0-9][a-z0-9_-]*$`, so a leading hyphen is rejected. On the Free
+  plan Cloudflare rejects a deploy that sets `limits.cpu_ms` (error 100328).
 - **Deploy Worker follows `WORKER_DEPLOY_ENV`.** An empty or unset repository
   variable still runs `npx wrangler deploy` (free). `WORKER_DEPLOY_ENV=paid`
   runs `npx wrangler deploy --env paid`. Without that variable, a merge that
   touches `worker/**` puts a paid Worker back on free. Set it under
   Settings → Secrets and variables → Actions → Variables. A value that is
-  not `^[a-z0-9][a-z0-9_-]*$` fails the step before Wrangler runs. The deploy step
-  tees Wrangler output and requires a `TIER` binding of `"paid"` when the
+  not `^[a-z0-9][a-z0-9_-]*$` fails the step before Wrangler runs. The deploy
+  step tees Wrangler output and requires a `TIER` binding of `"paid"` when the
   variable is `paid`, and fails the free command if that binding is present.
-  Smoke does not
-  call `GET /v1/info`. After a deploy, confirm the tier by calling
-  `GET /v1/info` with the bearer token outside CI (the QA live check).
+  Smoke does not call `GET /v1/info`. After a deploy, confirm the tier by
+  calling `GET /v1/info` with the bearer token outside CI (the QA live check).
   `AUTOFILL_TOKEN` is never stored in GitHub.
 - **Deploy Worker runs the local runtime check before `wrangler deploy`.** The
   same `worker/scripts/local-info-check.sh` that CI runs now gates the deploy
