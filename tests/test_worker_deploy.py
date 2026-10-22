@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import shlex
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -260,6 +262,33 @@ def test_worker_deploy_env_is_a_simple_name():
         'npx wrangler deploy | tee "$log"'
     )
     assert "Authorization" not in smoke["run"]
+
+
+def test_deploy_trap_deletes_both_temp_logs(tmp_path: Path):
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["deploy"]
+    deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
+    run = deploy["run"]
+    traps = [line.strip() for line in run.splitlines() if line.strip().startswith("trap ")]
+    assert traps == ['trap \'rm -f "$dry" "$log"\' EXIT']
+    assert run.index("dry=$(mktemp)") < run.index(traps[0])
+    assert run.index("log=$(mktemp)") < run.index(traps[0])
+    assert run.index(traps[0]) < run.index("npx wrangler deploy")
+    dry = tmp_path / "dry"
+    log = tmp_path / "log"
+    dry.write_text("dry-run")
+    log.write_text("upload")
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            f"dry={shlex.quote(str(dry))}",
+            f"log={shlex.quote(str(log))}",
+            traps[0],
+            "exit 0",
+        ]
+    )
+    subprocess.run(["bash", "-c", script], check=True)
+    assert not dry.exists()
+    assert not log.exists()
 
 
 def test_deploy_checkout_drops_credentials_and_no_legacy_peer_deps():
