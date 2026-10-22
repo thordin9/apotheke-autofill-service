@@ -16,6 +16,7 @@ import {
   scriptedAi,
   suggestRequest,
   TOKEN,
+  unreadStream,
 } from "./helpers";
 
 beforeEach(resetBudget);
@@ -207,6 +208,32 @@ describe("enforced image cap", () => {
       expect(rejected.calls).toHaveLength(0);
     },
   );
+});
+
+describe("whole-body 413 message", () => {
+  it.each([
+    ["free", FREE_BODY, {}],
+    ["paid", PAID_BODY, paidEnv()],
+  ] as const)("names the %s MAX_UPLOAD_BYTES", async (_label, cap, overrides) => {
+    const tracked = unreadStream(new Uint8Array([0xff, 0xd8]));
+    const request = new Request("https://autofill.example/v1/suggest", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "multipart/form-data; boundary=----autofilltest",
+        "content-length": String(cap + 1),
+      },
+      body: tracked.stream,
+      duplex: "half",
+    } as RequestInit);
+    const before = tracked.reads();
+    const response = await call(request, overrides);
+    expect(response.status).toBe(413);
+    expect(await bodyOf(response)).toEqual({
+      error: { code: "payload_too_large", message: `request body exceeds ${cap} bytes` },
+    });
+    expect(tracked.reads()).toBe(before);
+  });
 });
 
 describe("neuron cap", () => {

@@ -35,7 +35,13 @@ appends `enforced_image_bytes` and `tier` (`free` or `paid`). A Gemma 4
 request with thinking off is about 6.4 Neurons, about $0.000070 at the
 published rate of $0.10 per million input tokens (9091 Neurons). The free cap
 of 6000 is about 930 requests a day. The paid cap of 30000 is about 4680.
-Wrangler does not inherit vars or bindings into an environment. Details are
+Wrangler does not inherit vars or bindings into an environment. The Deploy
+workflow deploys plain free unless the repo variable `WORKER_DEPLOY_ENV=paid`
+is set; without it, any `worker/**` merge puts a paid Worker back on free.
+Set it under Settings → Secrets and variables → Actions → Variables, or
+`gh variable set WORKER_DEPLOY_ENV --body paid`. After a Worker deploy,
+confirm the tier by calling `GET /v1/info` with the bearer token outside CI
+(the QA live check). `AUTOFILL_TOKEN` is never stored in GitHub. Details are
 in the deploy doc.
 
 Docker and the Jetson stack below are **legacy self-hosting**. They keep the

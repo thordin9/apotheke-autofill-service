@@ -7,6 +7,18 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### CI
 
+- **Deploy Worker follows `WORKER_DEPLOY_ENV`.** An empty or unset repository
+  variable still runs `npx wrangler deploy` (free). `WORKER_DEPLOY_ENV=paid`
+  runs `npx wrangler deploy --env paid`. Without that variable, a merge that
+  touches `worker/**` puts a paid Worker back on free. Set it under
+  Settings → Secrets and variables → Actions → Variables. A value that is
+  not `^[a-z0-9_-]+$` fails the step before Wrangler runs. The deploy step
+  tees Wrangler output and requires a `TIER` binding of `"paid"` when the
+  variable is `paid`, and fails the free command if that binding is present.
+  Smoke does not
+  call `GET /v1/info`. After a deploy, confirm the tier by calling
+  `GET /v1/info` with the bearer token outside CI (the QA live check).
+  `AUTOFILL_TOKEN` is never stored in GitHub.
 - **Deploy Worker runs the local runtime check before `wrangler deploy`.** The
   same `worker/scripts/local-info-check.sh` that CI runs now gates the deploy
   job, so a bundle the Workers runtime refuses can't be uploaded even if it
@@ -25,6 +37,11 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Changed
 
+- **A whole-body 413 names the body cap.** The message is
+  `request body exceeds <MAX_UPLOAD_BYTES> bytes` (1048576 free, 2097152
+  paid). The number is the cap `readLimitedBody` already receives. An image
+  part over the enforced cap, and Workers AI code 3006, still say
+  `image exceeds <enforced cap> bytes`.
 - **Worker suggest reads a known body in one buffer.** When `Content-Length`
   is a single integer within `MAX_UPLOAD_BYTES`, `POST /v1/suggest` buffers
   that body and still checks the bytes read. A declared length over the cap

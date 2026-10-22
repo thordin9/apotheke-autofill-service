@@ -15,7 +15,7 @@ the custom domain `apotheke-autofill-service.webapp.gr`. A fork uses its own
 ## What you need
 
 - Node.js 22 and npm
-- A Cloudflare account on the Workers Free plan
+- A Cloudflare account on the Workers Free plan for the default `wrangler deploy`. `wrangler deploy --env paid` needs the Workers Paid plan, because `limits.cpu_ms` is enforced only there
 - Wrangler 4.36 or newer. This repo pins it in `worker/package.json`. Use that
   copy (`npx wrangler` from `worker/`) so the rate-limit binding matches.
 
@@ -138,12 +138,22 @@ that Worker instead of creating a second one. The two commands are
 alternatives. Deploying one replaces the vars of the other. The bearer secret
 stays, because it is stored on the script name. The Durable Object counter
 stays too. The limit compared on each request is the budget var of the
-version you just deployed. The GitHub Action keeps running plain
-`npx wrangler deploy` (free). It does not pass `--env paid`. Wrangler
-prints a warning when a config has environments and the command omits
-`--env`. The top-level environment is still what that command publishes.
-`--env=""` selects it explicitly and silences the warning. The deploy Action
-stays exactly `npx wrangler deploy`.
+version you just deployed. The Deploy workflow deploys plain free unless
+the repo variable `WORKER_DEPLOY_ENV=paid` is set; without it, any
+`worker/**` merge puts a paid Worker back on free. Set that variable under
+Settings → Secrets and variables → Actions → Variables, or from a checkout
+with `gh variable set WORKER_DEPLOY_ENV --body paid`. An empty or unset
+variable runs `npx wrangler deploy`. The step copies that command's output
+with `tee` and then checks it. When `WORKER_DEPLOY_ENV` is `paid`, the step
+fails unless the output matches `TIER` followed by `"paid"` (`grep -E`;
+Wrangler prints `env.TIER ("paid")`). When the variable is empty, the step
+fails if that binding is present. The check does not print a secret. Any
+other value must match
+`^[a-z0-9_-]+$` or the step fails before Wrangler runs, and the value is
+not printed. Wrangler prints a warning when a config has environments and
+the free command omits `--env`. The top-level environment is still what
+that command publishes. `--env=""` selects it explicitly and silences the
+warning. The workflow does not pass `--env=""`.
 
 `wrangler deploy` creates the custom hostname. The certificate can take a
 few minutes. `GET /healthz` stays failing until the certificate is ready and
@@ -154,15 +164,19 @@ After that, [`.github/workflows/deploy-worker.yml`](../.github/workflows/deploy-
 deploys on a push to `main` that changes `worker/**` or the workflow file,
 and from Actions with `workflow_dispatch` on `main`. The job uses the GitHub
 environment `production` (limit that environment to `main`). It runs `npm ci`,
-the stubbed Vitest suite (no Neurons), then `npx wrangler deploy` with the
-pinned Wrangler from `worker/package.json`. Secrets are step environment
-variables on the deploy step only. That step has only `name`, `env` and
-`run`, with no `if:` or `continue-on-error`, and `run` is exactly
-`npx wrangler deploy`. The job has no `continue-on-error` either.
-`tests/test_worker_deploy.py` fails if any of that changes.
+the stubbed Vitest suite (no Neurons), then Wrangler with the pin from
+`worker/package.json`. `WORKER_DEPLOY_ENV` is a step environment variable
+(`vars.WORKER_DEPLOY_ENV`), not text pasted into the script. Cloudflare
+secrets stay on the deploy step only. That step has only `name`, `env` and
+`run`, with no `if:` or `continue-on-error`. The job has no
+`continue-on-error` either. `tests/test_worker_deploy.py` fails if any of
+that changes.
 
 The smoke check then calls `https://apotheke-autofill-service.webapp.gr/healthz`
 (200) and `POST /v1/suggest` with no token (401 only; 200 is not success).
+It does not call `GET /v1/info`. After a Worker deploy, confirm the tier by
+calling `GET /v1/info` with the bearer token outside CI (the QA live check).
+`AUTOFILL_TOKEN` is never stored in GitHub.
 The URL is `vars.WORKER_URL` when that GitHub variable is set, and this
 hostname otherwise. A failed check prints the last HTTP status code and not
 the body. It retries while the certificate is issued. It does not send a
@@ -409,7 +423,7 @@ log still keeps the connecting IP. Do not copy a real address into the repo.
 | `GET /healthz` is `503` `{"status":"degraded"}` | `AUTOFILL_TOKEN` is missing or empty. `npx wrangler secret put AUTOFILL_TOKEN` |
 | `401` | Wrong or missing `Authorization: Bearer` token |
 | `404` | Unknown path. This is 404 even when `AUTOFILL_TOKEN` is missing. `/healthz`, `/v1/info`, and `/v1/suggest` are the only routes |
-| `413` | Body larger than `MAX_UPLOAD_BYTES` (the message names that cap; 1048576 free, 2097152 paid). A numeric `Content-Length` over the cap is rejected before the body is read. A numeric `Content-Length` within the cap is still checked after the body is buffered. A chunked body with no `Content-Length` is aborted as it is read. On a Request built in code, a length that does not match the bytes is `400` `invalid Content-Length`. Over the network a short body waits for the client and then gets `400` `expected multipart/form-data`, and bytes past the declared length are not part of the body. A malformed `Content-Length` is a plain-text 400 from workerd before the Worker runs; if it reaches the Worker, the JSON 400 is `invalid Content-Length`. An image part over the enforced image cap (body cap minus 64 KiB: 983040 free, 2031616 paid), or Workers AI code 3006, names that image cap. Advertised `max_image_bytes` (524288 free, 1048576 paid) is not this cap |
+| `413` | Body larger than `MAX_UPLOAD_BYTES`. The message is `request body exceeds <MAX_UPLOAD_BYTES> bytes` (1048576 free, 2097152 paid). An image-part rejection stays `image exceeds <enforced cap> bytes`. A numeric `Content-Length` over the cap is rejected before the body is read. A numeric `Content-Length` within the cap is still checked after the body is buffered. A chunked body with no `Content-Length` is aborted as it is read. On a Request built in code, a length that does not match the bytes is `400` `invalid Content-Length`. Over the network a short body waits for the client and then gets `400` `expected multipart/form-data`, and bytes past the declared length are not part of the body. A malformed `Content-Length` is a plain-text 400 from workerd before the Worker runs; if it reaches the Worker, the JSON 400 is `invalid Content-Length`. An image part over the enforced image cap (body cap minus 64 KiB: 983040 free, 2031616 paid), or Workers AI code 3006, names that image cap. Advertised `max_image_bytes` (524288 free, 1048576 paid) is not this cap |
 | `415` | Bytes are not JPEG, PNG, or WebP. Checked from the first bytes of the image part |
 | `429` `Retry-After: 60` | Per-location rate limit. Wait. The daily cap is separate |
 | `503` `daily capacity is exhausted` plus `Retry-After` until 00:00 UTC | Neuron budget, request cap, or Workers AI 3036. 3036 marks the day exhausted. `GET /v1/info` shows `remaining` |

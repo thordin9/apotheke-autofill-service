@@ -66,12 +66,17 @@ def test_deploy_workflow_is_main_only_and_pinned():
     deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
     assert deploy["env"]["CLOUDFLARE_API_TOKEN"] == "${{ secrets.CLOUDFLARE_API_TOKEN }}"
     assert deploy["env"]["CLOUDFLARE_ACCOUNT_ID"] == "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+    assert deploy["env"]["WORKER_DEPLOY_ENV"] == "${{ vars.WORKER_DEPLOY_ENV }}"
+    assert "${{" not in deploy["run"]
     assert "npx wrangler deploy" in deploy["run"]
     assert "secret put" not in text
     assert "set -x" not in text
     assert "echo" not in deploy["run"]
+    assert "printf" not in deploy["run"]
     smoke = next(step for step in job["steps"] if step.get("name") == "Smoke")
-    assert smoke["env"]["WORKER_URL"] == "${{ vars.WORKER_URL }}"
+    assert smoke["env"] == {"WORKER_URL": "${{ vars.WORKER_URL }}"}
+    assert "${{" not in smoke["run"]
+    assert "Authorization" not in smoke["run"]
     assert f"${{WORKER_URL:-https://{DOMAIN}}}" in smoke["run"]
     assert "$base/healthz" in smoke["run"]
     assert "/v1/suggest" in smoke["run"]
@@ -117,9 +122,28 @@ def test_deploy_workflow_installs_with_ci_and_checks_wrangler():
     deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
     # No if:, continue-on-error or other keys, so a failed deploy always fails the job.
     assert set(deploy) == {"name", "env", "run"}
-    assert deploy["run"].strip() == "npx wrangler deploy"
+    commands = [
+        line.strip()
+        for line in deploy["run"].splitlines()
+        if line.strip().startswith("npx wrangler deploy")
+    ]
+    assert commands == [
+        'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"',
+        'npx wrangler deploy | tee "$log"',
+    ]
+    assert [part.split("|", 1)[0].strip() for part in commands] == [
+        'npx wrangler deploy --env "$WORKER_DEPLOY_ENV"',
+        "npx wrangler deploy",
+    ]
+    assert "||" not in deploy["run"]
     assert "continue-on-error" not in job
-    assert set(deploy["env"]) == {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"}
+    assert set(deploy["env"]) == {
+        "CLOUDFLARE_API_TOKEN",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "WORKER_DEPLOY_ENV",
+    }
+    assert "AUTOFILL_TOKEN" not in deploy["env"]
+    assert "AUTOFILL_TOKEN" not in deploy["run"]
     names = [step.get("name") for step in job["steps"]]
     assert names.index("Test") < names.index("Deploy")
 
@@ -140,6 +164,65 @@ def test_local_info_check_reads_the_constant():
     assert "524288" not in script
     assert "MULTIPART_HEADROOM" in script
     assert "wrangler.toml" in script
+
+
+def test_deploy_checks_the_tier_binding_without_a_token():
+    text = WORKFLOW.read_text()
+    job = yaml.safe_load(text)["jobs"]["deploy"]
+    deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
+    run = deploy["run"]
+    assert "log=$(mktemp)" in run
+    assert 'tee "$log"' in run
+    assert "set -euo pipefail" in run
+    pattern = 'grep -E \'TIER.*"paid"\' "$log"'
+    assert run.count(pattern) == 2
+    paid = run.split('[ "${WORKER_DEPLOY_ENV:-}" = "paid" ]', 1)[1].split("elif", 1)[0]
+    assert f"if ! {pattern}" in paid
+    free = run.split('[ -z "${WORKER_DEPLOY_ENV:-}" ]', 1)[1]
+    assert f"if {pattern}" in free
+    assert f"if ! {pattern}" not in free
+    assert "AUTOFILL_TOKEN" not in run
+    assert "Authorization" not in run
+    assert "echo" not in run
+    assert "||" not in run
+
+
+def test_deploy_workflow_never_reads_autofill_token():
+    text = WORKFLOW.read_text()
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    assert "AUTOFILL_TOKEN" not in code
+    assert "AUTOFILL_TOKEN" in text
+    job = yaml.safe_load(text)["jobs"]["deploy"]
+    smoke = next(step for step in job["steps"] if step.get("name") == "Smoke")
+    assert "Authorization" not in smoke["run"]
+    assert "/v1/info" not in smoke["run"]
+    assert "autofill-info.json" not in smoke["run"]
+    assert "WORKER_DEPLOY_ENV" not in smoke.get("env", {})
+
+
+def test_worker_deploy_env_is_a_simple_name():
+    text = WORKFLOW.read_text()
+    workflow = yaml.safe_load(text)
+    job = workflow["jobs"]["deploy"]
+    deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
+    smoke = next(step for step in job["steps"] if step.get("name") == "Smoke")
+    assert '[[ ! "${WORKER_DEPLOY_ENV}" =~ ^[a-z0-9_-]+$ ]]' in deploy["run"]
+    pattern = re.compile(r"^[a-z0-9_-]+$")
+    assert pattern.fullmatch("paid")
+    assert pattern.fullmatch("env_1-a")
+    assert pattern.fullmatch("") is None
+    assert pattern.fullmatch("Paid") is None
+    assert pattern.fullmatch(" paid") is None
+    assert pattern.fullmatch("paid ") is None
+    assert pattern.fullmatch("../paid") is None
+    assert pattern.fullmatch("paid;rm") is None
+    assert "WORKER_DEPLOY_ENV must match ^[a-z0-9_-]+$" in deploy["run"]
+    assert "<<'EOF'" in deploy["run"]
+    assert deploy["run"].index("if [ -n ") < deploy["run"].index("npx wrangler deploy --env")
+    assert deploy["run"].index("npx wrangler deploy --env") < deploy["run"].index("else")
+    free = [line.strip() for line in deploy["run"].split("else", 1)[1].splitlines()]
+    assert 'npx wrangler deploy | tee "$log"' in free
+    assert "Authorization" not in smoke["run"]
 
 
 def test_deploy_checkout_drops_credentials_and_no_legacy_peer_deps():

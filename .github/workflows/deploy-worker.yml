@@ -1,6 +1,7 @@
 # Deploys the Worker from main only. CI (.github/workflows/ci.yml) stays a dry run.
-# Secrets live in the GitHub environment "production" (main branch only):
-# CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. This file never reads AUTOFILL_TOKEN.
+# Secrets in the production environment are CLOUDFLARE_API_TOKEN and
+# CLOUDFLARE_ACCOUNT_ID only. This file never reads AUTOFILL_TOKEN and does
+# not write Worker secrets.
 name: Deploy Worker
 
 on:
@@ -67,8 +68,39 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER_DEPLOY_ENV: ${{ vars.WORKER_DEPLOY_ENV }}
         # wrangler is the exact version in worker/package.json (lockfile).
-        run: npx wrangler deploy
+        # Empty WORKER_DEPLOY_ENV is the free command. A set value is an env name.
+        run: |
+          set -euo pipefail
+          log=$(mktemp)
+          trap 'rm -f "$log"' EXIT
+          if [ -n "${WORKER_DEPLOY_ENV:-}" ]; then
+            if [[ ! "${WORKER_DEPLOY_ENV}" =~ ^[a-z0-9_-]+$ ]]; then
+              cat >&2 <<'EOF'
+          WORKER_DEPLOY_ENV must match ^[a-z0-9_-]+$
+          EOF
+              exit 1
+            fi
+            npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"
+          else
+            npx wrangler deploy | tee "$log"
+          fi
+          if [ "${WORKER_DEPLOY_ENV:-}" = "paid" ]; then
+            if ! grep -E 'TIER.*"paid"' "$log"; then
+              cat >&2 <<'EOF'
+          deploy output is missing a TIER binding of "paid"
+          EOF
+              exit 1
+            fi
+          elif [ -z "${WORKER_DEPLOY_ENV:-}" ]; then
+            if grep -E 'TIER.*"paid"' "$log"; then
+              cat >&2 <<'EOF'
+          free deploy output shows a TIER binding of "paid"
+          EOF
+              exit 1
+            fi
+          fi
 
       - name: Smoke
         working-directory: ${{ github.workspace }}
