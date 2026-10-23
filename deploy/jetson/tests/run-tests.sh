@@ -13,7 +13,7 @@ PASS=0; FAIL=0
 TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/run-tests.XXXXXX") || { echo "cannot create a temp dir under ${TMPDIR:-/tmp}" >&2; exit 1; }
 trap 'rm -rf "$TMPROOT"' EXIT
 CASE_PID=""   # a case runs in its own process group (set -m): stop it before cleaning up, or it recreates its dir
-# shellcheck disable=SC2317  # called from the traps
+# shellcheck disable=SC2317,SC2329  # invoked via trap
 stop_case() { [ -n "$CASE_PID" ] && kill -TERM -- "-$CASE_PID" 2>/dev/null; [ -n "$CASE_PID" ] && wait "$CASE_PID" 2>/dev/null; exit "$1"; }
 trap 'stop_case 130' INT
 trap 'stop_case 143' TERM

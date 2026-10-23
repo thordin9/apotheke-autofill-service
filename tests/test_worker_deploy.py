@@ -193,8 +193,8 @@ def test_deploy_checks_the_tier_binding_without_a_token():
     assert 'tee "$dry"' in run
     assert 'tee "$log"' in run
     assert "set -euo pipefail" in run
-    dry_pattern = 'grep -E \'TIER.*"paid"\' "$dry"'
-    log_pattern = 'grep -E \'TIER.*"paid"\' "$log"'
+    dry_pattern = 'grep -q -E \'TIER.*"paid"\' "$dry"'
+    log_pattern = 'grep -q -E \'TIER.*"paid"\' "$log"'
     assert run.count(dry_pattern) == 2
     assert run.count(log_pattern) == 2
     upload = 'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"'
@@ -204,17 +204,57 @@ def test_deploy_checks_the_tier_binding_without_a_token():
     assert len(paid_parts) == 2
     for paid in paid_parts:
         body = paid.split("elif", 1)[0]
-        assert "if ! grep -E" in body
+        assert "if ! grep -q -E" in body
     free_parts = run.split('[ -z "${WORKER_DEPLOY_ENV:-}" ]')[1:]
     assert len(free_parts) == 2
     for free in free_parts:
         body = _until_fi(free)
-        assert "if grep -E" in body
-        assert "if ! grep -E" not in body
+        assert "if grep -q -E" in body
+        assert "if ! grep -q -E" not in body
     assert "AUTOFILL_TOKEN" not in run
     assert "Authorization" not in run
     assert "echo" not in run
     assert "||" not in run
+
+
+def test_paid_dry_run_missing_tier_stops_before_upload(tmp_path: Path):
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["deploy"]
+    deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
+    run = deploy["run"]
+    upload = 'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"'
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    argv_log = tmp_path / "argv"
+    npx = bin_dir / "npx"
+    npx.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(argv_log))}\n"
+        "printf '%s\\n' 'env.TIER (\"free\")   Environment Variable'\n"
+        "exit 0\n"
+    )
+    npx.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", "-c", run],
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "TMPDIR": str(tmp_path),
+            "HOME": str(tmp_path),
+            "WORKER_DEPLOY_ENV": "paid",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert argv_log.read_text().splitlines() == ["wrangler deploy --dry-run --env paid"]
+    assert 'dry-run output is missing a TIER binding of "paid"' in result.stderr
+    assert "deploy output is missing" not in result.stderr
+    pre, post = run.split(upload, 1)
+    assert 'dry-run output is missing a TIER binding of "paid"' in pre
+    assert 'free dry-run output shows a TIER binding of "paid"' in pre
+    assert 'deploy output is missing a TIER binding of "paid"' in post
+    assert 'free deploy output shows a TIER binding of "paid"' in post
+    assert "dry-run output" not in post
 
 
 def test_deploy_workflow_never_reads_autofill_token():

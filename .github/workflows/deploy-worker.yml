@@ -88,16 +88,16 @@ jobs:
             npx wrangler deploy --dry-run | tee "$dry"
           fi
           if [ "${WORKER_DEPLOY_ENV:-}" = "paid" ]; then
-            if ! grep -E 'TIER.*"paid"' "$dry"; then
+            if ! grep -q -E 'TIER.*"paid"' "$dry"; then
               cat >&2 <<'EOF'
-          deploy output is missing a TIER binding of "paid"
+          dry-run output is missing a TIER binding of "paid"
           EOF
               exit 1
             fi
           elif [ -z "${WORKER_DEPLOY_ENV:-}" ]; then
-            if grep -E 'TIER.*"paid"' "$dry"; then
+            if grep -q -E 'TIER.*"paid"' "$dry"; then
               cat >&2 <<'EOF'
-          free deploy output shows a TIER binding of "paid"
+          free dry-run output shows a TIER binding of "paid"
           EOF
               exit 1
             fi
@@ -108,14 +108,14 @@ jobs:
             npx wrangler deploy | tee "$log"
           fi
           if [ "${WORKER_DEPLOY_ENV:-}" = "paid" ]; then
-            if ! grep -E 'TIER.*"paid"' "$log"; then
+            if ! grep -q -E 'TIER.*"paid"' "$log"; then
               cat >&2 <<'EOF'
           deploy output is missing a TIER binding of "paid"
           EOF
               exit 1
             fi
           elif [ -z "${WORKER_DEPLOY_ENV:-}" ]; then
-            if grep -E 'TIER.*"paid"' "$log"; then
+            if grep -q -E 'TIER.*"paid"' "$log"; then
               cat >&2 <<'EOF'
           free deploy output shows a TIER binding of "paid"
           EOF
