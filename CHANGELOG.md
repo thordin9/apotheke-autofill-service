@@ -9,12 +9,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 - **Deploy Worker dry-runs the tier check before upload.** Before the real
   upload, the step runs `npx wrangler deploy --dry-run` (plus `--env` when
-  `WORKER_DEPLOY_ENV` is set) and applies the same `TIER` `"paid"` grep. A
-  mismatch fails the job before any upload. The post-upload check stays. If
-  that check goes red, the version is already live; roll back with
-  `npx wrangler rollback` and redeploy with the right env. An env name must
-  match `^[a-z0-9][a-z0-9_-]*$`, so a leading hyphen is rejected. On the Free
-  plan Cloudflare rejects a deploy that sets `limits.cpu_ms` (error 100328).
+  `WORKER_DEPLOY_ENV` is set) and applies the same `TIER` `"paid"` grep.
+  `grep -q` prints that line once. A dry-run mismatch says `dry-run output`
+  and fails the job before any upload. The post-upload check stays and says
+  `deploy output`. If that check goes red, the version is already live; roll
+  back with `npx wrangler rollback` from `worker/`, with the scoped token,
+  and redeploy with the right env. An env name must match
+  `^[a-z0-9][a-z0-9_-]*$`, so a leading hyphen is rejected. On the Free plan
+  Cloudflare rejects a deploy that sets `limits.cpu_ms` (error 100328).
 - **Deploy Worker follows `WORKER_DEPLOY_ENV`.** An empty or unset repository
   variable still runs `npx wrangler deploy` (free). `WORKER_DEPLOY_ENV=paid`
   runs `npx wrangler deploy --env paid`. Without that variable, a merge that
