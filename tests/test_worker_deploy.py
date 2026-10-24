@@ -8,6 +8,7 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).parents[1]
@@ -217,19 +218,77 @@ def test_deploy_checks_the_tier_binding_without_a_token():
     assert "||" not in run
 
 
-def test_paid_dry_run_missing_tier_stops_before_upload(tmp_path: Path):
+_PAID_TIER = 'env.TIER ("paid")   Environment Variable'
+_FREE_TIER = 'env.TIER ("free")   Environment Variable'
+
+
+@pytest.mark.parametrize(
+    ("worker_deploy_env", "dry_line", "upload_line", "argv", "message"),
+    [
+        pytest.param(
+            "paid",
+            _FREE_TIER,
+            _PAID_TIER,
+            ["wrangler deploy --dry-run --env paid"],
+            'dry-run output is missing a TIER binding of "paid"',
+            id="paid-dry-run",
+        ),
+        pytest.param(
+            "paid",
+            _PAID_TIER,
+            _FREE_TIER,
+            ["wrangler deploy --dry-run --env paid", "wrangler deploy --env paid"],
+            'deploy output is missing a TIER binding of "paid"',
+            id="paid-upload",
+        ),
+        pytest.param(
+            "",
+            _PAID_TIER,
+            _FREE_TIER,
+            ["wrangler deploy --dry-run"],
+            'free dry-run output shows a TIER binding of "paid"',
+            id="free-dry-run",
+        ),
+        pytest.param(
+            "",
+            _FREE_TIER,
+            _PAID_TIER,
+            ["wrangler deploy --dry-run", "wrangler deploy"],
+            'free deploy output shows a TIER binding of "paid"',
+            id="free-upload",
+        ),
+    ],
+)
+def test_tier_mismatch_fails_the_step(
+    tmp_path: Path,
+    worker_deploy_env: str,
+    dry_line: str,
+    upload_line: str,
+    argv: list[str],
+    message: str,
+):
     job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["deploy"]
     deploy = next(step for step in job["steps"] if step.get("name") == "Deploy")
     run = deploy["run"]
     upload = 'npx wrangler deploy --env "$WORKER_DEPLOY_ENV" | tee "$log"'
+    pre, post = run.split(upload, 1)
+    assert 'dry-run output is missing a TIER binding of "paid"' in pre
+    assert 'free dry-run output shows a TIER binding of "paid"' in pre
+    assert 'deploy output is missing a TIER binding of "paid"' in post
+    assert 'free deploy output shows a TIER binding of "paid"' in post
+    assert "dry-run output" not in post
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     argv_log = tmp_path / "argv"
+    log_q = shlex.quote(str(argv_log))
     npx = bin_dir / "npx"
     npx.write_text(
         "#!/bin/sh\n"
-        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(argv_log))}\n"
-        "printf '%s\\n' 'env.TIER (\"free\")   Environment Variable'\n"
+        f"printf '%s\\n' \"$*\" >> {log_q}\n"
+        'case "$*" in\n'
+        f"  *--dry-run*) printf '%s\\n' {shlex.quote(dry_line)} ;;\n"
+        f"  *) printf '%s\\n' {shlex.quote(upload_line)} ;;\n"
+        "esac\n"
         "exit 0\n"
     )
     npx.chmod(0o755)
@@ -239,22 +298,15 @@ def test_paid_dry_run_missing_tier_stops_before_upload(tmp_path: Path):
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "TMPDIR": str(tmp_path),
             "HOME": str(tmp_path),
-            "WORKER_DEPLOY_ENV": "paid",
+            "WORKER_DEPLOY_ENV": worker_deploy_env,
         },
         capture_output=True,
         text=True,
         check=False,
     )
-    assert result.returncode != 0
-    assert argv_log.read_text().splitlines() == ["wrangler deploy --dry-run --env paid"]
-    assert 'dry-run output is missing a TIER binding of "paid"' in result.stderr
-    assert "deploy output is missing" not in result.stderr
-    pre, post = run.split(upload, 1)
-    assert 'dry-run output is missing a TIER binding of "paid"' in pre
-    assert 'free dry-run output shows a TIER binding of "paid"' in pre
-    assert 'deploy output is missing a TIER binding of "paid"' in post
-    assert 'free deploy output shows a TIER binding of "paid"' in post
-    assert "dry-run output" not in post
+    assert result.returncode == 1
+    assert argv_log.read_text().splitlines() == argv
+    assert result.stderr.strip() == message
 
 
 def test_deploy_workflow_never_reads_autofill_token():
