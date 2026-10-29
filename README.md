@@ -7,10 +7,10 @@ Contract: [docs/api-v1.md](docs/api-v1.md) · [openapi.yaml](openapi.yaml)
 
 **Recommended deployment:** the Cloudflare Worker in [`worker/`](worker),
 served at `https://autofill.services.getapotheke.com`. The legacy hostnames
-`https://autofill.services.getapotheke.eu` (until clients move, then a 308 redirect) and
-`https://apotheke-autofill-service.webapp.gr` stay live. A fork sets its own
-`<your-domain>` and its own production secrets. Install, the one-time secret,
-and the main-only deploy Action are in
+`https://autofill.services.getapotheke.eu` (until clients move, then a 308
+redirect) and `https://apotheke-autofill-service.webapp.gr` stay live. A fork
+sets its own `<your-domain>` and its own production secrets. Install, the
+one-time secret, and the main-only deploy Action are in
 [docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
 Apotheke only changes the base URL and the bearer token. The Worker reports
 `backend: "cloudflare-workers"` and, at the default body cap,

@@ -9,9 +9,10 @@ does not use KV. The daily cap lives in one SQLite-backed Durable Object.
 `wrangler deploy` stays on that free tier. `wrangler deploy --env paid` is an
 opt-in paid tier for the same Worker name. `workers_dev` and preview URLs are
 off. The public name is
-the custom domain `autofill.services.getapotheke.com`. The legacy custom domains
-`autofill.services.getapotheke.eu` and `apotheke-autofill-service.webapp.gr` stay live on the
-same Worker. `autofill.services.getapotheke.eu` stays a legacy alias until clients move;
+the custom domain `autofill.services.getapotheke.com`. The legacy custom
+domains `autofill.services.getapotheke.eu` and
+`apotheke-autofill-service.webapp.gr` stay live on the same Worker.
+`autofill.services.getapotheke.eu` stays a legacy alias until clients move;
 after that it becomes a 308 redirect.
 A fork uses its own `<your-domain>` in `worker/wrangler.toml`.
 
@@ -58,10 +59,11 @@ in the environment.
 
 `workers_dev` is false and `preview_urls` is false. The routes in
 [`worker/wrangler.toml`](../worker/wrangler.toml) are three custom domains,
-in both the top-level and `[env.paid]` blocks: `autofill.services.getapotheke.com`
-(primary), `autofill.services.getapotheke.eu` (legacy alias until clients move, then a
-308 redirect) and `apotheke-autofill-service.webapp.gr` (legacy, stays live). Wrangler
-treats the file as the source of truth, so a custom domain missing from it is
+in both the top-level and `[env.paid]` blocks:
+`autofill.services.getapotheke.com` (primary),
+`autofill.services.getapotheke.eu` (legacy alias until clients move, then a
+308 redirect) and `apotheke-autofill-service.webapp.gr` (legacy, stays
+live). Wrangler treats the file as the source of truth, so a custom domain missing from it is
 removed on the next deploy. A fork changes those patterns to its own
 `<your-domain>` and does not reuse these hostnames.
 
@@ -217,9 +219,9 @@ own `production` environment, and sets `routes` in `wrangler.toml` to
 ## Point Apotheke at it
 
 1. Base URL: `https://autofill.services.getapotheke.com` (no path). The legacy
-   `https://autofill.services.getapotheke.eu` (until clients move, then a 308 redirect) and
-   `https://apotheke-autofill-service.webapp.gr` still serve the same
-   Worker. A fork uses `https://<your-domain>`.
+   `https://autofill.services.getapotheke.eu` (until clients move, then a 308
+   redirect) and `https://apotheke-autofill-service.webapp.gr` still serve
+   the same Worker. A fork uses `https://<your-domain>`.
 2. Token: the `AUTOFILL_TOKEN` secret.
 3. Apotheke reads `max_image_bytes` from `GET /v1/info` and steps the analysis
    copy down until the multipart body fits. At the default body cap that
