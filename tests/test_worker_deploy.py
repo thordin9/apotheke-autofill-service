@@ -14,11 +14,14 @@ import yaml
 ROOT = Path(__file__).parents[1]
 WRANGLER = ROOT / "worker" / "wrangler.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy-worker.yml"
-DOMAIN = "autofill.services.getapotheke.eu"
-LEGACY_DOMAIN = "apotheke-autofill-service.webapp.gr"
+DOMAIN = "autofill.services.getapotheke.com"
+LEGACY_DOMAINS = [
+    "autofill.services.getapotheke.eu",
+    "apotheke-autofill-service.webapp.gr",
+]
 ROUTES = [
     {"pattern": DOMAIN, "custom_domain": True},
-    {"pattern": LEGACY_DOMAIN, "custom_domain": True},
+    *({"pattern": d, "custom_domain": True} for d in LEGACY_DOMAINS),
 ]
 SHA = re.compile(r"^[0-9a-f]{40}$")
 

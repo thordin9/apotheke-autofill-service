@@ -9,8 +9,10 @@ does not use KV. The daily cap lives in one SQLite-backed Durable Object.
 `wrangler deploy` stays on that free tier. `wrangler deploy --env paid` is an
 opt-in paid tier for the same Worker name. `workers_dev` and preview URLs are
 off. The public name is
-the custom domain `autofill.services.getapotheke.eu`. The legacy custom
-domain `apotheke-autofill-service.webapp.gr` stays live on the same Worker.
+the custom domain `autofill.services.getapotheke.com`. The legacy custom domains
+`autofill.services.getapotheke.eu` and `apotheke-autofill-service.webapp.gr` stay live on the
+same Worker. `autofill.services.getapotheke.eu` stays a legacy alias until clients move;
+after that it becomes a 308 redirect.
 A fork uses its own `<your-domain>` in `worker/wrangler.toml`.
 
 ## What you need
@@ -55,9 +57,10 @@ repo. Wrangler reads it from `wrangler login` or from `CLOUDFLARE_ACCOUNT_ID`
 in the environment.
 
 `workers_dev` is false and `preview_urls` is false. The routes in
-[`worker/wrangler.toml`](../worker/wrangler.toml) are two custom domains,
-in both the top-level and `[env.paid]` blocks: `autofill.services.getapotheke.eu`
-(primary) and `apotheke-autofill-service.webapp.gr` (legacy, stays live). Wrangler
+[`worker/wrangler.toml`](../worker/wrangler.toml) are three custom domains,
+in both the top-level and `[env.paid]` blocks: `autofill.services.getapotheke.com`
+(primary), `autofill.services.getapotheke.eu` (legacy alias until clients move, then a
+308 redirect) and `apotheke-autofill-service.webapp.gr` (legacy, stays live). Wrangler
 treats the file as the source of truth, so a custom domain missing from it is
 removed on the next deploy. A fork changes those patterns to its own
 `<your-domain>` and does not reuse these hostnames.
@@ -181,7 +184,7 @@ secrets stay on the deploy step only. That step has only `name`, `env` and
 `continue-on-error` either. `tests/test_worker_deploy.py` fails if any of
 that changes.
 
-The smoke check then calls `https://autofill.services.getapotheke.eu/healthz`
+The smoke check then calls `https://autofill.services.getapotheke.com/healthz`
 (200) and `POST /v1/suggest` with no token (401 only; 200 is not success).
 It does not call `GET /v1/info`. After a Worker deploy, confirm the tier by
 calling `GET /v1/info` with the bearer token outside CI (the QA live check).
@@ -208,13 +211,14 @@ The CI workflow stays a dry run (`npx wrangler deploy --dry-run` and
 A fork sets its own `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in its
 own `production` environment, and sets `routes` in `wrangler.toml` to
 `<your-domain>`. This repository's example is
-`autofill.services.getapotheke.eu`, with
-`apotheke-autofill-service.webapp.gr` kept as the legacy hostname.
+`autofill.services.getapotheke.com`, with `autofill.services.getapotheke.eu` and
+`apotheke-autofill-service.webapp.gr` kept as legacy hostnames.
 
 ## Point Apotheke at it
 
-1. Base URL: `https://autofill.services.getapotheke.eu` (no path). The legacy
-   `https://apotheke-autofill-service.webapp.gr` still serves the same
+1. Base URL: `https://autofill.services.getapotheke.com` (no path). The legacy
+   `https://autofill.services.getapotheke.eu` (until clients move, then a 308 redirect) and
+   `https://apotheke-autofill-service.webapp.gr` still serve the same
    Worker. A fork uses `https://<your-domain>`.
 2. Token: the `AUTOFILL_TOKEN` secret.
 3. Apotheke reads `max_image_bytes` from `GET /v1/info` and steps the analysis
@@ -302,7 +306,10 @@ is 30000.
 `[env.paid]` in `worker/wrangler.toml` is the whole paid config. Top-level
 config is the free Worker and is not edited for this tier.
 
-As of 2026-10-29, the live Worker is intentionally deployed with `wrangler deploy --env paid` (TIER=paid). AUTOFILL_DAILY_NEURON_BUDGET is 30000 there, matching the Cloudflare paid Workers AI limit. The default [vars] (free tier) is 6000.
+As of 2026-10-29, the live Worker is intentionally deployed with
+`wrangler deploy --env paid` (`TIER=paid`).
+`AUTOFILL_DAILY_NEURON_BUDGET` is 30000 there, our own daily cap for the
+paid tier; the default `[vars]` (free tier) is 6000.
 
 Wrangler does not inherit vars or bindings into an environment. That is
 `vars`, `ai`, `durable_objects`, and `ratelimits` in this project (Wrangler
@@ -370,7 +377,7 @@ plan's default 30 s. This change was not measured again in Workers Logs.
 | Workers KV free, 1,000 writes/day, eventually consistent | Not used |
 | Rate limiting binding | 10 requests / 60 s per `CF-Connecting-IP`, after auth, on `POST /v1/suggest` only. `429` with `Retry-After: 60`. Per location and loosely enforced. The Durable Object is the real cap |
 | Durable Objects on Free | One SQLite class, one instance. The counter rolls forward at UTC midnight and stays put when the clock steps backwards |
-| Custom domain | `autofill.services.getapotheke.eu`, plus the legacy `apotheke-autofill-service.webapp.gr`. A fork sets `<your-domain>`. Preview URLs and Logpush stay off |
+| Custom domain | `autofill.services.getapotheke.com`, plus the legacy `autofill.services.getapotheke.eu` and `apotheke-autofill-service.webapp.gr`. A fork sets `<your-domain>`. Preview URLs and Logpush stay off |
 
 ## CPU and base64
 
