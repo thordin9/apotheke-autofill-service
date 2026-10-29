@@ -25,9 +25,9 @@ const evening = Date.parse("2026-10-19T23:00:00.000Z");
 
 /**
  * sha256 of the top-level worker/wrangler.toml, before [env.paid]. Last changed
- * to add the autofill.services.getapotheke.eu custom domain route.
+ * to add the autofill.services.getapotheke.com custom domain route.
  */
-const TOP_LEVEL_SHA256 = "6c40173d47a427db99f2400c64363b6c9e92bd69c4d349d92fef62777c072a88";
+const TOP_LEVEL_SHA256 = "df9caf134556e03082625d0937261aa9adcf07f56e17aa3faeb5e127b8c3c022";
 
 const FREE_BODY = 1048576;
 const FREE_IMAGE = 983040;
@@ -383,7 +383,7 @@ describe("wrangler.toml paid environment", () => {
     );
     const routes = (tables: TomlTable[], name: string) =>
       tables.filter((table) => table.name === name).map((table) => assignments(table.body));
-    expect(routes(topTables, "routes")).toHaveLength(2);
+    expect(routes(topTables, "routes")).toHaveLength(3);
     expect(routes(topTables, "routes")).toEqual(routes(paidTables, "env.paid.routes"));
     expect(assignments(tableBody(topTables, "migrations"))).toEqual(
       assignments(tableBody(paidTables, "env.paid.migrations")),
