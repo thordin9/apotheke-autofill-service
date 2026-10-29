@@ -46,6 +46,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Changed
 
+- **Primary hostname is `autofill.services.getapotheke.eu`.** Both
+  `[[routes]]` and `[[env.paid.routes]]` in `worker/wrangler.toml` list it
+  as a custom domain, and keep `apotheke-autofill-service.webapp.gr` as the
+  legacy custom domain that stays live. The Deploy Worker smoke default, the
+  README and `docs/cloudflare-workers-deploy.md` name the new hostname. The
+  deploy doc's Paid tier section records that the live Worker runs
+  `wrangler deploy --env paid` (`AUTOFILL_DAILY_NEURON_BUDGET` 30000; free
+  `[vars]` 6000). PR_LINK_PLACEHOLDER
 - **A whole-body 413 names the body cap.** The message is
   `request body exceeds <MAX_UPLOAD_BYTES> bytes` (1048576 free, 2097152
   paid). The number is the cap `readLimitedBody` already receives. An image

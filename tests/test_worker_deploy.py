@@ -14,7 +14,12 @@ import yaml
 ROOT = Path(__file__).parents[1]
 WRANGLER = ROOT / "worker" / "wrangler.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy-worker.yml"
-DOMAIN = "apotheke-autofill-service.webapp.gr"
+DOMAIN = "autofill.services.getapotheke.eu"
+LEGACY_DOMAIN = "apotheke-autofill-service.webapp.gr"
+ROUTES = [
+    {"pattern": DOMAIN, "custom_domain": True},
+    {"pattern": LEGACY_DOMAIN, "custom_domain": True},
+]
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -43,8 +48,8 @@ def test_wrangler_toml_is_the_production_route():
     assert config["workers_dev"] is False
     assert config["preview_urls"] is False
     assert "account_id" not in set(_walk(config))
-    routes = config["routes"]
-    assert routes == [{"pattern": DOMAIN, "custom_domain": True}]
+    assert config["routes"] == ROUTES
+    assert config["env"]["paid"]["routes"] == ROUTES
     migrations = config["migrations"]
     assert {"tag": "v1", "new_sqlite_classes": ["Budget"]} in migrations
     assert "workers.dev" not in text

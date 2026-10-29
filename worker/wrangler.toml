@@ -9,6 +9,11 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 preview_urls = false
 
+# Primary hostname first. The legacy hostname stays live.
+[[routes]]
+pattern = "autofill.services.getapotheke.eu"
+custom_domain = true
+
 [[routes]]
 pattern = "apotheke-autofill-service.webapp.gr"
 custom_domain = true
@@ -76,6 +81,10 @@ class_name = "Budget"
 [[env.paid.migrations]]
 tag = "v1"
 new_sqlite_classes = ["Budget"]
+
+[[env.paid.routes]]
+pattern = "autofill.services.getapotheke.eu"
+custom_domain = true
 
 [[env.paid.routes]]
 pattern = "apotheke-autofill-service.webapp.gr"
