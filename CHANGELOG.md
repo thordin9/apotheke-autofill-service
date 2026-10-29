@@ -46,6 +46,12 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Changed
 
+- **Custom domain `apotheke-autofill-service.webapp.gr` removed.** Both
+  `[[routes]]` and `[[env.paid.routes]]` in `worker/wrangler.toml` now list
+  `autofill.services.getapotheke.com` then `autofill.services.getapotheke.eu`;
+  the next deploy detaches the old hostname. Clients must use
+  `https://autofill.services.getapotheke.com`
+  ([#39](https://github.com/thordin9/apotheke-autofill-service/pull/39)).
 - **Primary hostname is `autofill.services.getapotheke.com`.** Both
   `[[routes]]` and `[[env.paid.routes]]` in `worker/wrangler.toml` list it
   first as a custom domain. `autofill.services.getapotheke.eu` stays as a

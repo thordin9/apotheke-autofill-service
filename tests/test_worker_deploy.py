@@ -17,8 +17,8 @@ WORKFLOW = ROOT / ".github" / "workflows" / "deploy-worker.yml"
 DOMAIN = "autofill.services.getapotheke.com"
 LEGACY_DOMAINS = [
     "autofill.services.getapotheke.eu",
-    "apotheke-autofill-service.webapp.gr",
 ]
+RETIRED_DOMAIN = "apotheke-autofill-service.webapp.gr"
 ROUTES = [
     {"pattern": DOMAIN, "custom_domain": True},
     *({"pattern": d, "custom_domain": True} for d in LEGACY_DOMAINS),
@@ -53,6 +53,11 @@ def test_wrangler_toml_is_the_production_route():
     assert "account_id" not in set(_walk(config))
     assert config["routes"] == ROUTES
     assert config["env"]["paid"]["routes"] == ROUTES
+    assert [r["pattern"] for r in ROUTES] == [
+        "autofill.services.getapotheke.com",
+        "autofill.services.getapotheke.eu",
+    ]
+    assert RETIRED_DOMAIN not in text
     migrations = config["migrations"]
     assert {"tag": "v1", "new_sqlite_classes": ["Budget"]} in migrations
     assert "workers.dev" not in text
