@@ -9,17 +9,13 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 preview_urls = false
 
-# Primary hostname first. The legacy hostnames stay live.
+# Primary hostname first, then the legacy .eu alias.
 [[routes]]
 pattern = "autofill.services.getapotheke.com"
 custom_domain = true
 
 [[routes]]
 pattern = "autofill.services.getapotheke.eu"
-custom_domain = true
-
-[[routes]]
-pattern = "apotheke-autofill-service.webapp.gr"
 custom_domain = true
 
 [observability]
@@ -92,10 +88,6 @@ custom_domain = true
 
 [[env.paid.routes]]
 pattern = "autofill.services.getapotheke.eu"
-custom_domain = true
-
-[[env.paid.routes]]
-pattern = "apotheke-autofill-service.webapp.gr"
 custom_domain = true
 
 [[env.paid.ratelimits]]
