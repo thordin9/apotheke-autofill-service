@@ -46,6 +46,10 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Changed
 
+- **Deploy doc: paid-tier Neuron cap wording.** The Paid tier section now
+  calls 30000 the project's own daily cap for `TIER=paid`, not a Cloudflare
+  limit, and wraps that paragraph with identifiers in backticks
+  ([#NN](https://github.com/thordin9/apotheke-autofill-service/pull/NN)).
 - **Primary hostname is `autofill.services.getapotheke.eu`.** Both
   `[[routes]]` and `[[env.paid.routes]]` in `worker/wrangler.toml` list it
   as a custom domain, and keep `apotheke-autofill-service.webapp.gr` as the

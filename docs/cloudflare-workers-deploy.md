@@ -302,7 +302,11 @@ is 30000.
 `[env.paid]` in `worker/wrangler.toml` is the whole paid config. Top-level
 config is the free Worker and is not edited for this tier.
 
-As of 2026-10-29, the live Worker is intentionally deployed with `wrangler deploy --env paid` (TIER=paid). AUTOFILL_DAILY_NEURON_BUDGET is 30000 there, matching the Cloudflare paid Workers AI limit. The default [vars] (free tier) is 6000.
+As of 2026-10-29, the live Worker is intentionally deployed with
+`wrangler deploy --env paid` (`TIER=paid`). There,
+`AUTOFILL_DAILY_NEURON_BUDGET` is 30000. That is the project's own daily
+cap for the paid tier, not a Cloudflare limit. The default `[vars]` (free
+tier) sets it to 6000.
 
 Wrangler does not inherit vars or bindings into an environment. That is
 `vars`, `ai`, `durable_objects`, and `ratelimits` in this project (Wrangler
