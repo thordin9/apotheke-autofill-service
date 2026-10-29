@@ -62,8 +62,8 @@ in both the top-level and `[env.paid]` blocks:
 `autofill.services.getapotheke.com` (primary) and
 `autofill.services.getapotheke.eu` (legacy alias until clients move, then a
 308 redirect). Wrangler treats the file as the source of truth, so a custom
-domain missing from it is removed on the next deploy. A fork changes those patterns to its own
-`<your-domain>` and does not reuse these hostnames.
+domain missing from it is removed on the next deploy. A fork changes those
+patterns to its own `<your-domain>` and does not reuse these hostnames.
 
 ## Configure the caps
 
@@ -218,7 +218,8 @@ kept as a legacy hostname.
 
 1. Base URL: `https://autofill.services.getapotheke.com` (no path). The legacy
    `https://autofill.services.getapotheke.eu` still serves the same Worker
-   until clients move, then becomes a 308 redirect. A fork uses `https://<your-domain>`.
+   until clients move, then becomes a 308 redirect. A fork uses
+   `https://<your-domain>`.
 2. Token: the `AUTOFILL_TOKEN` secret.
 3. Apotheke reads `max_image_bytes` from `GET /v1/info` and steps the analysis
    copy down until the multipart body fits. At the default body cap that
