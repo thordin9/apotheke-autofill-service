@@ -58,7 +58,10 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   legacy alias until clients move, then becomes a 308 redirect;
   `apotheke-autofill-service.webapp.gr` stays legacy. The deploy smoke default
   and docs use the new host
-  ([#38](https://github.com/thordin9/apotheke-autofill-service/pull/38)).
+  ([#38](https://github.com/thordin9/apotheke-autofill-service/pull/38))
+  (superseded by
+  [#39](https://github.com/thordin9/apotheke-autofill-service/pull/39):
+  webapp.gr retired).
 - **Deploy doc: paid-tier Neuron cap wording.** The Paid tier section now
   calls 30000 the project's own daily cap for `TIER=paid`, not a Cloudflare
   limit, and wraps that paragraph with identifiers in backticks

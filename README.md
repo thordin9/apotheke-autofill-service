@@ -9,8 +9,8 @@ Contract: [docs/api-v1.md](docs/api-v1.md) · [openapi.yaml](openapi.yaml)
 served at `https://autofill.services.getapotheke.com`. The legacy hostname
 `https://autofill.services.getapotheke.eu` stays live until clients move, then
 becomes a 308 redirect. `apotheke-autofill-service.webapp.gr` was retired on
-2026-10-29. A fork sets its own `<your-domain>` and its own production secrets. Install, the
-one-time secret, and the main-only deploy Action are in
+2026-10-29. A fork sets its own `<your-domain>` and its own production
+secrets. Install, the one-time secret, and the main-only deploy Action are in
 [docs/cloudflare-workers-deploy.md](docs/cloudflare-workers-deploy.md).
 Apotheke only changes the base URL and the bearer token. The Worker reports
 `backend: "cloudflare-workers"` and, at the default body cap,
