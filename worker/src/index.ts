@@ -4,6 +4,7 @@ import { bytesToBase64 } from "./base64";
 import { Budget } from "./budget";
 import { parseContext } from "./context";
 import { errorResponse, HttpError, httpErrorResponse, json, readLimitedBody } from "./http";
+import { installationBudget, LIMIT_MESSAGE, WARNING_MESSAGE } from "./installation";
 import { logRequest, type RequestTiming } from "./log";
 import { advertisedImageBytes, maxImageBytes, readSuggestParts } from "./multipart";
 import { resolveTier } from "./tier";
@@ -14,7 +15,7 @@ import {
   parseNeuronBudget,
   parseRequestCap,
 } from "./neurons";
-import { secondsUntilUtcMidnight } from "./time";
+import { secondsUntilNextUtcMonth, secondsUntilUtcMidnight } from "./time";
 import { clamp, extractJson, NOT_JSON, NO_FIELDS, publicSuggestion, SuggestionError } from "./validate";
 
 export { Budget };
@@ -133,6 +134,7 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
     });
   }
   const { neuronBudget, requestCap, maxBytes } = limits(env);
+  const installation = installationBudget(request);
   const imageCap = maxImageBytes(maxBytes);
   const body = await readLimitedBody(request, maxBytes);
   const parts = readSuggestParts(body, request.headers.get("content-type"), imageCap);
@@ -240,6 +242,25 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
     }
   };
 
+  // A hosted installation's monthly budget, counted once per suggest at admission like the daily request cap.
+  let warning = false;
+  if (installation) {
+    let month;
+    try {
+      month = await env.BUDGET.getByName(`installation:${installation.id}`).reserveMonthly({
+        nowMs: now,
+        hard: installation.hard,
+        soft: installation.soft,
+      });
+    } catch {
+      throw new HttpError(503, "backend_unavailable", "the service could not complete the request");
+    }
+    if (!month.ok) {
+      throw new HttpError(429, "autofill_limit", LIMIT_MESSAGE, { "retry-after": String(secondsUntilNextUtcMonth(now)) });
+    }
+    warning = month.warn;
+  }
+
   const first = await attempt(prompts.first, true);
   let judged = judge(first.content);
   if (!judged.ok) {
@@ -247,7 +268,9 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
     judged = judge(second.content);
     if (!judged.ok) throw new HttpError(503, "backend_error", judged.message);
   }
-  return json(publicSuggestion(judged.suggestion, AI_MODEL));
+  const out = publicSuggestion(judged.suggestion, AI_MODEL);
+  if (warning) out.warning = WARNING_MESSAGE;
+  return json(out);
 }
 
 async function route(request: Request, env: Env, timing: RequestTiming): Promise<Response> {

@@ -257,6 +257,7 @@ All errors are JSON: `{"error":{"code":"...","message":"..."}}`.
 | 413 | `payload_too_large` | Python: image bytes > `MAX_IMAGE_BYTES` env (default 10 MiB = 10485760). Worker: whole request body > `MAX_UPLOAD_BYTES` (default 1 MiB = 1048576; paid 2097152). The body message is `request body exceeds <MAX_UPLOAD_BYTES> bytes`. A single numeric `Content-Length` over that cap is `413` before the body is read. A single numeric `Content-Length` within the cap is buffered and is still `413` when the bytes read exceed the cap. On a Request built in code, a body shorter or longer than that declared length is `400` `invalid Content-Length`. Over the network, bytes past the declared length are not part of the body, and a short body waits for the client and then gets `400` `expected multipart/form-data`. A missing `Content-Length` is counted as it is read and aborted over the cap. A non-numeric, negative, or combined `Content-Length` is a plain-text 400 from workerd before the Worker runs; if one reaches the Worker it returns JSON `400` `invalid Content-Length` and does not buffer. An image part over the enforced image cap (body cap minus 64 KiB, default 983040) and Workers AI code 3006 are also `413`. `/v1/info` advertises `min(524288, body cap − 64 KiB)`, which is 524288 at the default body cap. That advertised number is not the 413 threshold |
 | 415 | `unsupported_media_type` | magic bytes are not JPEG/PNG/WebP (or HEIC/HEIF without `pillow-heif`) |
 | 429 | `rate_limited` | Worker only. Per-location rate limit on `POST /v1/suggest` after auth (`Retry-After: 60`). Loosely enforced; the daily cap is the `503` below |
+| 429 | `autofill_limit` | Worker only. The installation named by `X-Apotheke-Installation` used its monthly calls: message `Autofill limit reached for this month`, `Retry-After` until 00:00 UTC on the 1st of next month (see [Per-installation budget](#per-installation-budget)) |
 | 503 | `backend_unavailable` | backend not implemented, unreachable, still warming up, reloading a model it had unloaded, or loading the model a client picked with `context.model`, when loading plus answering would not fit in the timeout (otherwise the request waits for the load), or busy (queue full, or a queued request would not finish within the timeout). Warming-up, reloading, model-loading and busy responses carry `Retry-After: <seconds>` (for a cold start, the model's remaining load time; see [Choosing a model](#choosing-a-model-v12)) |
 | 503 | `backend_error` | backend answered but its output was unusable (e.g. model returned invalid/empty JSON, upstream HTTP error) |
 | 504 | `backend_timeout` | backend exceeded `BACKEND_TIMEOUT_S` (default 45 s) |
@@ -301,6 +302,34 @@ being absent.
   successful suggest. `GET /healthz` answers `503` `{"status":"degraded"}`
   when a warm model or the loaded production model has `size_vram` 0 (Ollama
   started before CUDA and is on CPU) and does not list models.
+
+## Per-installation budget
+
+Worker only. A hosted Apotheke can name the installation a request is for, and
+the Worker then keeps a monthly budget for it in its own `Budget` Durable
+Object (`installation:<id>`), on top of the global daily budget. A request
+without `X-Apotheke-Installation` is handled exactly as before, and the other
+two headers are then ignored.
+
+| Header | Value |
+|---|---|
+| `X-Apotheke-Installation` | The installation id: lower-case letters, digits and single hyphens, at most 63 characters (the hosted DO name) |
+| `X-Apotheke-Autofill-Limit` | Optional. Hard monthly limit on `POST /v1/suggest` calls, a non-negative integer. Absent means the calls are counted but not limited |
+| `X-Apotheke-Autofill-Soft` | Optional. Soft value, a non-negative integer. Default 80% of the hard value |
+
+- One call is counted per `POST /v1/suggest` once the request is valid and
+  before the model runs (a repair retry is not counted again), in calendar
+  months (UTC). Like the daily request cap, a call refused later by the
+  global budget or failed by the model still counts.
+- At the hard value the answer is `429` `autofill_limit` with the message
+  `Autofill limit reached for this month` and `Retry-After` until the next
+  month. The model is not called.
+- From the soft value a successful answer carries
+  `"warning": "Autofill is close to this month's limit"`.
+- A malformed id or limit is `400` `bad_request`.
+- The caller is trusted to send its own installation and limit (from its plan),
+  behind the same bearer token. A hosted Apotheke is meant to call through a
+  service binding; that wiring is on the Apotheke side.
 
 ## Cloudflare Worker
 
