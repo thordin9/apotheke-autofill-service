@@ -134,6 +134,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Added
 
+- **Per-installation monthly autofill budget (Worker).** A request with
+  `X-Apotheke-Installation` (and optional `X-Apotheke-Autofill-Limit` and
+  `X-Apotheke-Autofill-Soft`, default 80% of the limit) is counted per UTC
+  month in its own `Budget` object. At the limit the answer is `429`
+  `autofill_limit` "Autofill limit reached for this month"; from the soft
+  value a suggestion carries `warning`. Requests without the header are
+  unchanged
+  ([#41](https://github.com/thordin9/apotheke-autofill-service/pull/41)).
 - **Opt-in Worker paid tier.** `wrangler deploy` stays free: body cap 1048576,
   enforced image cap 983040, `max_image_bytes` 524288, daily Neuron budget
   6000. `wrangler deploy --env paid` sets `TIER=paid`, body cap 2097152,
