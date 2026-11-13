@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 
-import { resetsAtIso, secondsUntilUtcMidnight, utcDay } from "./time";
+import { resetsAtIso, secondsUntilUtcMidnight, utcDay, utcMonth } from "./time";
 
 interface BudgetRow {
   day: string;
@@ -32,6 +32,21 @@ export interface SettleInput {
   neuronActual: number;
 }
 
+export interface MonthlyInput {
+  nowMs: number;
+  /** null means no monthly limit: the call is only counted. */
+  hard: number | null;
+  soft: number;
+}
+
+export interface MonthlyResult {
+  ok: boolean;
+  /** Calls this month, including this one when ok. */
+  used: number;
+  /** True once used reaches soft. */
+  warn: boolean;
+}
+
 export interface BudgetSnapshot {
   day: string;
   used: number;
@@ -45,6 +60,8 @@ export interface BudgetSnapshot {
 
 /** One SQLite Durable Object for the whole Worker (`idFromName("global")`).
  * Requests are serialized on this instance, so reserve cannot overshoot.
+ * An installation's monthly autofill calls use their own instance
+ * (`installation:<id>`) and only its `monthly` table.
  */
 export class Budget extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -82,6 +99,20 @@ export class Budget extends DurableObject<Env> {
       row.requests + (input.countRequest ? 1 : 0),
     );
     return { ok: true, retryAfter: 0, resetsAt: resetsAtIso(input.nowMs) };
+  }
+
+  /** Counts one autofill call for this calendar month (UTC), unless hard is reached. */
+  async reserveMonthly(input: MonthlyInput): Promise<MonthlyResult> {
+    const sql = this.ctx.storage.sql;
+    sql.exec("CREATE TABLE IF NOT EXISTS monthly (id INTEGER PRIMARY KEY CHECK (id = 1), month TEXT NOT NULL, calls INTEGER NOT NULL)");
+    const month = utcMonth(input.nowMs);
+    const rows = sql.exec("SELECT month, calls FROM monthly WHERE id = 1").toArray() as unknown as { month: string; calls: number }[];
+    // Roll forward only, as for the day.
+    const used = rows.length === 0 || rows[0].month < month ? 0 : rows[0].calls;
+    const kept = rows.length === 0 || rows[0].month < month ? month : rows[0].month;
+    if (input.hard !== null && used >= input.hard) return { ok: false, used, warn: true };
+    sql.exec("INSERT OR REPLACE INTO monthly (id, month, calls) VALUES (1, ?, ?)", kept, used + 1);
+    return { ok: true, used: used + 1, warn: used + 1 >= input.soft };
   }
 
   async settle(input: SettleInput): Promise<{ ok: true }> {

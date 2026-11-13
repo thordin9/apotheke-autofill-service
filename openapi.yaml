@@ -303,6 +303,12 @@ components:
             `model_used` is that backend's model id (the Cloudflare model id
             when `backend_used` is `cloudflare`). The Worker sends
             `cloudflare-workers`.
+        warning:
+          type: string
+          description: |
+            Worker only, optional. "Autofill is close to this month's limit"
+            when the request named an installation (X-Apotheke-Installation)
+            whose monthly calls reached the soft value. Absent otherwise.
     NeuronBudget:
       type: object
       additionalProperties: false
@@ -426,7 +432,10 @@ components:
         advertised number is not the 413 threshold.
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
     RateLimited:
-      description: Worker only. Per-location rate limit after auth. Retry-After is 60.
+      description: |
+        Worker only. Per-location rate limit after auth (`rate_limited`, Retry-After 60), or an installation's
+        monthly budget (`autofill_limit`, "Autofill limit reached for this month", Retry-After until the next
+        month, 00:00 UTC on the 1st).
       headers:
         Retry-After: {schema: {type: integer}}
       content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
