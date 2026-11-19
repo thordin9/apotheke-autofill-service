@@ -11,7 +11,8 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   A reserved monthly call is refunded when the global daily budget refuses
   the request or the model or parse fails, so a retry can still succeed. A
   successful suggestion still counts once (a repair retry is not counted
-  again).
+  again)
+  ([#43](https://github.com/thordin9/apotheke-autofill-service/pull/43)).
 
 ### CI
 
