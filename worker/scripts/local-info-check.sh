@@ -72,7 +72,7 @@ const names = match[1]
     return (bits[1] ?? bits[0]).trim();
   });
 process.stdout.write(`${names.join("\n")}\n`);
-const allowed = new Set(["Budget", "default"]);
+const allowed = new Set(["Budget", "HostedAutofill", "default"]);
 if (names.length !== allowed.size || names.some((name) => !allowed.has(name))) {
   process.stderr.write("unexpected bundle exports\n");
   process.exit(1);
