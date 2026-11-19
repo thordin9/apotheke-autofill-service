@@ -322,9 +322,13 @@ request without them is handled exactly as before.
 
 - One call is reserved per `POST /v1/suggest` once the request is valid and
   before the model runs (a repair retry is not reserved again), in calendar
-  months (UTC). A later refusal by the global budget, or a model or parse
-  failure, is refunded so it does not use up the month. A successful
-  suggestion keeps the count.
+  months (UTC). A call that fails before anything is charged to the daily
+  budget (a refusal by the global budget) is refunded so it does not use up
+  the month. Once neurons are charged (a model answer, or the estimate for a
+  failed model call), a later failure, such as a model error or a parse
+  failure, keeps the count, as does a successful suggestion. The refund is
+  best effort: if the request is aborted or the refund itself fails, the call
+  still counts.
 - At the hard value the answer is `429` `autofill_limit` with the message
   `Autofill limit reached for this month` and `Retry-After` until the next
   month. The model is not called.

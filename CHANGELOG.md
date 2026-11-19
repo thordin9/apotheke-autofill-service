@@ -9,10 +9,16 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 - **Failed installation autofill calls no longer use up the month (Worker).**
   A reserved monthly call is refunded when the global daily budget refuses
-  the request or the model or parse fails, so a retry can still succeed. A
+  the request before anything is charged, so a retry can still succeed. A
   successful suggestion still counts once (a repair retry is not counted
   again)
   ([#43](https://github.com/thordin9/apotheke-autofill-service/pull/43)).
+- **A failed installation autofill call is refunded only when nothing was
+  charged (Worker).** Once neurons are charged to the daily budget (a model
+  answer, or the estimate for a failed model call), a later failure, such as
+  a model error or a parse failure, keeps the monthly count. The refund is
+  best effort: an aborted request or a failed refund still counts
+  ([#44](https://github.com/thordin9/apotheke-autofill-service/pull/44)).
 
 ### CI
 

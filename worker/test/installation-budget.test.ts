@@ -130,23 +130,77 @@ describe("per-installation monthly autofill budget", () => {
     });
   });
 
-  it("refunds a model or parse failure, and does not refund a repaired success (L-2191)", async () => {
+  it("keeps the count after a model error, a parse failure or a repaired success (L-2295, L-2298)", async () => {
     const boom = scriptedAi([() => Promise.reject(new Error("model down"))]);
     const model = await callHosted(hosted("refund-model", { "x-apotheke-autofill-limit": "1" }), { AI: boom.ai });
     expect(model.status).toBe(503);
     expect(boom.calls).toHaveLength(1);
-    expect((await callHosted(hosted("refund-model", { "x-apotheke-autofill-limit": "1" }), { AI: scriptedAi([reply(VALID)]).ai })).status).toBe(200);
+    // The thrown model call was charged the estimate, so the month keeps the call.
+    expect((await callHosted(hosted("refund-model", { "x-apotheke-autofill-limit": "1" }), { AI: scriptedAi([reply(VALID)]).ai })).status).toBe(429);
 
     const parse = scriptedAi([reply("nope"), reply("still nope")]);
     const failed = await callHosted(hosted("refund-parse", { "x-apotheke-autofill-limit": "1" }), { AI: parse.ai });
     expect(failed.status).toBe(503);
     expect(((await bodyOf(failed)).error as { code: string }).code).toBe("backend_error");
-    expect((await callHosted(hosted("refund-parse", { "x-apotheke-autofill-limit": "1" }), { AI: scriptedAi([reply(VALID)]).ai })).status).toBe(200);
+    expect(parse.calls).toHaveLength(2);
+    // The model answered, so the month keeps the call.
+    expect((await callHosted(hosted("refund-parse", { "x-apotheke-autofill-limit": "1" }), { AI: scriptedAi([reply(VALID)]).ai })).status).toBe(429);
 
     const repaired = scriptedAi([reply("nope"), reply(VALID)]);
     expect((await callHosted(hosted("refund-repair", { "x-apotheke-autofill-limit": "1" }), { AI: repaired.ai })).status).toBe(200);
     const second = await callHosted(hosted("refund-repair", { "x-apotheke-autofill-limit": "1" }), { AI: scriptedAi([reply(VALID)]).ai });
     expect(second.status).toBe(429);
+  });
+
+  it("keeps the count when the model answers once and the repair is refused (N-2299)", async () => {
+    const id = "one-answer";
+    // Room for one estimate: the first answer (21.37) leaves too little for the repair.
+    const { ai, calls } = scriptedAi([reply("nope"), reply(VALID)]);
+    const res = await callHosted(hosted(id), { AI: ai, AUTOFILL_DAILY_NEURON_BUDGET: "40" });
+    expect(res.status).toBe(503);
+    expect(await bodyOf(res)).toEqual({ error: { code: "backend_unavailable", message: "daily capacity is exhausted" } });
+    expect(calls).toHaveLength(1);
+    expect((await env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).used).toBe(1);
+  });
+
+  it("refunds exactly one call when others are already counted (N-2296)", async () => {
+    const id = "refund-one";
+    const used = () => env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 });
+    expect((await callHosted(hosted(id), { AI: scriptedAi([reply(VALID)]).ai })).status).toBe(200);
+    expect((await callHosted(hosted(id), { AI: scriptedAi([reply(VALID)]).ai })).status).toBe(200);
+    const res = await callHosted(hosted(id), { AI: scriptedAi([reply(VALID)]).ai, AUTOFILL_DAILY_NEURON_BUDGET: "0" });
+    expect(res.status).toBe(503);
+    expect((await used()).used).toBe(2);
+  });
+
+  it("returns the original error and keeps the count when the refund fails (N-2296)", async () => {
+    const id = "refund-throws";
+    const real = env.BUDGET;
+    const BUDGET = {
+      getByName(name: string) {
+        const stub = real.getByName(name);
+        if (!name.startsWith("installation:")) return stub;
+        return {
+          reserveMonthly: (input: { nowMs: number; hard: number | null; soft: number }) => stub.reserveMonthly(input),
+          refundMonthly: async () => {
+            throw new Error("refund unavailable");
+          },
+        };
+      },
+    };
+    const res = await callHosted(hosted(id), { AI: scriptedAi([reply(VALID)]).ai, AUTOFILL_DAILY_NEURON_BUDGET: "0", BUDGET });
+    expect(res.status).toBe(503);
+    expect(await bodyOf(res)).toEqual({ error: { code: "backend_unavailable", message: "daily capacity is exhausted" } });
+    expect(res.headers.get("retry-after")).not.toBeNull();
+    expect((await real.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).used).toBe(1);
+  });
+
+  it("refunds in the month of the reservation, not the current one (N-2296)", async () => {
+    const id = "refund-boundary";
+    const lastMs = Date.parse("2025-01-31T23:59:59.999Z");
+    const res = await callHosted(hosted(id, {}, lastMs), { AI: scriptedAi([reply(VALID)]).ai, AUTOFILL_DAILY_NEURON_BUDGET: "0" });
+    expect(res.status).toBe(503);
+    expect((await env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: lastMs, hard: 0, soft: 0 })).used).toBe(0);
   });
 
   it("does not decrement twice or across a month boundary", async () => {
