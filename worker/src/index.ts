@@ -250,7 +250,7 @@ async function suggest(
   };
 
   // A hosted installation's monthly budget, reserved once per suggest at admission like the daily request cap,
-  // and refunded if the call then fails (global budget, model, or parse).
+  // and refunded if the call then fails before any model call returned (global budget, capacity, model error).
   let warning = false;
   let monthReserved = false;
   if (installation) {
@@ -272,7 +272,8 @@ async function suggest(
   }
 
   const refundMonth = async () => {
-    if (!monthReserved || !installation) return;
+    // A failure after a model call (such as a parse failure) keeps the count.
+    if (!monthReserved || !installation || timing.aiCalls > 0) return;
     monthReserved = false;
     try {
       await env.BUDGET.getByName(`installation:${installation.id}`).refundMonthly({ nowMs: now });
