@@ -307,8 +307,9 @@ components:
           type: string
           description: |
             Worker only, optional. "Autofill is close to this month's limit"
-            when the request named an installation (X-Apotheke-Installation)
-            whose monthly calls reached the soft value. Absent otherwise.
+            when the request named an installation (X-Apotheke-Installation,
+            read only through the HostedAutofill service binding) whose
+            monthly calls reached the soft value. Absent otherwise.
     NeuronBudget:
       type: object
       additionalProperties: false

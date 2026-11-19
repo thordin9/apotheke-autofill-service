@@ -1,10 +1,12 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
+
 import { AI_MODEL, isAiStub, prepareAi, promptsFor, readTurn, workersAiCode, workersAiHttpStatus } from "./ai";
 import { bearerToken, tokensMatch } from "./auth";
 import { bytesToBase64 } from "./base64";
 import { Budget } from "./budget";
 import { parseContext } from "./context";
 import { errorResponse, HttpError, httpErrorResponse, json, readLimitedBody } from "./http";
-import { installationBudget, LIMIT_MESSAGE, WARNING_MESSAGE } from "./installation";
+import { hasInstallationHeaders, installationBudget, LIMIT_MESSAGE, WARNING_MESSAGE, type InstallationBudget } from "./installation";
 import { logRequest, type RequestTiming } from "./log";
 import { advertisedImageBytes, maxImageBytes, readSuggestParts } from "./multipart";
 import { resolveTier } from "./tier";
@@ -120,8 +122,14 @@ async function info(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function suggest(request: Request, env: Env, timing: RequestTiming): Promise<Response> {
-  const key = request.headers.get("CF-Connecting-IP") || "unknown";
+async function suggest(
+  request: Request,
+  env: Env,
+  timing: RequestTiming,
+  installation: InstallationBudget | null,
+): Promise<Response> {
+  // A hosted call is limited per installation: the edge Worker is one client for all of them.
+  const key = installation ? `installation:${installation.id}` : request.headers.get("CF-Connecting-IP") || "unknown";
   let allowed = false;
   try {
     allowed = (await env.RATE_LIMITER.limit({ key })).success;
@@ -134,7 +142,6 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
     });
   }
   const { neuronBudget, requestCap, maxBytes } = limits(env);
-  const installation = installationBudget(request);
   const imageCap = maxImageBytes(maxBytes);
   const body = await readLimitedBody(request, maxBytes);
   const parts = readSuggestParts(body, request.headers.get("content-type"), imageCap);
@@ -273,7 +280,7 @@ async function suggest(request: Request, env: Env, timing: RequestTiming): Promi
   return json(out);
 }
 
-async function route(request: Request, env: Env, timing: RequestTiming): Promise<Response> {
+async function route(request: Request, env: Env, timing: RequestTiming, hosted: boolean): Promise<Response> {
   const path = new URL(request.url).pathname;
   if (request.method === "GET" && path === "/healthz") {
     if (!env.AUTOFILL_TOKEN) return json({ status: "degraded" }, 503);
@@ -282,16 +289,27 @@ async function route(request: Request, env: Env, timing: RequestTiming): Promise
   if (path !== "/healthz" && path !== "/v1/info" && path !== "/v1/suggest") {
     throw new HttpError(404, "bad_request", "Not Found");
   }
-  await authorize(request, env);
+  // The installation headers count only through HostedAutofill (a service binding, no bearer token). On the public
+  // routes they are refused, so a bearer token holder cannot name an installation or its limit.
+  let installation: InstallationBudget | null = null;
+  if (hosted) {
+    installation = installationBudget(request);
+    if (!installation) throw new HttpError(400, "bad_request", "missing x-apotheke-installation");
+  } else {
+    if (hasInstallationHeaders(request)) {
+      throw new HttpError(400, "bad_request", "installation headers are accepted only through the service binding");
+    }
+    await authorize(request, env);
+  }
   if (request.method === "GET" && path === "/v1/info") return info(request, env);
-  if (request.method === "POST" && path === "/v1/suggest") return suggest(request, env, timing);
+  if (request.method === "POST" && path === "/v1/suggest") return suggest(request, env, timing, installation);
   if (path === "/healthz" || path === "/v1/info" || path === "/v1/suggest") {
     throw new HttpError(405, "bad_request", "Method Not Allowed");
   }
   throw new HttpError(404, "bad_request", "Not Found");
 }
 
-async function handle(request: Request, env: Env): Promise<Response> {
+async function handle(request: Request, env: Env, hosted = false): Promise<Response> {
   const started = Date.now();
   const timing: RequestTiming = {
     base64Ms: 0,
@@ -302,7 +320,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     aiCalls: 0,
   };
   try {
-    const response = await route(request, env, timing);
+    const response = await route(request, env, timing, hosted);
     logRequest(response.status, started, timing);
     return response;
   } catch (err) {
@@ -321,3 +339,14 @@ export default {
     return handle(request, env);
   },
 } satisfies ExportedHandler<Env>;
+
+/**
+ * Hosted Apotheke entrypoint, reached only through a service binding from the Apotheke edge Worker
+ * (`entrypoint = "HostedAutofill"`), never from a route. The edge sets X-Apotheke-Installation from its own routing
+ * and the limit headers from the plan, so this path needs no bearer token and requires the installation header.
+ */
+export class HostedAutofill extends WorkerEntrypoint<Env> {
+  async fetch(request: Request): Promise<Response> {
+    return handle(request, this.env, true);
+  }
+}

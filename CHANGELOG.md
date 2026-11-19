@@ -46,6 +46,13 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ### Changed
 
+- **Installation headers only through the hosted entrypoint (Worker).**
+  `X-Apotheke-Installation`, `X-Apotheke-Autofill-Limit` and
+  `X-Apotheke-Autofill-Soft` are read only on the new `HostedAutofill`
+  entrypoint, which the Apotheke edge Worker calls through a service binding
+  without a bearer token; there the installation is required and keys the rate
+  limiter. The public routes answer `400` `bad_request` when any of them is
+  sent. Requests without them are unchanged.
 - **Custom domain `apotheke-autofill-service.webapp.gr` removed.** Both
   `[[routes]]` and `[[env.paid.routes]]` in `worker/wrangler.toml` now list
   `autofill.services.getapotheke.com` then `autofill.services.getapotheke.eu`;
