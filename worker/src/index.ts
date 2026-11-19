@@ -249,8 +249,10 @@ async function suggest(
     }
   };
 
-  // A hosted installation's monthly budget, counted once per suggest at admission like the daily request cap.
+  // A hosted installation's monthly budget, reserved once per suggest at admission like the daily request cap,
+  // and refunded if the call then fails (global budget, model, or parse).
   let warning = false;
+  let monthReserved = false;
   if (installation) {
     let month;
     try {
@@ -265,19 +267,35 @@ async function suggest(
     if (!month.ok) {
       throw new HttpError(429, "autofill_limit", LIMIT_MESSAGE, { "retry-after": String(secondsUntilNextUtcMonth(now)) });
     }
+    monthReserved = true;
     warning = month.warn;
   }
 
-  const first = await attempt(prompts.first, true);
-  let judged = judge(first.content);
-  if (!judged.ok) {
-    const second = await attempt(prompts.repair, false);
-    judged = judge(second.content);
-    if (!judged.ok) throw new HttpError(503, "backend_error", judged.message);
+  const refundMonth = async () => {
+    if (!monthReserved || !installation) return;
+    monthReserved = false;
+    try {
+      await env.BUDGET.getByName(`installation:${installation.id}`).refundMonthly({ nowMs: now });
+    } catch {
+      // The count stays, which fails closed.
+    }
+  };
+
+  try {
+    const first = await attempt(prompts.first, true);
+    let judged = judge(first.content);
+    if (!judged.ok) {
+      const second = await attempt(prompts.repair, false);
+      judged = judge(second.content);
+      if (!judged.ok) throw new HttpError(503, "backend_error", judged.message);
+    }
+    const out = publicSuggestion(judged.suggestion, AI_MODEL);
+    if (warning) out.warning = WARNING_MESSAGE;
+    return json(out);
+  } catch (err) {
+    await refundMonth();
+    throw err;
   }
-  const out = publicSuggestion(judged.suggestion, AI_MODEL);
-  if (warning) out.warning = WARNING_MESSAGE;
-  return json(out);
 }
 
 async function route(request: Request, env: Env, timing: RequestTiming, hosted: boolean): Promise<Response> {
