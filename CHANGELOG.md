@@ -13,6 +13,11 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   successful suggestion still counts once (a repair retry is not counted
   again)
   ([#43](https://github.com/thordin9/apotheke-autofill-service/pull/43)).
+- **A failed installation autofill call is refunded only before the model
+  answers (Worker).** A failure after a model call, such as a parse failure,
+  now keeps the monthly count. The refund is best effort: an aborted request
+  or a failed refund still counts
+  ([#44](https://github.com/thordin9/apotheke-autofill-service/pull/44)).
 
 ### CI
 
