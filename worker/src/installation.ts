@@ -21,6 +21,11 @@ function count(raw: string | null, name: string): number | null {
   return Number(value);
 }
 
+/** True when the request carries any of the three installation headers. */
+export function hasInstallationHeaders(request: Request): boolean {
+  return [INSTALLATION_HEADER, LIMIT_HEADER, SOFT_HEADER].some((name) => request.headers.has(name));
+}
+
 /** The caller's installation and its monthly limit, or null without an installation id (today's behaviour). */
 export function installationBudget(request: Request): InstallationBudget | null {
   const id = request.headers.get(INSTALLATION_HEADER);

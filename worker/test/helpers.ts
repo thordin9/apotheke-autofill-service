@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 
-import worker from "../src/index";
+import worker, { HostedAutofill } from "../src/index";
 
 export const TOKEN = "test-token";
 
@@ -117,6 +117,15 @@ export async function call(request: Request, overrides: Record<string, unknown> 
     { ...env, RATE_LIMITER: allowAll, ...overrides } as Env,
     ctx,
   );
+  await waitOnExecutionContext(ctx);
+  return response;
+}
+
+/** The request as the Apotheke edge Worker sends it through the service binding (HostedAutofill). */
+export async function callHosted(request: Request, overrides: Record<string, unknown> = {}): Promise<Response> {
+  const ctx = createExecutionContext();
+  const entry = new HostedAutofill(ctx, { ...env, RATE_LIMITER: allowAll, ...overrides } as Env);
+  const response = await entry.fetch(request);
   await waitOnExecutionContext(ctx);
   return response;
 }

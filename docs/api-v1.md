@@ -305,11 +305,14 @@ being absent.
 
 ## Per-installation budget
 
-Worker only. A hosted Apotheke can name the installation a request is for, and
+Worker only. A hosted Apotheke names the installation a request is for, and
 the Worker then keeps a monthly budget for it in its own `Budget` Durable
-Object (`installation:<id>`), on top of the global daily budget. A request
-without `X-Apotheke-Installation` is handled exactly as before, and the other
-two headers are then ignored.
+Object (`installation:<id>`), on top of the global daily budget. The headers
+below are read only on the `HostedAutofill` entrypoint, which the Apotheke edge
+Worker reaches through a service binding (`entrypoint = "HostedAutofill"`); it
+has no route and needs no bearer token. On the public routes a request with any
+of the three headers is `400` `bad_request` before the token check, and a
+request without them is handled exactly as before.
 
 | Header | Value |
 |---|---|
@@ -327,9 +330,10 @@ two headers are then ignored.
 - From the soft value a successful answer carries
   `"warning": "Autofill is close to this month's limit"`.
 - A malformed id or limit is `400` `bad_request`.
-- The caller is trusted to send its own installation and limit (from its plan),
-  behind the same bearer token. A hosted Apotheke is meant to call through a
-  service binding; that wiring is on the Apotheke side.
+- On `HostedAutofill`, `X-Apotheke-Installation` is required (`400` without
+  it), and the per-location rate limit is keyed by the installation instead of
+  `CF-Connecting-IP`. The edge Worker sets all three headers itself and drops
+  any the Apotheke container sent.
 
 ## Cloudflare Worker
 
