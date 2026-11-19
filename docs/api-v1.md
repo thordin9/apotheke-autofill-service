@@ -320,10 +320,11 @@ request without them is handled exactly as before.
 | `X-Apotheke-Autofill-Limit` | Optional. Hard monthly limit on `POST /v1/suggest` calls, a non-negative integer. Absent means the calls are counted but not limited |
 | `X-Apotheke-Autofill-Soft` | Optional. Soft value, a non-negative integer. Default 80% of the hard value |
 
-- One call is counted per `POST /v1/suggest` once the request is valid and
-  before the model runs (a repair retry is not counted again), in calendar
-  months (UTC). Like the daily request cap, a call refused later by the
-  global budget or failed by the model still counts.
+- One call is reserved per `POST /v1/suggest` once the request is valid and
+  before the model runs (a repair retry is not reserved again), in calendar
+  months (UTC). A later refusal by the global budget, or a model or parse
+  failure, is refunded so it does not use up the month. A successful
+  suggestion keeps the count.
 - At the hard value the answer is `429` `autofill_limit` with the message
   `Autofill limit reached for this month` and `Retry-After` until the next
   month. The model is not called.

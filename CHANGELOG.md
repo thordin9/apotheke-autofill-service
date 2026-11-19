@@ -5,6 +5,14 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Failed installation autofill calls no longer use up the month (Worker).**
+  A reserved monthly call is refunded when the global daily budget refuses
+  the request or the model or parse fails, so a retry can still succeed. A
+  successful suggestion still counts once (a repair retry is not counted
+  again).
+
 ### CI
 
 - **Deploy Worker dry-runs the tier check before upload.** Before the real
@@ -52,7 +60,8 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   entrypoint, which the Apotheke edge Worker calls through a service binding
   without a bearer token; there the installation is required and keys the rate
   limiter. The public routes answer `400` `bad_request` when any of them is
-  sent. Requests without them are unchanged.
+  sent. Requests without them are unchanged
+  ([#42](https://github.com/thordin9/apotheke-autofill-service/pull/42)).
 - **Custom domain `apotheke-autofill-service.webapp.gr` removed.** Both
   `[[routes]]` and `[[env.paid.routes]]` in `worker/wrangler.toml` now list
   `autofill.services.getapotheke.com` then `autofill.services.getapotheke.eu`;

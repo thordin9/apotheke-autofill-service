@@ -115,6 +115,21 @@ export class Budget extends DurableObject<Env> {
     return { ok: true, used: used + 1, warn: used + 1 >= input.soft };
   }
 
+  /** Gives back one reserved call for this calendar month (UTC), if any remain. */
+  async refundMonthly(input: { nowMs: number }): Promise<{ ok: true; used: number }> {
+    const sql = this.ctx.storage.sql;
+    sql.exec("CREATE TABLE IF NOT EXISTS monthly (id INTEGER PRIMARY KEY CHECK (id = 1), month TEXT NOT NULL, calls INTEGER NOT NULL)");
+    const month = utcMonth(input.nowMs);
+    const rows = sql.exec("SELECT month, calls FROM monthly WHERE id = 1").toArray() as unknown as { month: string; calls: number }[];
+    if (rows.length === 0 || rows[0].month !== month || rows[0].calls <= 0) {
+      const used = rows.length === 0 || rows[0].month < month ? 0 : rows[0].calls;
+      return { ok: true, used };
+    }
+    const used = rows[0].calls - 1;
+    sql.exec("INSERT OR REPLACE INTO monthly (id, month, calls) VALUES (1, ?, ?)", month, used);
+    return { ok: true, used };
+  }
+
   async settle(input: SettleInput): Promise<{ ok: true }> {
     const row = this.ensure(input.nowMs);
     this.ctx.storage.sql.exec(

@@ -106,4 +106,97 @@ describe("per-installation monthly autofill budget", () => {
     }
     expect(calls).toHaveLength(0);
   });
+
+  it("refunds a failed call so it does not use up the month (L-2191)", async () => {
+    const id = "refund-failed";
+    const exhausted = { AUTOFILL_DAILY_NEURON_BUDGET: "0" };
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    for (let i = 0; i < 7; i++) {
+      const res = await callHosted(hosted(id, { "x-apotheke-autofill-limit": "7" }), { AI: ai, ...exhausted });
+      expect(res.status).toBe(503);
+    }
+    expect(calls).toHaveLength(0);
+    expect(await env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).toEqual({
+      ok: false,
+      used: 0,
+      warn: true,
+    });
+    // The month is still free: a later success is admitted, not 429.
+    expect((await callHosted(hosted(id, { "x-apotheke-autofill-limit": "7" }), { AI: ai })).status).toBe(200);
+    expect(await env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).toEqual({
+      ok: false,
+      used: 1,
+      warn: true,
+    });
+  });
+
+  it("refunds a model or parse failure, and does not refund a repaired success (L-2191)", async () => {
+    const boom = scriptedAi([() => Promise.reject(new Error("model down"))]);
+    const model = await callHosted(hosted("refund-model", { "x-apotheke-autofill-limit": "1" }), { AI: boom.ai });
+    expect(model.status).toBe(503);
+    expect(boom.calls).toHaveLength(1);
+    expect((await callHosted(hosted("refund-model", { "x-apotheke-autofill-limit": "1" }), { AI: scriptedAi([reply(VALID)]).ai })).status).toBe(200);
+
+    const parse = scriptedAi([reply("nope"), reply("still nope")]);
+    const failed = await callHosted(hosted("refund-parse", { "x-apotheke-autofill-limit": "1" }), { AI: parse.ai });
+    expect(failed.status).toBe(503);
+    expect(((await bodyOf(failed)).error as { code: string }).code).toBe("backend_error");
+    expect((await callHosted(hosted("refund-parse", { "x-apotheke-autofill-limit": "1" }), { AI: scriptedAi([reply(VALID)]).ai })).status).toBe(200);
+
+    const repaired = scriptedAi([reply("nope"), reply(VALID)]);
+    expect((await callHosted(hosted("refund-repair", { "x-apotheke-autofill-limit": "1" }), { AI: repaired.ai })).status).toBe(200);
+    const second = await callHosted(hosted("refund-repair", { "x-apotheke-autofill-limit": "1" }), { AI: scriptedAi([reply(VALID)]).ai });
+    expect(second.status).toBe(429);
+  });
+
+  it("does not decrement twice or across a month boundary", async () => {
+    const stub = env.BUDGET.getByName("installation:refund-unit");
+    expect(await stub.reserveMonthly({ nowMs: midMonth, hard: 2, soft: 2 })).toEqual({ ok: true, used: 1, warn: false });
+    expect(await stub.refundMonthly({ nowMs: midMonth })).toEqual({ ok: true, used: 0 });
+    expect(await stub.refundMonthly({ nowMs: midMonth })).toEqual({ ok: true, used: 0 });
+    expect(await stub.reserveMonthly({ nowMs: midMonth, hard: 2, soft: 2 })).toEqual({ ok: true, used: 1, warn: false });
+    expect(await stub.refundMonthly({ nowMs: nextMonth })).toEqual({ ok: true, used: 0 });
+    expect(await stub.reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).toEqual({ ok: false, used: 1, warn: true });
+  });
+
+  it("admits exactly the hard number of concurrent hosted calls (N-2192)", async () => {
+    const { ai } = scriptedAi([reply(VALID)]);
+    const id = "concurrent-five";
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, () => callHosted(hosted(id, { "x-apotheke-autofill-limit": "5" }), { AI: ai })),
+    );
+    expect(responses.filter((res) => res.status === 200)).toHaveLength(5);
+    expect(responses.filter((res) => res.status === 429)).toHaveLength(5);
+    expect(await env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).toEqual({
+      ok: false,
+      used: 5,
+      warn: true,
+    });
+  });
+
+  it("does not open an installation budget on a public request without the headers (N-2192)", async () => {
+    const { ai } = scriptedAi([reply(VALID)]);
+    const names: string[] = [];
+    const real = env.BUDGET;
+    const BUDGET = {
+      getByName(name: string) {
+        names.push(name);
+        return real.getByName(name);
+      },
+    };
+    expect((await call(suggestRequest(jpeg(), { now: midMonth }), { AI: ai, BUDGET })).status).toBe(200);
+    expect(names.some((name) => name.startsWith("installation:"))).toBe(false);
+    expect(names).toContain("global");
+  });
+
+  it("rejects a 64-character installation id with 400 (N-2192)", async () => {
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const ok = "a".repeat(63);
+    const tooLong = "a".repeat(64);
+    expect((await callHosted(hosted(ok), { AI: ai })).status).toBe(200);
+    const res = await callHosted(hosted(tooLong), { AI: ai });
+    expect(res.status).toBe(400);
+    expect(((await bodyOf(res)).error as { code: string }).code).toBe("bad_request");
+    expect(calls).toHaveLength(1);
+  });
 });
