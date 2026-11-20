@@ -163,6 +163,63 @@ describe("per-installation monthly autofill budget", () => {
     expect((await env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).used).toBe(1);
   });
 
+  it("keeps the count when settle fails after the global budget admitted the call", async () => {
+    const real = env.BUDGET;
+    const BUDGET = {
+      getByName(name: string) {
+        const stub = real.getByName(name);
+        if (name !== "global") return stub;
+        return {
+          reserve: (input: Parameters<typeof stub.reserve>[0]) => stub.reserve(input),
+          settle: async () => {
+            throw new Error("settle unavailable");
+          },
+        };
+      },
+    };
+    const used = (id: string) => real.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 });
+    // Settle fails after a model answer.
+    const answered = await callHosted(hosted("settle-answer"), { AI: scriptedAi([reply(VALID)]).ai, BUDGET });
+    expect(answered.status).toBe(503);
+    expect((await used("settle-answer")).used).toBe(1);
+    // Settle fails in the catch after a thrown model call.
+    const boom = scriptedAi([() => Promise.reject(new Error("model down"))]);
+    expect((await callHosted(hosted("settle-throw"), { AI: boom.ai, BUDGET })).status).toBe(503);
+    expect(boom.calls).toHaveLength(1);
+    expect((await used("settle-throw")).used).toBe(1);
+  });
+
+  it("keeps the count when the model reports 0 neurons and the call then fails", async () => {
+    const id = "zero-neurons";
+    const { ai, calls } = scriptedAi([reply("nope", { neurons: 0 }), reply("still nope", { neurons: 0 })]);
+    const res = await callHosted(hosted(id), { AI: ai });
+    expect(res.status).toBe(503);
+    expect(((await bodyOf(res)).error as { code: string }).code).toBe("backend_error");
+    expect(calls).toHaveLength(2);
+    expect((await env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).used).toBe(1);
+  });
+
+  it("still refunds when the global budget fails before admitting the call", async () => {
+    const id = "reserve-throws";
+    const real = env.BUDGET;
+    const BUDGET = {
+      getByName(name: string) {
+        const stub = real.getByName(name);
+        if (name !== "global") return stub;
+        return {
+          reserve: async () => {
+            throw new Error("reserve unavailable");
+          },
+        };
+      },
+    };
+    const { ai, calls } = scriptedAi([reply(VALID)]);
+    const res = await callHosted(hosted(id), { AI: ai, BUDGET });
+    expect(res.status).toBe(503);
+    expect(calls).toHaveLength(0);
+    expect((await real.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 })).used).toBe(0);
+  });
+
   it("refunds exactly one call when others are already counted (N-2296)", async () => {
     const id = "refund-one";
     const used = () => env.BUDGET.getByName(`installation:${id}`).reserveMonthly({ nowMs: midMonth, hard: 0, soft: 0 });

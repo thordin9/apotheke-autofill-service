@@ -160,6 +160,18 @@ export class Budget extends DurableObject<Env> {
     };
   }
 
+  /** Deletes all of this instance's storage. Returns the number of rows it held (0 when empty or unknown). */
+  async purge(): Promise<{ deleted: number }> {
+    const sql = this.ctx.storage.sql;
+    let deleted = 0;
+    for (const table of ["budget", "monthly"]) {
+      const exists = sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length > 0;
+      if (exists) deleted += (sql.exec(`SELECT COUNT(*) AS n FROM ${table}`).one() as { n: number }).n;
+    }
+    await this.ctx.storage.deleteAll();
+    return { deleted };
+  }
+
   /** Test helper. Not an HTTP route. */
   async reset(): Promise<{ ok: true }> {
     this.ctx.storage.sql.exec("DELETE FROM budget");

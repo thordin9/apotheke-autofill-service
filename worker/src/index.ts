@@ -6,7 +6,7 @@ import { bytesToBase64 } from "./base64";
 import { Budget } from "./budget";
 import { parseContext } from "./context";
 import { errorResponse, HttpError, httpErrorResponse, json, readLimitedBody } from "./http";
-import { hasInstallationHeaders, installationBudget, LIMIT_MESSAGE, WARNING_MESSAGE, type InstallationBudget } from "./installation";
+import { hasInstallationHeaders, installationBudget, isInstallationId, LIMIT_MESSAGE, WARNING_MESSAGE, type InstallationBudget } from "./installation";
 import { logRequest, type RequestTiming } from "./log";
 import { advertisedImageBytes, maxImageBytes, readSuggestParts } from "./multipart";
 import { resolveTier } from "./tier";
@@ -155,6 +155,8 @@ async function suggest(
   const budget = env.BUDGET.getByName("global");
   const prompts = promptsFor(context);
   const prepared = prepareAi(dataUrl, context);
+  // Set once the global budget admits a model call: from then on the estimate is held or charged.
+  let charged = false;
 
   const attempt = async (prompt: string, countRequest: boolean) => {
     let reserved = false;
@@ -172,6 +174,7 @@ async function suggest(
       });
       if (!gate.ok) throw budgetError(now);
       reserved = true;
+      charged = true;
       const raw = await (env.AI as unknown as AiRun).run(AI_MODEL, prepared.inputFor(prompt));
       called = true;
       timing.aiCalls += 1;
@@ -250,7 +253,7 @@ async function suggest(
   };
 
   // A hosted installation's monthly budget, reserved once per suggest at admission like the daily request cap,
-  // and refunded if the call then fails before anything was charged to the daily budget (global budget refusal).
+  // and refunded if the call then fails before the global budget admitted a model call.
   let warning = false;
   let monthReserved = false;
   if (installation) {
@@ -272,8 +275,8 @@ async function suggest(
   }
 
   const refundMonth = async () => {
-    // Once neurons are charged (a model answer, or the estimate for a failed model call), the count stays.
-    if (!monthReserved || !installation || timing.neurons > 0) return;
+    // Once the global budget admitted a model call, the count stays, even if settle failed or usage was 0.
+    if (!monthReserved || !installation || charged) return;
     monthReserved = false;
     try {
       await env.BUDGET.getByName(`installation:${installation.id}`).refundMonthly({ nowMs: now });
@@ -299,8 +302,31 @@ async function suggest(
   }
 }
 
+/** Purge refuses the primary id; hosted suggest still counts its calls. */
+const PRIMARY_INSTALLATION = "primary";
+const PURGE_PATH = /^\/v1\/installations\/([^/]+)\/budget$/;
+
+/** Deletes one installation's monthly budget (its `installation:<id>` Durable Object storage). Idempotent. */
+async function purgeInstallation(env: Env, id: string): Promise<Response> {
+  if (!isInstallationId(id)) throw new HttpError(400, "bad_request", "invalid installation id");
+  if (id === PRIMARY_INSTALLATION) throw new HttpError(400, "bad_request", "the primary installation cannot be purged");
+  let result;
+  try {
+    result = await env.BUDGET.getByName(`installation:${id}`).purge();
+  } catch {
+    throw new HttpError(503, "backend_unavailable", "the service could not complete the request");
+  }
+  return json({ ok: true, installation: id, deleted: result.deleted });
+}
+
 async function route(request: Request, env: Env, timing: RequestTiming, hosted: boolean): Promise<Response> {
   const path = new URL(request.url).pathname;
+  // Only through HostedAutofill (the service binding). On the public routes this path is 404 like any other.
+  const purge = hosted ? PURGE_PATH.exec(path) : null;
+  if (purge) {
+    if (request.method !== "DELETE") throw new HttpError(405, "bad_request", "Method Not Allowed", { allow: "DELETE" });
+    return purgeInstallation(env, purge[1]);
+  }
   if (request.method === "GET" && path === "/healthz") {
     if (!env.AUTOFILL_TOKEN) return json({ status: "degraded" }, 503);
     return json({ status: "ok" });

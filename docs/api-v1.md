@@ -322,11 +322,12 @@ request without them is handled exactly as before.
 
 - One call is reserved per `POST /v1/suggest` once the request is valid and
   before the model runs (a repair retry is not reserved again), in calendar
-  months (UTC). A call that fails before anything is charged to the daily
-  budget (a refusal by the global budget) is refunded so it does not use up
-  the month. Once neurons are charged (a model answer, or the estimate for a
-  failed model call), a later failure, such as a model error or a parse
-  failure, keeps the count, as does a successful suggestion. The refund is
+  months (UTC). A call that fails before the global daily budget admits a
+  model call (a refusal by, or an error from, the global budget) is refunded
+  so it does not use up the month. Once the global budget has admitted a
+  model call, the estimate is held or charged, so a later failure, such as a
+  model error, a parse failure, a failed settle or a model answer that reports
+  0 neurons, keeps the count, as does a successful suggestion. The refund is
   best effort: if the request is aborted or the refund itself fails, the call
   still counts.
 - At the hard value the answer is `429` `autofill_limit` with the message
@@ -339,6 +340,25 @@ request without them is handled exactly as before.
   it), and the per-location rate limit is keyed by the installation instead of
   `CF-Connecting-IP`. The edge Worker sets all three headers itself and drops
   any the Apotheke container sent.
+
+### `DELETE /v1/installations/<id>/budget`
+
+Worker only, and only on `HostedAutofill` (no route, no bearer token, the
+same service binding as above). On the public routes the path is `404`, with
+or without a token. A hosted Apotheke calls it when it purges an installation.
+
+- Deletes all of that installation's monthly budget storage (its
+  `installation:<id>` Durable Object). The global daily budget and other
+  installations are not touched.
+- Answers `200` `{"ok": true, "installation": "<id>", "deleted": <n>}`, where
+  `n` is the number of budget records removed. It is idempotent: a second
+  call, or an id that never had a budget, answers `200` with `"deleted": 0`.
+  A later `POST /v1/suggest` for the same id starts the month from zero.
+- `primary` is refused with `400` `bad_request`, and its budget stays.
+- An id that is not lower-case letters, digits and single hyphens of at most
+  63 characters is `400` `bad_request`.
+- Any method other than `DELETE` is `405` with `Allow: DELETE`.
+- A storage failure is `503` `backend_unavailable`; the call can be retried.
 
 ## Cloudflare Worker
 
