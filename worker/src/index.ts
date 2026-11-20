@@ -302,7 +302,7 @@ async function suggest(
   }
 }
 
-/** The primary installation is never limited and has no purge. */
+/** Purge refuses the primary id; hosted suggest still counts its calls. */
 const PRIMARY_INSTALLATION = "primary";
 const PURGE_PATH = /^\/v1\/installations\/([^/]+)\/budget$/;
 

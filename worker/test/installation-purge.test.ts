@@ -88,4 +88,21 @@ describe("installation budget purge", () => {
     }
     expect(await used("public-purge")).toBe(1);
   });
+
+  it("returns 503 backend_unavailable when storage throws", async () => {
+    const BUDGET = {
+      getByName() {
+        return {
+          async purge() {
+            throw new Error("storage boom");
+          },
+        };
+      },
+    };
+    const res = await callHosted(purgeRequest("purge-throws"), { BUDGET });
+    expect(res.status).toBe(503);
+    expect(await bodyOf(res)).toEqual({
+      error: { code: "backend_unavailable", message: "the service could not complete the request" },
+    });
+  });
 });
