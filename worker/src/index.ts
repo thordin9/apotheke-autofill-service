@@ -155,6 +155,8 @@ async function suggest(
   const budget = env.BUDGET.getByName("global");
   const prompts = promptsFor(context);
   const prepared = prepareAi(dataUrl, context);
+  // Set once the global budget admits a model call: from then on the estimate is held or charged.
+  let charged = false;
 
   const attempt = async (prompt: string, countRequest: boolean) => {
     let reserved = false;
@@ -172,6 +174,7 @@ async function suggest(
       });
       if (!gate.ok) throw budgetError(now);
       reserved = true;
+      charged = true;
       const raw = await (env.AI as unknown as AiRun).run(AI_MODEL, prepared.inputFor(prompt));
       called = true;
       timing.aiCalls += 1;
@@ -250,7 +253,7 @@ async function suggest(
   };
 
   // A hosted installation's monthly budget, reserved once per suggest at admission like the daily request cap,
-  // and refunded if the call then fails before anything was charged to the daily budget (global budget refusal).
+  // and refunded if the call then fails before the global budget admitted a model call.
   let warning = false;
   let monthReserved = false;
   if (installation) {
@@ -272,8 +275,8 @@ async function suggest(
   }
 
   const refundMonth = async () => {
-    // Once neurons are charged (a model answer, or the estimate for a failed model call), the count stays.
-    if (!monthReserved || !installation || timing.neurons > 0) return;
+    // Once the global budget admitted a model call, the count stays, even if settle failed or usage was 0.
+    if (!monthReserved || !installation || charged) return;
     monthReserved = false;
     try {
       await env.BUDGET.getByName(`installation:${installation.id}`).refundMonthly({ nowMs: now });
