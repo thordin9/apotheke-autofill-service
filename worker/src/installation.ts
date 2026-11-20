@@ -26,11 +26,16 @@ export function hasInstallationHeaders(request: Request): boolean {
   return [INSTALLATION_HEADER, LIMIT_HEADER, SOFT_HEADER].some((name) => request.headers.has(name));
 }
 
+/** Lower-case letters, digits and single hyphens, at most 63 characters (the hosted DO name). */
+export function isInstallationId(id: string): boolean {
+  return id.length <= 63 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(id);
+}
+
 /** The caller's installation and its monthly limit, or null without an installation id (today's behaviour). */
 export function installationBudget(request: Request): InstallationBudget | null {
   const id = request.headers.get(INSTALLATION_HEADER);
   if (id === null) return null;
-  if (id.length > 63 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id)) {
+  if (!isInstallationId(id)) {
     throw new HttpError(400, "bad_request", `invalid ${INSTALLATION_HEADER}`);
   }
   const hard = count(request.headers.get(LIMIT_HEADER), LIMIT_HEADER);

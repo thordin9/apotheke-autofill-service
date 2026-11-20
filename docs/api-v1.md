@@ -341,6 +341,25 @@ request without them is handled exactly as before.
   `CF-Connecting-IP`. The edge Worker sets all three headers itself and drops
   any the Apotheke container sent.
 
+### `DELETE /v1/installations/<id>/budget`
+
+Worker only, and only on `HostedAutofill` (no route, no bearer token, the
+same service binding as above). On the public routes the path is `404`, with
+or without a token. A hosted Apotheke calls it when it purges an installation.
+
+- Deletes all of that installation's monthly budget storage (its
+  `installation:<id>` Durable Object). The global daily budget and other
+  installations are not touched.
+- Answers `200` `{"ok": true, "installation": "<id>", "deleted": <n>}`, where
+  `n` is the number of budget records removed. It is idempotent: a second
+  call, or an id that never had a budget, answers `200` with `"deleted": 0`.
+  A later `POST /v1/suggest` for the same id starts the month from zero.
+- `primary` is refused with `400` `bad_request`, and its budget stays.
+- An id that is not lower-case letters, digits and single hyphens of at most
+  63 characters is `400` `bad_request`.
+- Any method other than `DELETE` is `405` with `Allow: DELETE`.
+- A storage failure is `503` `backend_unavailable`; the call can be retried.
+
 ## Cloudflare Worker
 
 The Worker in `worker/` is a drop-in for the same three routes. `version`
