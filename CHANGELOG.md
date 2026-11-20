@@ -19,6 +19,13 @@ separately in [docs/api-v1.md](docs/api-v1.md) (all v1 changes are additive).
   a model error or a parse failure, keeps the monthly count. The refund is
   best effort: an aborted request or a failed refund still counts
   ([#44](https://github.com/thordin9/apotheke-autofill-service/pull/44)).
+- **Installation budgets can be purged, and only calls never admitted by the
+  daily budget are refunded (Worker).** `DELETE /v1/installations/<id>/budget`
+  on `HostedAutofill` deletes one installation's monthly budget; it is
+  idempotent and refuses `primary`. A reserved monthly call is now refunded
+  only when the request fails before the global daily budget admits a model
+  call, so a failed settle or a model answer reporting 0 neurons keeps the
+  count ([#45](https://github.com/thordin9/apotheke-autofill-service/pull/45)).
 
 ### CI
 
